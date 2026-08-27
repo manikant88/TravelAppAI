@@ -1,0 +1,98 @@
+import { count, eq } from "drizzle-orm";
+import { config } from "dotenv";
+import { createDatabase } from "@/db/client";
+import {
+  activities,
+  activitySessions,
+  destinationMarkets,
+  inventoryMeta,
+  locations,
+  properties,
+  roomOffers,
+  transfers,
+  transportSegments,
+  transportServices,
+} from "@/db/schema";
+
+config({ path: ".env.local" });
+config({ path: ".env" });
+
+const expectedCounts = {
+  inventoryMeta: 1,
+  locations: 8,
+  destinationMarkets: 1,
+  transportServices: 4,
+  transportSegments: 4,
+  properties: 4,
+  roomOffers: 6,
+  activities: 5,
+  activitySessions: 5,
+  transfers: 6,
+} as const;
+
+async function tableCount(
+  db: ReturnType<typeof createDatabase>,
+  table:
+    | typeof inventoryMeta
+    | typeof locations
+    | typeof destinationMarkets
+    | typeof transportServices
+    | typeof transportSegments
+    | typeof properties
+    | typeof roomOffers
+    | typeof activities
+    | typeof activitySessions
+    | typeof transfers,
+) {
+  const [result] = await db.select({ value: count() }).from(table);
+  return result.value;
+}
+
+async function verifyDatabase() {
+  const connectionString = process.env.DATABASE_ADMIN_URL;
+  if (!connectionString) throw new Error("DATABASE_ADMIN_URL is required to verify inventory");
+  const db = createDatabase(connectionString);
+
+  const counts = {
+    inventoryMeta: await tableCount(db, inventoryMeta),
+    locations: await tableCount(db, locations),
+    destinationMarkets: await tableCount(db, destinationMarkets),
+    transportServices: await tableCount(db, transportServices),
+    transportSegments: await tableCount(db, transportSegments),
+    properties: await tableCount(db, properties),
+    roomOffers: await tableCount(db, roomOffers),
+    activities: await tableCount(db, activities),
+    activitySessions: await tableCount(db, activitySessions),
+    transfers: await tableCount(db, transfers),
+  };
+
+  for (const [name, expected] of Object.entries(expectedCounts)) {
+    const actual = counts[name as keyof typeof counts];
+    if (actual !== expected) throw new Error(`${name}: expected ${expected}, found ${actual}`);
+  }
+
+  const [meta] = await db.select().from(inventoryMeta).where(eq(inventoryMeta.id, "active"));
+  if (!meta || meta.version !== "travel-seed-v1") throw new Error("Active inventory version mismatch");
+
+  const marketRows = await db
+    .select({ id: destinationMarkets.locationId, name: locations.name })
+    .from(destinationMarkets)
+    .innerJoin(locations, eq(destinationMarkets.locationId, locations.id));
+  if (marketRows.length !== 1 || marketRows[0].name !== "Udaipur") {
+    throw new Error("Expected Udaipur as the first verified market");
+  }
+
+  return { counts, market: marketRows[0].name, inventoryVersion: meta.version };
+}
+
+verifyDatabase()
+  .then((result) => {
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  })
+  .catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const cause =
+      error instanceof Error && error.cause instanceof Error ? `\nCause: ${error.cause.message}` : "";
+    process.stderr.write(`${message}${cause}\n`);
+    process.exitCode = 1;
+  });

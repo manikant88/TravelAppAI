@@ -1,0 +1,638 @@
+import { createHash } from "node:crypto";
+import {
+  agentNextActionSchema,
+  factBundleSchema,
+  planningHypothesisSchema,
+  validateAgentNextAction,
+  validatePlanningHypothesis,
+  type AgentNextAction,
+  type ContractViolation,
+  type FactBundle,
+  type GroundedFact,
+  type PlannerBudgetState,
+  type PlannerScope,
+  type PlanningHypothesis,
+} from "@/agent/contracts";
+import {
+  assembleProposedPlan,
+  type PlanAssemblyResult,
+  type ProposePlanAction,
+} from "@/agent/assembler";
+import {
+  executeToolPlan,
+  type ExecutedToolCall,
+  type InventoryToolServices,
+} from "@/agent/executor";
+import { tripDurationDays, tripNightCount } from "@/domain/dates";
+import type { PlannableTripRequest } from "@/domain/model";
+import { requirePlannableRequest } from "@/domain/request";
+import type {
+  LocationNode,
+  ResolvedOffer,
+  TripProjection,
+  TripValidation,
+} from "@/domain/trip";
+
+export type CoordinatorPhase =
+  | "hypothesis"
+  | "after_evidence_round_1"
+  | "after_evidence_round_2"
+  | "repair_after_validation"
+  | "repair_after_search";
+
+export interface PlannerDecisionInput {
+  phase: Exclude<CoordinatorPhase, "hypothesis">;
+  request: PlannableTripRequest;
+  hypothesis: PlanningHypothesis;
+  observations: ExecutedToolCall["observation"][];
+  factBundles: FactBundle[];
+  budget: PlannerBudgetState;
+  validationFeedback?: {
+    validation: TripValidation;
+    factBundle: FactBundle;
+    selectedCandidateIds: string[];
+  };
+}
+
+export interface SpecifiedDestinationPlannerModel {
+  createPlanningHypothesis(input: {
+    request: PlannableTripRequest;
+    catalogScope: {
+      locationGraph: LocationNode[];
+      marketIds: string[];
+      supportedThemes: string[];
+    };
+  }): Promise<unknown>;
+  chooseNextAction(input: PlannerDecisionInput): Promise<unknown>;
+}
+
+export interface SpecifiedPlanCoordinatorInput {
+  tripId: string;
+  request: PlannableTripRequest;
+  locationGraph: LocationNode[];
+  knownMarketIds: ReadonlySet<string>;
+  supportedThemes: ReadonlySet<string>;
+  optionalClarificationUsed?: boolean;
+  expectedInventoryVersion?: string;
+  model: SpecifiedDestinationPlannerModel;
+  inventoryServices: InventoryToolServices;
+  resolveOffer(offerId: string): Promise<ResolvedOffer>;
+}
+
+export interface PlanRunTrace {
+  hypothesis: PlanningHypothesis;
+  actions: AgentNextAction[];
+  executedCalls: ExecutedToolCall[];
+  validationAttempts: TripValidation[];
+  finalBudget: PlannerBudgetState;
+}
+
+export type SpecifiedPlanCoordinatorResult =
+  | {
+      status: "completed";
+      trip: Extract<PlanAssemblyResult, { status: "valid" }>['trip'];
+      projection: TripProjection;
+      trace: PlanRunTrace;
+    }
+  | {
+      status: "needs_optional_clarification";
+      topic: Extract<AgentNextAction, { type: "clarify" }>['topic'];
+      trace: PlanRunTrace;
+    }
+  | {
+      status: "cannot_satisfy";
+      conflictFactIds: string[];
+      suggestedRelaxationIds: string[];
+      trace: PlanRunTrace;
+    }
+  | {
+      status: "invalid_after_repair";
+      trip: Extract<PlanAssemblyResult, { status: "invalid" }>['trip'];
+      projection: TripProjection;
+      trace: PlanRunTrace;
+    };
+
+export class PlanCoordinatorError extends Error {
+  constructor(
+    public readonly code:
+      | "INVALID_CONTEXT"
+      | "MODEL_FAILURE"
+      | "INVALID_MODEL_OUTPUT"
+      | "WORKFLOW_VIOLATION",
+    message: string,
+    public readonly details: {
+      phase?: CoordinatorPhase;
+      violations?: ContractViolation[];
+    } = {},
+  ) {
+    super(message);
+    this.name = "PlanCoordinatorError";
+  }
+}
+
+function initialBudget(optionalClarificationUsed: boolean): PlannerBudgetState {
+  return {
+    evidenceRoundsUsed: 0,
+    repairRoundsUsed: 0,
+    searchCallsUsed: 0,
+    optionalClarificationUsed,
+    priorCallSignatures: new Set(),
+  };
+}
+
+function coordinatorScope(
+  request: PlannableTripRequest,
+  input: SpecifiedPlanCoordinatorInput,
+): PlannerScope {
+  return {
+    tripDurationDays: tripDurationDays(request.startDate, request.endDate),
+    tripNights: tripNightCount(request.startDate, request.endDate),
+    knownLocationIds: new Set(input.locationGraph.map((node) => node.id)),
+    knownMarketIds: input.knownMarketIds,
+    knownSelectionIds: new Set(),
+    supportedThemes: new Set([
+      ...[...input.supportedThemes].map((theme) => theme.toLocaleLowerCase("en")),
+      ...(request.preferences.interests ?? []).map((theme) => theme.toLocaleLowerCase("en")),
+    ]),
+  };
+}
+
+async function modelHypothesis(
+  model: SpecifiedDestinationPlannerModel,
+  request: PlannableTripRequest,
+  input: SpecifiedPlanCoordinatorInput,
+): Promise<PlanningHypothesis> {
+  let output: unknown;
+  try {
+    output = await model.createPlanningHypothesis({
+      request,
+      catalogScope: {
+        locationGraph: [...input.locationGraph].sort((left, right) =>
+          left.id.localeCompare(right.id, "en"),
+        ),
+        marketIds: [...input.knownMarketIds].sort((left, right) =>
+          left.localeCompare(right, "en"),
+        ),
+        supportedThemes: [...input.supportedThemes].sort((left, right) =>
+          left.localeCompare(right, "en"),
+        ),
+      },
+    });
+  } catch {
+    throw new PlanCoordinatorError("MODEL_FAILURE", "Planner model failed while creating a hypothesis", {
+      phase: "hypothesis",
+    });
+  }
+  const parsed = planningHypothesisSchema.safeParse(output);
+  if (!parsed.success) {
+    throw new PlanCoordinatorError("INVALID_MODEL_OUTPUT", "Planner hypothesis has an invalid shape", {
+      phase: "hypothesis",
+    });
+  }
+  return parsed.data;
+}
+
+async function modelAction(
+  model: SpecifiedDestinationPlannerModel,
+  input: PlannerDecisionInput,
+): Promise<AgentNextAction> {
+  let output: unknown;
+  try {
+    output = await model.chooseNextAction(input);
+  } catch {
+    throw new PlanCoordinatorError("MODEL_FAILURE", "Planner model failed while choosing the next action", {
+      phase: input.phase,
+    });
+  }
+  const parsed = agentNextActionSchema.safeParse(output);
+  if (!parsed.success) {
+    throw new PlanCoordinatorError("INVALID_MODEL_OUTPUT", "Planner next action has an invalid shape", {
+      phase: input.phase,
+    });
+  }
+  return parsed.data;
+}
+
+function factsFromExecutions(executions: ExecutedToolCall[]): FactBundle {
+  const facts = new Map<string, GroundedFact>();
+  executions.forEach((execution) =>
+    execution.observation.candidates.forEach((candidate) =>
+      candidate.facts.forEach((candidateFact) => facts.set(candidateFact.id, candidateFact)),
+    ),
+  );
+  const values = [...facts.values()].sort((left, right) => left.id.localeCompare(right.id, "en"));
+  const availableDimensions = new Set(values.map((item) => item.dimension));
+  const comparisonPriority = [
+    "total_price",
+    "unit_price",
+    "duration",
+    "stops",
+    "departure",
+    "arrival",
+    "rating",
+    "review_count",
+    "location",
+    "amenities",
+    "meal_plan",
+    "refundable",
+    "capacity",
+    "mobility",
+    "themes",
+  ];
+  const allowedComparisonDimensions = [
+    ...comparisonPriority.filter((dimension) => availableDimensions.has(dimension)),
+    ...[...availableDimensions]
+      .filter((dimension) => !comparisonPriority.includes(dimension))
+      .sort((left, right) => left.localeCompare(right, "en")),
+  ].slice(0, 12);
+  return factBundleSchema.parse({
+    facts: values,
+    allowedComparisonDimensions,
+    allowedFollowUpActions: [],
+  });
+}
+
+function validationFactId(issueId: string): string {
+  return `fact:validation:${createHash("sha256").update(issueId).digest("hex").slice(0, 20)}`;
+}
+
+function validationFactBundle(tripId: string, validation: TripValidation): FactBundle {
+  const actions = new Map<
+    string,
+    { id: string; label: string; type: "adjust_constraint" | "change_scope" }
+  >();
+  const facts: GroundedFact[] = validation.issues.map((issue) => {
+    issue.constraintIds?.forEach((constraintId) => {
+      const id = `action:adjust:${constraintId}`;
+      actions.set(id, {
+        id,
+        label: `Review constraint ${constraintId}`,
+        type: "adjust_constraint",
+      });
+    });
+    if (!issue.constraintIds?.length && issue.severity === "error") {
+      const id = `action:change-scope:${issue.code.toLocaleLowerCase("en")}`;
+      actions.set(id, {
+        id,
+        label: `Change the plan scope for ${issue.code.toLocaleLowerCase("en")}`,
+        type: "change_scope",
+      });
+    }
+    return {
+      id: validationFactId(issue.id),
+      subjectType: "trip",
+      subjectId: tripId,
+      dimension: "validation",
+      label: issue.message,
+      value: issue.code,
+    };
+  });
+  return factBundleSchema.parse({
+    facts,
+    allowedComparisonDimensions: ["validation"],
+    allowedFollowUpActions: [...actions.values()].sort((left, right) =>
+      left.id.localeCompare(right.id, "en"),
+    ),
+  });
+}
+
+function validateAction(
+  action: AgentNextAction,
+  request: PlannableTripRequest,
+  input: SpecifiedPlanCoordinatorInput,
+  executions: ExecutedToolCall[],
+  factBundles: FactBundle[],
+  budget: PlannerBudgetState,
+  phase: Exclude<CoordinatorPhase, "hypothesis">,
+) {
+  const scope = coordinatorScope(request, input);
+  const validation = validateAgentNextAction(
+    action,
+    {
+      ...scope,
+      observations: executions.map((execution) => execution.observation),
+      factBundles,
+    },
+    budget,
+  );
+  if (!validation.valid) {
+    throw new PlanCoordinatorError(
+      "INVALID_MODEL_OUTPUT",
+      "Planner action failed deterministic scoped validation",
+      { phase, violations: validation.violations },
+    );
+  }
+}
+
+function trace(
+  hypothesis: PlanningHypothesis,
+  actions: AgentNextAction[],
+  executions: ExecutedToolCall[],
+  validations: TripValidation[],
+  budget: PlannerBudgetState,
+): PlanRunTrace {
+  return {
+    hypothesis,
+    actions: [...actions],
+    executedCalls: [...executions],
+    validationAttempts: [...validations],
+    finalBudget: budget,
+  };
+}
+
+function clarificationResult(
+  action: Extract<AgentNextAction, { type: "clarify" }>,
+  hypothesis: PlanningHypothesis,
+  actions: AgentNextAction[],
+  executions: ExecutedToolCall[],
+  validations: TripValidation[],
+  budget: PlannerBudgetState,
+): SpecifiedPlanCoordinatorResult {
+  return {
+    status: "needs_optional_clarification",
+    topic: action.topic,
+    trace: trace(hypothesis, actions, executions, validations, {
+      ...budget,
+      optionalClarificationUsed: true,
+    }),
+  };
+}
+
+function cannotSatisfyResult(
+  action: Extract<AgentNextAction, { type: "cannot_satisfy" }>,
+  hypothesis: PlanningHypothesis,
+  actions: AgentNextAction[],
+  executions: ExecutedToolCall[],
+  validations: TripValidation[],
+  budget: PlannerBudgetState,
+): SpecifiedPlanCoordinatorResult {
+  return {
+    status: "cannot_satisfy",
+    conflictFactIds: action.conflictFactIds,
+    suggestedRelaxationIds: action.suggestedRelaxationIds,
+    trace: trace(hypothesis, actions, executions, validations, budget),
+  };
+}
+
+async function assemble(
+  action: ProposePlanAction,
+  request: PlannableTripRequest,
+  input: SpecifiedPlanCoordinatorInput,
+  executions: ExecutedToolCall[],
+  factBundles: FactBundle[],
+  budget: PlannerBudgetState,
+) {
+  return assembleProposedPlan({
+    tripId: input.tripId,
+    action,
+    request,
+    executedCalls: executions,
+    factBundles,
+    budget,
+    locationGraph: input.locationGraph,
+    knownMarketIds: input.knownMarketIds,
+    supportedThemes: input.supportedThemes,
+    expectedInventoryVersion: input.expectedInventoryVersion,
+    resolveOffer: input.resolveOffer,
+  });
+}
+
+export async function coordinateSpecifiedDestinationPlan(
+  input: SpecifiedPlanCoordinatorInput,
+): Promise<SpecifiedPlanCoordinatorResult> {
+  let request: PlannableTripRequest;
+  try {
+    request = requirePlannableRequest(input.request);
+  } catch {
+    throw new PlanCoordinatorError("INVALID_CONTEXT", "Coordinator requires a canonical plannable request");
+  }
+  if (request.destination.kind !== "specified") {
+    throw new PlanCoordinatorError(
+      "INVALID_CONTEXT",
+      "Specified-destination coordinator cannot run open-ended discovery",
+    );
+  }
+
+  let budget = initialBudget(input.optionalClarificationUsed ?? false);
+  const hypothesis = await modelHypothesis(input.model, request, input);
+  const hypothesisValidation = validatePlanningHypothesis(
+    hypothesis,
+    coordinatorScope(request, input),
+    budget,
+  );
+  if (!hypothesisValidation.valid) {
+    throw new PlanCoordinatorError(
+      "INVALID_MODEL_OUTPUT",
+      "Planner hypothesis failed deterministic scoped validation",
+      { phase: "hypothesis", violations: hypothesisValidation.violations },
+    );
+  }
+
+  const actions: AgentNextAction[] = [];
+  const executions: ExecutedToolCall[] = [];
+  const validations: TripValidation[] = [];
+  const firstBatch = await executeToolPlan(
+    hypothesis.toolPlan,
+    {
+      request,
+      knownLocationIds: coordinatorScope(request, input).knownLocationIds,
+      knownMarketIds: input.knownMarketIds,
+      knownSelectionIds: new Set(),
+      supportedThemes: input.supportedThemes,
+      budget,
+      roundKind: "evidence",
+    },
+    input.inventoryServices,
+  );
+  executions.push(...firstBatch.results);
+  budget = firstBatch.nextBudget;
+  let factBundles = [factsFromExecutions(firstBatch.results)];
+
+  let phase: Exclude<CoordinatorPhase, "hypothesis"> = "after_evidence_round_1";
+  let action = await modelAction(input.model, {
+    phase,
+    request,
+    hypothesis,
+    observations: executions.map((execution) => execution.observation),
+    factBundles,
+    budget,
+  });
+  validateAction(action, request, input, executions, factBundles, budget, phase);
+  actions.push(action);
+
+  if (action.type === "clarify") {
+    return clarificationResult(action, hypothesis, actions, executions, validations, budget);
+  }
+  if (action.type === "cannot_satisfy") {
+    return cannotSatisfyResult(action, hypothesis, actions, executions, validations, budget);
+  }
+  if (action.type === "present_destination_options") {
+    throw new PlanCoordinatorError(
+      "WORKFLOW_VIOLATION",
+      "Specified-destination planning cannot present destination discovery options",
+      { phase },
+    );
+  }
+  if (action.type === "search_more") {
+    const secondBatch = await executeToolPlan(
+      action.toolPlan,
+      {
+        request,
+        knownLocationIds: coordinatorScope(request, input).knownLocationIds,
+        knownMarketIds: input.knownMarketIds,
+        knownSelectionIds: new Set(),
+        supportedThemes: input.supportedThemes,
+        budget,
+        roundKind: "evidence",
+      },
+      input.inventoryServices,
+    );
+    executions.push(...secondBatch.results);
+    budget = secondBatch.nextBudget;
+    factBundles = [...factBundles, factsFromExecutions(secondBatch.results)];
+    phase = "after_evidence_round_2";
+    action = await modelAction(input.model, {
+      phase,
+      request,
+      hypothesis,
+      observations: executions.map((execution) => execution.observation),
+      factBundles,
+      budget,
+    });
+    validateAction(action, request, input, executions, factBundles, budget, phase);
+    actions.push(action);
+    if (action.type === "clarify") {
+      return clarificationResult(action, hypothesis, actions, executions, validations, budget);
+    }
+    if (action.type === "cannot_satisfy") {
+      return cannotSatisfyResult(action, hypothesis, actions, executions, validations, budget);
+    }
+    if (action.type !== "propose_plan") {
+      throw new PlanCoordinatorError(
+        "WORKFLOW_VIOLATION",
+        "Second evidence round must end in a plan or grounded conflict",
+        { phase },
+      );
+    }
+  }
+
+  if (action.type !== "propose_plan") {
+    throw new PlanCoordinatorError(
+      "WORKFLOW_VIOLATION",
+      "Evidence phase did not produce a proposed plan",
+      { phase },
+    );
+  }
+  let assembly = await assemble(action, request, input, executions, factBundles, budget);
+  validations.push(assembly.projection.validation);
+  if (assembly.status === "valid") {
+    return {
+      status: "completed",
+      trip: assembly.trip,
+      projection: assembly.projection,
+      trace: trace(hypothesis, actions, executions, validations, budget),
+    };
+  }
+
+  const validationFacts = validationFactBundle(input.tripId, assembly.projection.validation);
+  factBundles = [...factBundles, validationFacts];
+  phase = "repair_after_validation";
+  let repairAction = await modelAction(input.model, {
+    phase,
+    request,
+    hypothesis,
+    observations: executions.map((execution) => execution.observation),
+    factBundles,
+    budget,
+    validationFeedback: {
+      validation: assembly.projection.validation,
+      factBundle: validationFacts,
+      selectedCandidateIds: assembly.selectedCandidateIds,
+    },
+  });
+  validateAction(repairAction, request, input, executions, factBundles, budget, phase);
+  actions.push(repairAction);
+
+  if (repairAction.type === "cannot_satisfy") {
+    budget = { ...budget, repairRoundsUsed: 1 };
+    return cannotSatisfyResult(
+      repairAction,
+      hypothesis,
+      actions,
+      executions,
+      validations,
+      budget,
+    );
+  }
+  if (repairAction.type === "search_more") {
+    const repairBatch = await executeToolPlan(
+      repairAction.toolPlan,
+      {
+        request,
+        knownLocationIds: coordinatorScope(request, input).knownLocationIds,
+        knownMarketIds: input.knownMarketIds,
+        knownSelectionIds: new Set(),
+        supportedThemes: input.supportedThemes,
+        budget,
+        roundKind: "repair",
+      },
+      input.inventoryServices,
+    );
+    executions.push(...repairBatch.results);
+    budget = repairBatch.nextBudget;
+    factBundles = [...factBundles, factsFromExecutions(repairBatch.results)];
+    phase = "repair_after_search";
+    repairAction = await modelAction(input.model, {
+      phase,
+      request,
+      hypothesis,
+      observations: executions.map((execution) => execution.observation),
+      factBundles,
+      budget,
+      validationFeedback: {
+        validation: assembly.projection.validation,
+        factBundle: validationFacts,
+        selectedCandidateIds: assembly.selectedCandidateIds,
+      },
+    });
+    validateAction(repairAction, request, input, executions, factBundles, budget, phase);
+    actions.push(repairAction);
+    if (repairAction.type === "cannot_satisfy") {
+      return cannotSatisfyResult(
+        repairAction,
+        hypothesis,
+        actions,
+        executions,
+        validations,
+        budget,
+      );
+    }
+  }
+
+  if (repairAction.type !== "propose_plan") {
+    throw new PlanCoordinatorError(
+      "WORKFLOW_VIOLATION",
+      "Repair phase must end in one revised plan or a grounded conflict",
+      { phase },
+    );
+  }
+  if (budget.repairRoundsUsed === 0) {
+    budget = { ...budget, repairRoundsUsed: 1 };
+  }
+  assembly = await assemble(repairAction, request, input, executions, factBundles, budget);
+  validations.push(assembly.projection.validation);
+  if (assembly.status === "valid") {
+    return {
+      status: "completed",
+      trip: assembly.trip,
+      projection: assembly.projection,
+      trace: trace(hypothesis, actions, executions, validations, budget),
+    };
+  }
+  return {
+    status: "invalid_after_repair",
+    trip: assembly.trip,
+    projection: assembly.projection,
+    trace: trace(hypothesis, actions, executions, validations, budget),
+  };
+}
