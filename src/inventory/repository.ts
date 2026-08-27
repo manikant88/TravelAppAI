@@ -45,6 +45,9 @@ export interface LocationInventoryRepository {
 export interface ActiveLocationNode {
   id: string;
   parentId?: string;
+  name?: string;
+  type?: LocationType;
+  tags?: string[];
   timezone: string;
 }
 
@@ -57,6 +60,20 @@ export interface PlannerCatalogSnapshot {
 
 export interface PlannerCatalogRepository {
   getPlannerCatalog(): Promise<PlannerCatalogSnapshot>;
+}
+
+export interface DestinationMarketProfile {
+  id: string;
+  name: string;
+  countryCode: string;
+  region: "india" | "international";
+  displayOrder: number;
+  tags: string[];
+  imageAssetKey?: string;
+}
+
+export interface DestinationDiscoveryRepository {
+  getDestinationMarketProfiles(): Promise<DestinationMarketProfile[]>;
 }
 
 export interface TransportCatalogSegment {
@@ -182,6 +199,7 @@ export function createInventoryRepository(
   database: Database = getRuntimeDatabase(),
 ): LocationInventoryRepository &
   PlannerCatalogRepository &
+  DestinationDiscoveryRepository &
   TransportInventoryRepository &
   StayInventoryRepository &
   ActivityInventoryRepository &
@@ -455,7 +473,14 @@ export function createInventoryRepository(
 
     async getActiveLocationGraph() {
       const rows = await database
-        .select({ id: locations.id, parentId: locations.parentId, timezone: locations.timezone })
+        .select({
+          id: locations.id,
+          parentId: locations.parentId,
+          name: locations.name,
+          type: locations.type,
+          tags: locations.tags,
+          timezone: locations.timezone,
+        })
         .from(locations)
         .where(eq(locations.active, true));
 
@@ -467,7 +492,14 @@ export function createInventoryRepository(
         await Promise.all([
           getInventoryMeta(),
           database
-            .select({ id: locations.id, parentId: locations.parentId, timezone: locations.timezone })
+            .select({
+              id: locations.id,
+              parentId: locations.parentId,
+              name: locations.name,
+              type: locations.type,
+              tags: locations.tags,
+              timezone: locations.timezone,
+            })
             .from(locations)
             .where(eq(locations.active, true)),
           database
@@ -509,6 +541,33 @@ export function createInventoryRepository(
           ),
         ].sort((left, right) => left.localeCompare(right, "en")),
       };
+    },
+
+    async getDestinationMarketProfiles() {
+      const rows = await database
+        .select({
+          id: destinationMarkets.locationId,
+          name: locations.name,
+          countryCode: locations.countryCode,
+          region: destinationMarkets.region,
+          displayOrder: destinationMarkets.displayOrder,
+          tags: locations.tags,
+          imageAssetKey: locations.imageAssetKey,
+        })
+        .from(destinationMarkets)
+        .innerJoin(
+          locations,
+          and(
+            eq(destinationMarkets.locationId, locations.id),
+            eq(locations.active, true),
+          ),
+        )
+        .orderBy(asc(destinationMarkets.displayOrder), asc(destinationMarkets.locationId));
+
+      return rows.map((row) => ({
+        ...row,
+        imageAssetKey: row.imageAssetKey ?? undefined,
+      }));
     },
 
     async findTransportServices(fromLocationIds, toLocationIds) {

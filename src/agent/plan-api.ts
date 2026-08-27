@@ -12,6 +12,15 @@ import {
 } from "@/domain/request";
 import type { TripProjection } from "@/domain/trip";
 import type { TripState } from "@/domain/model";
+import {
+  factBundleSchema,
+  type FactBundle,
+  type GroundedFact,
+} from "@/agent/contracts";
+import {
+  constraintConflictBlockSchema,
+  type ConstraintConflictBlock,
+} from "@/agent/adaptive-contracts";
 import { createInventoryRepository } from "@/inventory/repository";
 import { resolveOffer } from "@/inventory/service";
 
@@ -59,6 +68,8 @@ export type SpecifiedPlanApiResult =
       conflictFactIds: string[];
       suggestedRelaxationIds: string[];
       validation?: TripProjection["validation"];
+      block: ConstraintConflictBlock;
+      factBundle: FactBundle;
       message: string;
     };
 
@@ -95,6 +106,7 @@ const clarificationQuestions = {
 
 function mapCoordinatorResult(
   result: SpecifiedPlanCoordinatorResult,
+  tripId: string,
 ): SpecifiedPlanApiResult {
   if (result.status === "completed") {
     return {
@@ -122,20 +134,125 @@ function mapCoordinatorResult(
     };
   }
   if (result.status === "cannot_satisfy") {
+    const fallbackFacts: GroundedFact[] = result.conflictFactIds.map((id) => ({
+      id,
+      subjectType: "trip",
+      subjectId: tripId,
+      dimension: "planning_conflict",
+      label: "Grounded inventory conflict",
+      value: "The supported inventory cannot satisfy the current plan scope",
+    }));
+    const fallbackActions: FactBundle["allowedFollowUpActions"] = result.suggestedRelaxationIds.map((id) => ({
+      id,
+      label: id.startsWith("action:adjust:")
+        ? `Review constraint ${id.slice("action:adjust:".length)}`
+        : "Change the requested trip scope",
+      type: id.startsWith("action:adjust:") ? "adjust_constraint" as const : "change_scope" as const,
+    }));
+    if (fallbackActions.length === 0) {
+      fallbackActions.push({
+        id: "action:retry:planning-conflict",
+        label: "Review the brief and search again",
+        type: "retry",
+      });
+    }
+    const factBundle = factBundleSchema.parse({
+      facts: result.factBundle?.facts.length ? result.factBundle.facts : fallbackFacts,
+      allowedComparisonDimensions: [],
+      allowedFollowUpActions: result.factBundle?.allowedFollowUpActions.length
+        ? result.factBundle.allowedFollowUpActions
+        : fallbackActions,
+    });
+    const alternatives = factBundle.allowedFollowUpActions.slice(0, 3).map((action) => ({
+      id: `compromise:${action.id}`,
+      actionId: action.id,
+    }));
+    const block = constraintConflictBlockSchema.parse({
+      type: "constraint_conflict",
+      constraintIds: factBundle.allowedFollowUpActions.flatMap((action) =>
+        action.id.startsWith("action:adjust:")
+          ? [action.id.slice("action:adjust:".length)]
+          : [],
+      ).slice(0, 8),
+      alternatives,
+      emphasis: {
+        recommendedId: alternatives[0].id,
+        summary: "The request needs a grounded scope or constraint compromise before planning can continue.",
+        supportingFactIds: factBundle.facts.map((fact) => fact.id).slice(0, 12),
+        suggestedFollowUpActionIds: alternatives.map((item) => item.actionId),
+      },
+    });
     return {
       type: "conflict",
       reason: "cannot_satisfy",
-      conflictFactIds: result.conflictFactIds,
-      suggestedRelaxationIds: result.suggestedRelaxationIds,
+      conflictFactIds: factBundle.facts.map((fact) => fact.id),
+      suggestedRelaxationIds: factBundle.allowedFollowUpActions.map((action) => action.id),
+      block,
+      factBundle,
       message: "The available inventory cannot satisfy the current request.",
     };
   }
+  const validationFacts: GroundedFact[] = result.projection.validation.issues.map((issue) => ({
+    id: `fact:validation:${issue.id}`,
+    subjectType: "trip",
+    subjectId: tripId,
+    dimension: "validation",
+    label: issue.message,
+    value: issue.code,
+  }));
+  if (validationFacts.length === 0) {
+    validationFacts.push({
+      id: "fact:validation:invalid-after-repair",
+      subjectType: "trip",
+      subjectId: tripId,
+      dimension: "validation",
+      label: "Final trip validation did not pass",
+      value: false,
+    });
+  }
+  const constraintIds = [...new Set(
+    result.projection.validation.issues.flatMap((issue) => issue.constraintIds ?? []),
+  )].slice(0, 8);
+  const fallbackActions = constraintIds.length > 0
+    ? constraintIds.slice(0, 3).map((constraintId) => ({
+        id: `action:adjust:${constraintId}`,
+        label: `Review constraint ${constraintId}`,
+        type: "adjust_constraint" as const,
+      }))
+    : [{
+        id: "action:change-scope:invalid-plan",
+        label: "Change the requested trip scope",
+        type: "change_scope" as const,
+      }];
+  const factBundle = factBundleSchema.parse({
+    facts: result.factBundle?.facts.length ? result.factBundle.facts : validationFacts,
+    allowedComparisonDimensions: ["validation"],
+    allowedFollowUpActions: result.factBundle?.allowedFollowUpActions.length
+      ? result.factBundle.allowedFollowUpActions
+      : fallbackActions,
+  });
+  const alternatives = factBundle.allowedFollowUpActions.slice(0, 3).map((action) => ({
+    id: `compromise:${action.id}`,
+    actionId: action.id,
+  }));
   return {
     type: "conflict",
     reason: "invalid_after_repair",
-    conflictFactIds: [],
-    suggestedRelaxationIds: [],
+    conflictFactIds: factBundle.facts.map((fact) => fact.id),
+    suggestedRelaxationIds: factBundle.allowedFollowUpActions.map((action) => action.id),
     validation: result.projection.validation,
+    block: constraintConflictBlockSchema.parse({
+      type: "constraint_conflict",
+      constraintIds,
+      alternatives,
+      emphasis: {
+        recommendedId: alternatives[0].id,
+        summary: "The bounded repair was exhausted; the request needs an explicit compromise.",
+        supportingFactIds: factBundle.facts.map((fact) => fact.id).slice(0, 12),
+        suggestedFollowUpActionIds: alternatives.map((item) => item.actionId),
+      },
+    }),
+    factBundle,
     message: "The revised strategy still does not produce a valid trip.",
   };
 }
@@ -223,7 +340,7 @@ export async function runSpecifiedPlanApi(
       inventoryServices: createInventoryToolServices(repository),
       resolveOffer: (offerId) => resolveOffer(offerId, repository),
     });
-    return mapCoordinatorResult(result);
+    return mapCoordinatorResult(result, parsed.data.tripId);
   } catch (error: unknown) {
     throw mapCoordinatorError(error);
   }

@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { requestPatchSchema } from "@/domain/request";
+import {
+  routeScopeProblems,
+  type RouteLocationNode,
+} from "@/domain/route";
 import { coverageResultSchema } from "@/inventory/contracts";
 
 const idSchema = z.string().trim().min(1);
@@ -370,6 +374,9 @@ export interface PlannerScope {
   knownMarketIds: ReadonlySet<string>;
   knownSelectionIds: ReadonlySet<string>;
   supportedThemes: ReadonlySet<string>;
+  originId?: string;
+  requestedDestinationId?: string;
+  locationGraph?: RouteLocationNode[];
 }
 
 export interface PlannerBudgetState {
@@ -396,6 +403,8 @@ export interface ContractViolation {
     | "FACT_CANDIDATE_MISMATCH"
     | "UNSUPPORTED_COMPARISON"
     | "INVALID_NIGHT_ALLOCATION"
+    | "INVALID_ROUTE_SCOPE"
+    | "MISSING_ROUTE_EVIDENCE"
     | "UNKNOWN_FOLLOW_UP_ACTION";
   message: string;
   referenceId?: string;
@@ -539,11 +548,34 @@ export function validatePlanningHypothesis(
     ...unknownIdViolations(hypothesis.proposedStopIds, scope.knownLocationIds, "stop ID"),
     ...unknownIdViolations(hypothesis.preserveSelectionIds, scope.knownSelectionIds, "selection ID"),
   ];
+  if (hypothesis.destinationMode === "specified" && hypothesis.candidateMarketIds.length !== 1) {
+    violations.push({
+      code: "INVALID_ROUTE_SCOPE",
+      message: "A specified-destination hypothesis requires exactly one route market",
+    });
+  }
   if (
     hypothesis.nightAllocation.length > 0 &&
     hypothesis.nightAllocation.reduce((total, nights) => total + nights, 0) !== scope.tripNights
   ) {
     violations.push({ code: "INVALID_NIGHT_ALLOCATION", message: "Hypothesis night allocation must equal trip nights" });
+  }
+  if (
+    hypothesis.destinationMode !== "open_ended" &&
+    scope.originId &&
+    scope.locationGraph &&
+    hypothesis.candidateMarketIds.length === 1
+  ) {
+    const route = {
+      originId: scope.originId,
+      marketId: hypothesis.candidateMarketIds[0],
+      stopIds: hypothesis.proposedStopIds,
+      nightAllocation: hypothesis.nightAllocation,
+      tripDurationDays: scope.tripDurationDays,
+    };
+    routeScopeProblems(route, scope.locationGraph, scope.requestedDestinationId).forEach((message) =>
+      violations.push({ code: "INVALID_ROUTE_SCOPE", message }),
+    );
   }
   violations.push(...validateToolPlan(hypothesis.toolPlan, scope, budget).violations);
   return { valid: violations.length === 0, value: violations.length === 0 ? hypothesis : undefined, violations };
@@ -604,6 +636,19 @@ export function validateAgentNextAction(
     violations.push(...unknownIdViolations([action.marketId], scope.knownMarketIds, "market ID"));
     violations.push(...unknownIdViolations(action.stopIds, scope.knownLocationIds, "stop ID"));
     if (action.nightAllocation.reduce((total, nights) => total + nights, 0) !== scope.tripNights) violations.push({ code: "INVALID_NIGHT_ALLOCATION", message: "Proposed plan night allocation must equal trip nights" });
+    if (scope.originId && scope.locationGraph) {
+      routeScopeProblems(
+        {
+          originId: scope.originId,
+          marketId: action.marketId,
+          stopIds: action.stopIds,
+          nightAllocation: action.nightAllocation,
+          tripDurationDays: scope.tripDurationDays,
+        },
+        scope.locationGraph,
+        scope.requestedDestinationId,
+      ).forEach((message) => violations.push({ code: "INVALID_ROUTE_SCOPE", message }));
+    }
     action.choices.forEach((choice) => {
       const facts = candidateFacts.get(choice.candidateId);
       if (!facts) {

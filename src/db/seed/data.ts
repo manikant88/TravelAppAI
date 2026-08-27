@@ -10,6 +10,7 @@ import type {
   transportSegments,
   transportServices,
 } from "@/db/schema";
+import { generatedMarketInventory } from "@/db/seed/market-manifest";
 
 type Insert<T extends { $inferInsert: unknown }> = T["$inferInsert"];
 
@@ -130,7 +131,7 @@ export const udaipurSeed: InventorySeed = {
       tags: ["lake", "relaxed", "family"],
     },
   ],
-  markets: [{ locationId: "city:udaipur", region: "india", displayOrder: 1 }],
+  markets: [{ locationId: "city:udaipur", region: "india", displayOrder: 2 }],
   transportServices: [
     {
       id: "transport:del-udr-morning",
@@ -542,4 +543,26 @@ export const udaipurSeed: InventorySeed = {
       priceUnit: "per_vehicle",
     },
   ],
+};
+
+export const travelInventorySeed: InventorySeed = {
+  meta: udaipurSeed.meta,
+  locations: [...udaipurSeed.locations, ...generatedMarketInventory.locations],
+  markets: [...udaipurSeed.markets, ...generatedMarketInventory.markets],
+  transportServices: [
+    ...udaipurSeed.transportServices,
+    ...generatedMarketInventory.transportServices,
+  ],
+  transportSegments: [
+    ...udaipurSeed.transportSegments,
+    ...generatedMarketInventory.transportSegments,
+  ],
+  properties: [...udaipurSeed.properties, ...generatedMarketInventory.properties],
+  roomOffers: [...udaipurSeed.roomOffers, ...generatedMarketInventory.roomOffers],
+  activities: [...udaipurSeed.activities, ...generatedMarketInventory.activities],
+  activitySessions: [
+    ...udaipurSeed.activitySessions,
+    ...generatedMarketInventory.activitySessions,
+  ],
+  transfers: [...udaipurSeed.transfers, ...generatedMarketInventory.transfers],
 };

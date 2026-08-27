@@ -26,6 +26,10 @@ import {
 import { tripDurationDays, tripNightCount } from "@/domain/dates";
 import type { PlannableTripRequest } from "@/domain/model";
 import { requirePlannableRequest } from "@/domain/request";
+import {
+  activityCallFitsRoute,
+  requiredRouteCalls,
+} from "@/domain/route";
 import type {
   LocationNode,
   ResolvedOffer,
@@ -103,12 +107,14 @@ export type SpecifiedPlanCoordinatorResult =
       status: "cannot_satisfy";
       conflictFactIds: string[];
       suggestedRelaxationIds: string[];
+      factBundle?: FactBundle;
       trace: PlanRunTrace;
     }
   | {
       status: "invalid_after_repair";
       trip: Extract<PlanAssemblyResult, { status: "invalid" }>['trip'];
       projection: TripProjection;
+      factBundle?: FactBundle;
       trace: PlanRunTrace;
     };
 
@@ -154,6 +160,10 @@ function coordinatorScope(
       ...[...input.supportedThemes].map((theme) => theme.toLocaleLowerCase("en")),
       ...(request.preferences.interests ?? []).map((theme) => theme.toLocaleLowerCase("en")),
     ]),
+    originId: request.origin,
+    requestedDestinationId:
+      request.destination.kind === "specified" ? request.destination.locationId : undefined,
+    locationGraph: input.locationGraph,
   };
 }
 
@@ -322,6 +332,45 @@ function validateAction(
       { phase, violations: validation.violations },
     );
   }
+  if (action.type !== "propose_plan") return;
+
+  const route = {
+    originId: request.origin,
+    marketId: action.marketId,
+    stopIds: action.stopIds,
+    nightAllocation: action.nightAllocation,
+    tripDurationDays: tripDurationDays(request.startDate, request.endDate),
+  };
+  const routeViolations: ContractViolation[] = [];
+
+  const requirements = requiredRouteCalls(route);
+  action.choices.forEach((choice) => {
+    const matchingExecutions = executions.filter((execution) =>
+      execution.observation.candidates.some(
+        (candidate) => candidate.candidateId === choice.candidateId,
+      ),
+    );
+    const belongsToRoute = matchingExecutions.some((execution) =>
+      requirements.some((requirement) => requirement.matches(execution.call)) ||
+      (execution.call.tool === "search_activities" &&
+        activityCallFitsRoute(route, execution.call, input.locationGraph)),
+    );
+    if (!belongsToRoute) {
+      routeViolations.push({
+        code: "INVALID_ROUTE_SCOPE",
+        message: `Candidate ${choice.candidateId} does not belong to the proposed route`,
+        referenceId: choice.candidateId,
+      });
+    }
+  });
+
+  if (routeViolations.length > 0) {
+    throw new PlanCoordinatorError(
+      "INVALID_MODEL_OUTPUT",
+      "Planner proposal contains candidates outside the declared route",
+      { phase, violations: routeViolations },
+    );
+  }
 }
 
 function trace(
@@ -365,11 +414,21 @@ function cannotSatisfyResult(
   executions: ExecutedToolCall[],
   validations: TripValidation[],
   budget: PlannerBudgetState,
+  factBundles: FactBundle[],
 ): SpecifiedPlanCoordinatorResult {
+  const factIds = new Set(action.conflictFactIds);
+  const actionIds = new Set(action.suggestedRelaxationIds);
   return {
     status: "cannot_satisfy",
     conflictFactIds: action.conflictFactIds,
     suggestedRelaxationIds: action.suggestedRelaxationIds,
+    factBundle: factBundleSchema.parse({
+      facts: factBundles.flatMap((bundle) => bundle.facts).filter((fact) => factIds.has(fact.id)),
+      allowedComparisonDimensions: [],
+      allowedFollowUpActions: factBundles
+        .flatMap((bundle) => bundle.allowedFollowUpActions)
+        .filter((item) => actionIds.has(item.id)),
+    }),
     trace: trace(hypothesis, actions, executions, validations, budget),
   };
 }
@@ -464,7 +523,7 @@ export async function coordinateSpecifiedDestinationPlan(
     return clarificationResult(action, hypothesis, actions, executions, validations, budget);
   }
   if (action.type === "cannot_satisfy") {
-    return cannotSatisfyResult(action, hypothesis, actions, executions, validations, budget);
+    return cannotSatisfyResult(action, hypothesis, actions, executions, validations, budget, factBundles);
   }
   if (action.type === "present_destination_options") {
     throw new PlanCoordinatorError(
@@ -505,7 +564,7 @@ export async function coordinateSpecifiedDestinationPlan(
       return clarificationResult(action, hypothesis, actions, executions, validations, budget);
     }
     if (action.type === "cannot_satisfy") {
-      return cannotSatisfyResult(action, hypothesis, actions, executions, validations, budget);
+      return cannotSatisfyResult(action, hypothesis, actions, executions, validations, budget, factBundles);
     }
     if (action.type !== "propose_plan") {
       throw new PlanCoordinatorError(
@@ -562,6 +621,7 @@ export async function coordinateSpecifiedDestinationPlan(
       executions,
       validations,
       budget,
+      factBundles,
     );
   }
   if (repairAction.type === "search_more") {
@@ -605,6 +665,7 @@ export async function coordinateSpecifiedDestinationPlan(
         executions,
         validations,
         budget,
+        factBundles,
       );
     }
   }
@@ -633,6 +694,7 @@ export async function coordinateSpecifiedDestinationPlan(
     status: "invalid_after_repair",
     trip: assembly.trip,
     projection: assembly.projection,
+    factBundle: validationFactBundle(input.tripId, assembly.projection.validation),
     trace: trace(hypothesis, actions, executions, validations, budget),
   };
 }

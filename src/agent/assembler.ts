@@ -254,6 +254,10 @@ export async function assembleProposedPlan(
       knownMarketIds: input.knownMarketIds,
       knownSelectionIds: new Set(),
       supportedThemes: input.supportedThemes,
+      originId: request.origin,
+      requestedDestinationId:
+        request.destination.kind === "specified" ? request.destination.locationId : undefined,
+      locationGraph: input.locationGraph,
       observations,
       factBundles: input.factBundles,
     },

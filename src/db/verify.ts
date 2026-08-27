@@ -13,21 +13,22 @@ import {
   transportSegments,
   transportServices,
 } from "@/db/schema";
+import { travelInventorySeed } from "@/db/seed/data";
 
 config({ path: ".env.local" });
 config({ path: ".env" });
 
 const expectedCounts = {
-  inventoryMeta: 1,
-  locations: 8,
-  destinationMarkets: 1,
-  transportServices: 4,
-  transportSegments: 4,
-  properties: 4,
-  roomOffers: 6,
-  activities: 5,
-  activitySessions: 5,
-  transfers: 6,
+  inventoryMeta: travelInventorySeed.meta.length,
+  locations: travelInventorySeed.locations.length,
+  destinationMarkets: travelInventorySeed.markets.length,
+  transportServices: travelInventorySeed.transportServices.length,
+  transportSegments: travelInventorySeed.transportSegments.length,
+  properties: travelInventorySeed.properties.length,
+  roomOffers: travelInventorySeed.roomOffers.length,
+  activities: travelInventorySeed.activities.length,
+  activitySessions: travelInventorySeed.activitySessions.length,
+  transfers: travelInventorySeed.transfers.length,
 } as const;
 
 async function tableCount(
@@ -75,14 +76,22 @@ async function verifyDatabase() {
   if (!meta || meta.version !== "travel-seed-v1") throw new Error("Active inventory version mismatch");
 
   const marketRows = await db
-    .select({ id: destinationMarkets.locationId, name: locations.name })
+    .select({ id: destinationMarkets.locationId, name: locations.name, region: destinationMarkets.region })
     .from(destinationMarkets)
     .innerJoin(locations, eq(destinationMarkets.locationId, locations.id));
-  if (marketRows.length !== 1 || marketRows[0].name !== "Udaipur") {
-    throw new Error("Expected Udaipur as the first verified market");
+  const indiaCount = marketRows.filter((market) => market.region === "india").length;
+  const internationalCount = marketRows.filter(
+    (market) => market.region === "international",
+  ).length;
+  if (marketRows.length !== 20 || indiaCount !== 10 || internationalCount !== 10) {
+    throw new Error("Expected 10 Indian and 10 international verified markets");
   }
 
-  return { counts, market: marketRows[0].name, inventoryVersion: meta.version };
+  return {
+    counts,
+    markets: { total: marketRows.length, india: indiaCount, international: internationalCount },
+    inventoryVersion: meta.version,
+  };
 }
 
 verifyDatabase()

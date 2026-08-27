@@ -1,6 +1,10 @@
 import type { SpecifiedPlanApiResult } from "@/agent/plan-api";
+import type { DestinationDiscoveryApiResult } from "@/agent/discovery";
 import type { TripRequest, TripState } from "@/domain/model";
 import type { TripProjection } from "@/domain/trip";
+import type { ModificationResult } from "@/agent/modification-contracts";
+import type { ProposalPreview, TripProposal } from "@/domain/proposals";
+import type { ExplanationResult } from "@/agent/explanation-contracts";
 
 export interface ConversationEntry {
   id: string;
@@ -14,20 +18,39 @@ export interface WorkspaceError {
   retryable: boolean;
 }
 
+export interface StoredProposal {
+  proposal: TripProposal;
+  preview: ProposalPreview;
+  projection: TripProjection;
+  message: string;
+}
+
 export interface WorkspaceState {
   draftRequest: TripRequest;
   committedTrip?: TripState;
   projection?: TripProjection;
-  proposals: Record<string, never>;
+  proposals: Record<string, StoredProposal>;
+  activeProposalId?: string;
+  modificationConflict?: Extract<ModificationResult, { type: "conflict" }>;
+  modificationAlternatives?: Extract<ModificationResult, { type: "alternatives" }>;
   latestOutcome?: Exclude<SpecifiedPlanApiResult, { type: "trip_ready" }>;
+  destinationDiscovery?: DestinationDiscoveryApiResult;
+  latestExplanation?: ExplanationResult;
   conversation: ConversationEntry[];
-  asyncStatus: "idle" | "planning" | "error";
+  asyncStatus: "idle" | "discovering" | "planning" | "modifying" | "explaining" | "applying" | "error";
   error?: WorkspaceError;
   optionalClarificationUsed: boolean;
 }
 
 export type WorkspaceAction =
   | { type: "replace_draft"; request: TripRequest }
+  | { type: "discovery_started"; entry: ConversationEntry }
+  | {
+      type: "discovery_received";
+      result: DestinationDiscoveryApiResult;
+      entry: ConversationEntry;
+    }
+  | { type: "destination_selected"; request: TripRequest }
   | { type: "planning_started"; entry: ConversationEntry }
   | {
       type: "planning_succeeded";
@@ -40,6 +63,19 @@ export type WorkspaceAction =
       entry: ConversationEntry;
     }
   | { type: "planning_failed"; error: WorkspaceError; entry: ConversationEntry }
+  | { type: "modification_started"; entry: ConversationEntry }
+  | { type: "proposal_received"; result: Extract<ModificationResult, { type: "proposal" }>; entry: ConversationEntry }
+  | { type: "alternatives_received"; result: Extract<ModificationResult, { type: "alternatives" }>; entry: ConversationEntry }
+  | { type: "alternative_selected"; proposalId: string }
+  | { type: "modification_conflict"; result: Extract<ModificationResult, { type: "conflict" }>; entry: ConversationEntry }
+  | { type: "explanation_started"; entry: ConversationEntry }
+  | { type: "explanation_received"; result: ExplanationResult; entry: ConversationEntry }
+  | { type: "proposal_preview_started" }
+  | { type: "proposal_previewed"; stored: StoredProposal; entry: ConversationEntry }
+  | { type: "proposal_apply_started" }
+  | { type: "proposal_applied"; trip: TripState; projection: TripProjection; entry: ConversationEntry }
+  | { type: "proposal_dismissed"; proposalId: string }
+  | { type: "adaptive_outcome_dismissed" }
   | { type: "clear_error" };
 
 export const initialWorkspaceState: WorkspaceState = {
@@ -69,13 +105,47 @@ export function workspaceReducer(
 ): WorkspaceState {
   switch (action.type) {
     case "replace_draft":
-      return { ...state, draftRequest: action.request };
+      return {
+        ...state,
+        draftRequest: action.request,
+        destinationDiscovery: undefined,
+      };
+    case "discovery_started":
+      return {
+        ...state,
+        asyncStatus: "discovering",
+        error: undefined,
+        latestOutcome: undefined,
+        destinationDiscovery: undefined,
+        modificationConflict: undefined,
+        modificationAlternatives: undefined,
+        latestExplanation: undefined,
+        conversation: [...state.conversation, action.entry],
+      };
+    case "discovery_received":
+      return {
+        ...state,
+        asyncStatus: "idle",
+        error: undefined,
+        destinationDiscovery: action.result,
+        conversation: [...state.conversation, action.entry],
+      };
+    case "destination_selected":
+      return {
+        ...state,
+        draftRequest: action.request,
+        destinationDiscovery: undefined,
+        error: undefined,
+      };
     case "planning_started":
       return {
         ...state,
         asyncStatus: "planning",
         error: undefined,
         latestOutcome: undefined,
+        modificationConflict: undefined,
+        modificationAlternatives: undefined,
+        latestExplanation: undefined,
         conversation: [...state.conversation, action.entry],
       };
     case "planning_succeeded":
@@ -86,6 +156,10 @@ export function workspaceReducer(
         latestOutcome: undefined,
         asyncStatus: "idle",
         error: undefined,
+        proposals: {},
+        activeProposalId: undefined,
+        modificationConflict: undefined,
+        modificationAlternatives: undefined,
         conversation: [...state.conversation, action.entry],
       };
     case "outcome_received":
@@ -104,6 +178,156 @@ export function workspaceReducer(
         asyncStatus: "error",
         error: action.error,
         conversation: [...state.conversation, action.entry],
+      };
+    case "modification_started":
+      return {
+        ...state,
+        asyncStatus: "modifying",
+        error: undefined,
+        latestOutcome: undefined,
+        modificationConflict: undefined,
+        modificationAlternatives: undefined,
+        conversation: [...state.conversation, action.entry],
+      };
+    case "proposal_received":
+      return {
+        ...state,
+        asyncStatus: "idle",
+        error: undefined,
+        modificationConflict: undefined,
+        modificationAlternatives: undefined,
+        activeProposalId: action.result.proposal.id,
+        proposals: {
+          ...state.proposals,
+          [action.result.proposal.id]: {
+            proposal: action.result.proposal,
+            preview: action.result.preview,
+            projection: action.result.projection,
+            message: action.result.message,
+          },
+        },
+        conversation: [...state.conversation, action.entry],
+      };
+    case "alternatives_received":
+      return {
+        ...state,
+        asyncStatus: "idle",
+        error: undefined,
+        modificationConflict: undefined,
+        modificationAlternatives: action.result,
+        activeProposalId: undefined,
+        proposals: {
+          ...state.proposals,
+          ...Object.fromEntries(
+            action.result.options.map((option) => [
+              option.proposal.id,
+              {
+                proposal: option.proposal,
+                preview: option.preview,
+                projection: option.projection,
+                message: option.message,
+              },
+            ]),
+          ),
+        },
+        conversation: [...state.conversation, action.entry],
+      };
+    case "alternative_selected":
+      return state.proposals[action.proposalId]
+        ? {
+            ...state,
+            activeProposalId: action.proposalId,
+            modificationAlternatives: undefined,
+            modificationConflict: undefined,
+          }
+        : state;
+    case "modification_conflict":
+      return {
+        ...state,
+        asyncStatus: "idle",
+        error: undefined,
+        modificationConflict: action.result,
+        modificationAlternatives: undefined,
+        proposals: {
+          ...state.proposals,
+          ...Object.fromEntries(
+            action.result.proposals.map((option) => [
+              option.proposal.id,
+              {
+                proposal: option.proposal,
+                preview: option.preview,
+                projection: option.projection,
+                message: option.message,
+              },
+            ]),
+          ),
+        },
+        conversation: [...state.conversation, action.entry],
+      };
+    case "explanation_started":
+      return {
+        ...state,
+        asyncStatus: "explaining",
+        error: undefined,
+        conversation: [...state.conversation, action.entry],
+      };
+    case "explanation_received":
+      return {
+        ...state,
+        asyncStatus: "idle",
+        error: undefined,
+        latestExplanation: action.result,
+        conversation: [...state.conversation, action.entry],
+      };
+    case "proposal_preview_started":
+      return { ...state, asyncStatus: "modifying", error: undefined };
+    case "proposal_previewed":
+      return {
+        ...state,
+        asyncStatus: "idle",
+        error: undefined,
+        activeProposalId: action.stored.proposal.id,
+        proposals: {
+          ...state.proposals,
+          [action.stored.proposal.id]: action.stored,
+        },
+        conversation: [...state.conversation, action.entry],
+      };
+    case "proposal_apply_started":
+      return { ...state, asyncStatus: "applying", error: undefined };
+    case "proposal_applied":
+      return {
+        ...state,
+        committedTrip: action.trip,
+        projection: action.projection,
+        proposals: {},
+        activeProposalId: undefined,
+        modificationConflict: undefined,
+        modificationAlternatives: undefined,
+        latestExplanation: undefined,
+        asyncStatus: "idle",
+        error: undefined,
+        conversation: [...state.conversation, action.entry],
+      };
+    case "proposal_dismissed": {
+      const proposals = { ...state.proposals };
+      delete proposals[action.proposalId];
+      return {
+        ...state,
+        proposals,
+        activeProposalId:
+          state.activeProposalId === action.proposalId
+            ? undefined
+            : state.activeProposalId,
+      };
+    }
+    case "adaptive_outcome_dismissed":
+      return {
+        ...state,
+        latestOutcome:
+          state.latestOutcome?.type === "conflict" ? undefined : state.latestOutcome,
+        modificationConflict: undefined,
+        modificationAlternatives: undefined,
       };
     case "clear_error":
       return { ...state, asyncStatus: "idle", error: undefined };

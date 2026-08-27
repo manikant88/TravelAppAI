@@ -8,6 +8,7 @@ import type {
   ID,
   ISODate,
   ISODateTime,
+  LocationType,
   Money,
   SelectionID,
   StaySelection,
@@ -95,6 +96,9 @@ export interface TripProjection {
 export interface LocationNode {
   id: string;
   parentId?: string;
+  name?: string;
+  type?: LocationType;
+  tags?: string[];
 }
 
 export interface TripProjectionContext {

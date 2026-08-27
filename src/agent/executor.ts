@@ -33,6 +33,7 @@ import {
   searchTransfers,
   searchTransport,
 } from "@/inventory/service";
+import { discoverDestinations } from "@/inventory/discovery";
 
 export interface InventoryToolServices {
   searchTransport(request: TransportSearchRequest): Promise<SearchResponse<TransportOffer>>;
@@ -53,6 +54,7 @@ export function createInventoryToolServices(
     searchStays: (request) => searchStays(request, repository),
     searchActivities: (request) => searchActivities(request, repository),
     searchTransfers: (request) => searchTransfers(request, repository),
+    discoverDestinations: (_call, request) => discoverDestinations(request, repository),
   };
 }
 
@@ -202,6 +204,16 @@ function transferFacts(offer: TransferOffer, travellerCount: number): GroundedFa
     fact(offer.id, "transfer", "from", "Transfer origin", offer.from),
     fact(offer.id, "transfer", "to", "Transfer destination", offer.to),
   ];
+}
+
+export function factsForInventoryOffer(
+  offer: TransportOffer | StayOffer | ActivityOffer | TransferOffer,
+  travellerCount: number,
+): GroundedFact[] {
+  if ("serviceId" in offer) return transportFacts(offer, travellerCount);
+  if ("roomOfferId" in offer) return stayFacts(offer);
+  if ("sessionId" in offer) return activityFacts(offer, travellerCount);
+  return transferFacts(offer, travellerCount);
 }
 
 function observationFromSearch<T extends { id: string }>(

@@ -173,7 +173,58 @@ describe("specified PLAN API service", () => {
       type: "conflict",
       reason: "invalid_after_repair",
       validation: invalidProjection.validation,
+      block: {
+        type: "constraint_conflict",
+        alternatives: [{ actionId: "action:change-scope:invalid-plan" }],
+      },
     });
+    if (result.type === "conflict") {
+      expect(result.factBundle.facts[0]).toMatchObject({
+        subjectId: "trip:udaipur",
+        dimension: "validation",
+        value: "ROUTE_GAP",
+      });
+      expect(result.suggestedRelaxationIds).toEqual(["action:change-scope:invalid-plan"]);
+    }
     expect(result).not.toHaveProperty("trip");
+  });
+
+  it("maps a grounded terminal conflict to ConstraintConflict actions", async () => {
+    const coordinator = vi.fn(async () => ({
+      status: "cannot_satisfy" as const,
+      conflictFactIds: ["fact:budget:coverage"],
+      suggestedRelaxationIds: ["action:adjust:constraint:budget"],
+      factBundle: {
+        facts: [{
+          id: "fact:budget:coverage",
+          subjectType: "trip" as const,
+          subjectId: "trip:udaipur",
+          dimension: "budget_coverage",
+          label: "Budget coverage",
+          value: false,
+        }],
+        allowedComparisonDimensions: [],
+        allowedFollowUpActions: [{
+          id: "action:adjust:constraint:budget",
+          label: "Review maximum budget",
+          type: "adjust_constraint" as const,
+        }],
+      },
+      trace: {} as never,
+    }));
+
+    const result = await runSpecifiedPlanApi(
+      { tripId: "trip:udaipur", request },
+      { model: unusedModel, repository: repository(), coordinator },
+    );
+
+    expect(result).toMatchObject({
+      type: "conflict",
+      block: {
+        type: "constraint_conflict",
+        constraintIds: ["constraint:budget"],
+        alternatives: [{ actionId: "action:adjust:constraint:budget" }],
+      },
+    });
   });
 });

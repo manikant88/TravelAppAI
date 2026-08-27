@@ -12,14 +12,14 @@ import {
   transportSegments,
   transportServices,
 } from "@/db/schema";
-import { udaipurSeed } from "@/db/seed/data";
+import { travelInventorySeed } from "@/db/seed/data";
 import { validateInventorySeed } from "@/db/seed/validate";
 
 config({ path: ".env.local" });
 config({ path: ".env" });
 
 async function seedInventory() {
-  validateInventorySeed(udaipurSeed);
+  validateInventorySeed(travelInventorySeed);
 
   const connectionString = process.env.DATABASE_ADMIN_URL;
   if (!connectionString) throw new Error("DATABASE_ADMIN_URL is required to seed inventory");
@@ -37,22 +37,24 @@ async function seedInventory() {
     db.delete(destinationMarkets),
     db.delete(locations),
     db.delete(inventoryMeta),
-    db.insert(inventoryMeta).values(udaipurSeed.meta),
-    db.insert(locations).values(udaipurSeed.locations),
-    db.insert(destinationMarkets).values(udaipurSeed.markets),
-    db.insert(transportServices).values(udaipurSeed.transportServices),
-    db.insert(transportSegments).values(udaipurSeed.transportSegments),
-    db.insert(properties).values(udaipurSeed.properties),
-    db.insert(roomOffers).values(udaipurSeed.roomOffers),
-    db.insert(activities).values(udaipurSeed.activities),
-    db.insert(activitySessions).values(udaipurSeed.activitySessions),
-    db.insert(transfers).values(udaipurSeed.transfers),
+    db.insert(inventoryMeta).values(travelInventorySeed.meta),
+    db.insert(locations).values(travelInventorySeed.locations),
+    db.insert(destinationMarkets).values(travelInventorySeed.markets),
+    db.insert(transportServices).values(travelInventorySeed.transportServices),
+    db.insert(transportSegments).values(travelInventorySeed.transportSegments),
+    db.insert(properties).values(travelInventorySeed.properties),
+    db.insert(roomOffers).values(travelInventorySeed.roomOffers),
+    db.insert(activities).values(travelInventorySeed.activities),
+    db.insert(activitySessions).values(travelInventorySeed.activitySessions),
+    db.insert(transfers).values(travelInventorySeed.transfers),
   ] as const);
 }
 
 seedInventory()
   .then(() => {
-    process.stdout.write(`Seeded ${udaipurSeed.markets.length} market with travel-seed-v1\n`);
+    process.stdout.write(
+      `Seeded ${travelInventorySeed.markets.length} markets with travel-seed-v1\n`,
+    );
   })
   .catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

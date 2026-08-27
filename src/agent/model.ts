@@ -15,6 +15,19 @@ import type {
   SpecifiedDestinationPlannerModel,
 } from "@/agent/coordinator";
 import type { PlannableTripRequest } from "@/domain/model";
+import {
+  modificationRecommendationSchema,
+  scopedModificationIntentSchema,
+  type ModificationPlannerModel,
+} from "@/agent/modification-contracts";
+import {
+  destinationRecommendationSchema,
+  type DestinationDiscoveryModel,
+} from "@/agent/discovery";
+import {
+  explanationDraftSchema,
+  type ExplanationModel,
+} from "@/agent/explanation-contracts";
 
 export interface StructuredResponseRequest<T> {
   schema: ZodType<T, ZodTypeDef, unknown>;
@@ -259,9 +272,12 @@ async function runStructured<T>(
 const hypothesisInstructions = `You are the planning-strategy layer for a bounded travel planner.
 Return only the schema-constrained planning hypothesis.
 Use only location IDs and themes present in the supplied catalog scope, and travellers, dates, and constraints present in the canonical request.
-For a specified destination, propose one or more related stops and allocate every trip night exactly once.
+For a specified destination, use exactly one candidate market: the requested destination market.
+Choose a route strategy from ordinary location relationships. A single-stop route uses the market itself. A multi-stop route uses distinct descendant city or region nodes within that market; never use countries, airports, or neighborhoods as accommodation stops.
+Use a multi-stop route only when the catalog graph exposes meaningful sibling destination nodes and the trip has enough nights to allocate at least one whole night to every stop. Do not rely on destination-name rules.
+Allocate every trip night exactly once in route order.
 This is an initial plan with no committed selections, so preserveSelectionIds must be an empty array; location or market IDs are never selection IDs.
-Choose semantic searches that gather enough evidence for transport from the origin to the first stop on trip day 1, transport from the final stop back to the origin on the final trip day, stays covering every night, useful activities, and every required inter-stop transfer.
+The first tool plan must include transport from the origin to the first stop on trip day 1, one exact date-aligned stay search per stop, every adjacent inter-stop transfer in route order, and transport from the final stop back to the origin on the final trip day. Activities are optional but should be scoped to the stop and trip days where they occur.
 Do not invent prices, schedules, availability, candidate IDs, or inventory facts.
 Do not perform arithmetic that belongs to code. Do not include hidden reasoning.`;
 
@@ -271,6 +287,8 @@ Use only candidate IDs, fact IDs, comparison dimensions, locations, themes, and 
 Hard validity, dates, prices, budgets, locks, assembly, and state mutation belong to code.
 You may request a materially different search when evidence is insufficient and the supplied budget permits it.
 When proposing a plan, select a coherent set of observed candidates and ground every choice in that candidate's facts.
+Select exactly one observed candidate for every required outbound transport, stop stay, inter-stop transfer, and return transport search. Select activities only from searches scoped to the proposed route.
+The proposed market, ordered stops, and night allocation must describe a route fully supported by the executed searches; they may differ from the initial hypothesis only when materially different evidence for that route has already been retrieved.
 When structured validation feedback is present, make at most one targeted revision and never override it.
 Do not invent facts or expose hidden reasoning.`;
 
@@ -309,6 +327,97 @@ export function createOpenAIPlannerModel(
         input: jsonForModel(decisionEvidence(input)),
       });
       return output.action;
+    },
+  };
+}
+
+const modificationIntentInstructions = `You are the intent and scoping layer of one bounded travel-planner model.
+Interpret the user's requested modification against the supplied canonical trip selections.
+Return exactly one target selection ID. Use replace for changing an inventory choice and remove only when the user asks to remove an activity.
+List selections the user explicitly asks to preserve. Code will additionally preserve every unrelated selection.
+Set unlockTarget to true only when the user explicitly asks to unlock the target; never infer permission to unlock from a generic request to change it.
+Use only supplied selection IDs and supported themes. preferredThemes may capture relevant supported activity themes from the request.
+Do not invent inventory, prices, schedules, facts, or state changes. Do not expose hidden reasoning.`;
+
+const modificationRecommendationInstructions = `You are the contextual recommendation layer of one bounded travel-planner model.
+Choose exactly one candidate from the supplied hard-valid candidates using the user's goal and soft preferences.
+Reference only supplied candidate and fact IDs, and only comparison dimensions supported by those facts.
+All hard constraints, prices, dates, locks, proposal construction, validation, and state mutation belong to code.
+Do not invent facts or expose hidden reasoning.`;
+
+export function createOpenAIModificationModel(
+  options: OpenAIPlannerModelOptions,
+): ModificationPlannerModel {
+  const model = options.model.trim();
+  if (!model) throw new Error("OPENAI_MODEL is required");
+  const runner = options.runner ?? createOpenAIRunner({ ...options, model });
+
+  return {
+    interpretModification(input) {
+      return runStructured(runner, {
+        schema: scopedModificationIntentSchema,
+        schemaName: "travel_modification_intent",
+        instructions: modificationIntentInstructions,
+        input: jsonForModel(input),
+      });
+    },
+    recommendModification(input) {
+      return runStructured(runner, {
+        schema: modificationRecommendationSchema,
+        schemaName: "travel_modification_recommendation",
+        instructions: modificationRecommendationInstructions,
+        input: jsonForModel(input),
+      });
+    },
+  };
+}
+
+const destinationDiscoveryInstructions = `You are the destination recommendation layer of one bounded travel-planner model.
+Choose two to four destinations only from the supplied hard-valid market candidates.
+Recommend one candidate using the canonical request's interests, pace, travel effort, and budget preference.
+Use only supplied market IDs, fact IDs, and allowed comparison dimensions.
+Prices are conservative floors produced by code, not quotes. Do not make weather, visa, safety, cultural, or seasonal claims.
+Inventory validity, reachability, hard constraints, price arithmetic, request mutation, and detailed planning belong to code.
+Do not invent facts or expose hidden reasoning.`;
+
+export function createOpenAIDestinationDiscoveryModel(
+  options: OpenAIPlannerModelOptions,
+): DestinationDiscoveryModel {
+  const model = options.model.trim();
+  if (!model) throw new Error("OPENAI_MODEL is required");
+  const runner = options.runner ?? createOpenAIRunner({ ...options, model });
+  return {
+    recommendDestinations(input) {
+      return runStructured(runner, {
+        schema: destinationRecommendationSchema,
+        schemaName: "destination_discovery_recommendation",
+        instructions: destinationDiscoveryInstructions,
+        input: jsonForModel(input),
+      });
+    },
+  };
+}
+
+const explanationInstructions = `You are the grounded explanation layer of one bounded travel-planner model.
+Answer the supplied question in one to three concise sentences using only the supplied fact bundle.
+Every sentence must cite the exact fact IDs that support it. Do not mention a number, date, time, price, place, operator, property, activity, constraint, or trip consequence unless the cited facts contain it.
+Use comparative language only when the sentence cites facts from at least two different subjects. If historical alternatives are absent, explain the current choice and its trip consequences without implying it was better than an unseen option.
+Do not search, recommend a mutation, invent facts, expose hidden reasoning, or describe chain-of-thought.`;
+
+export function createOpenAIExplanationModel(
+  options: OpenAIPlannerModelOptions,
+): ExplanationModel {
+  const model = options.model.trim();
+  if (!model) throw new Error("OPENAI_MODEL is required");
+  const runner = options.runner ?? createOpenAIRunner({ ...options, model });
+  return {
+    explain(input) {
+      return runStructured(runner, {
+        schema: explanationDraftSchema,
+        schemaName: "grounded_trip_explanation",
+        instructions: explanationInstructions,
+        input: jsonForModel(input),
+      });
     },
   };
 }

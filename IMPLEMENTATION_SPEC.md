@@ -413,14 +413,19 @@ The application role receives `SELECT` only. There are no runtime inventory muta
 
 # 7. Seed manifest and coverage
 
-P0 origin hubs:
+P0 route-complete origin hub:
+
+- Delhi.
+
+Normalized origin hubs retained for autocomplete and later route expansion:
 
 - Bengaluru;
-- Delhi;
 - Mumbai;
 - Hyderabad;
 - Chennai;
 - Kolkata.
+
+P0 must return `unsupported_route` when a normalized origin/market pair has no seeded transport; it must not imply comprehensive coverage. The full six-origin × twenty-market outbound/return matrix is deferred to P1/P2.
 
 P0 Indian destination markets:
 
@@ -1117,7 +1122,11 @@ Validation rules:
 
 - all IDs must exist in the supplied scope/observations;
 - an open-ended discovery hypothesis may leave `proposedStopIds` and `nightAllocation` empty;
+- a specified-destination hypothesis has exactly one route market;
+- every stop must be the route market or its descendant in the normalized location graph;
 - `propose_plan.stopIds` must be non-empty and its `nightAllocation` must sum to trip nights;
+- ordered route stops deterministically imply outbound transport to the first stop, one date-aligned stay per stop, a transfer for every adjacent stop boundary, and return transport from the final stop;
+- selected inventory candidates must come from searches scoped to that declared route; final validation still reports missing or conflicting route legs as structured repair feedback;
 - choices may reference only hard-valid candidates;
 - comparative claims require supporting fact IDs;
 - `search_more` must materially differ from a prior call;
@@ -1275,7 +1284,9 @@ Code supplies a bounded fact bundle containing:
 - price, timing, transfer, suitability, and schedule differences;
 - allowed comparison dimensions and follow-up actions.
 
-The model returns concise prose and supporting fact IDs. Every comparative clause must be attributable to supplied facts. Unsupported or invalid text is replaced by deterministic copy from the same bundle.
+The committed trip does not retain historical planning observations. EXPLAIN therefore resolves current selected offers and the derived projection without running new inventory searches. Historical alternatives are compared only if their facts are explicitly present in the supplied bundle; otherwise the response explains the current selection and its trip consequences without claiming it was best or cheapest.
+
+The model returns one to three concise sentence objects, each with supporting fact IDs. Code rejects unknown facts, unsupported numbers, target explanations that cite no target fact, and comparative language that lacks comparable same-entity facts from multiple subjects. Unsupported, invalid, or unavailable model output is replaced by deterministic copy from the same bundle.
 
 Never request or expose hidden chain-of-thought.
 
@@ -1351,10 +1362,13 @@ Validation rules:
 
 # 24. Application and API state
 
-Inventory endpoints are declared in section 8. The agent endpoint is:
+Inventory endpoints are declared in section 8. The P0 agent endpoints are:
 
 ```text
-POST /api/agent
+POST /api/agent/discover
+POST /api/agent/plan
+POST /api/agent/modify
+POST /api/agent/explain
 ```
 
 ```ts
@@ -1522,6 +1536,9 @@ Integration and contract tests use a dedicated Neon branch seeded with the same 
 - itinerary and budget recompute from selections;
 - five inclusive trip days produce four accommodation nights;
 - multi-stop stays cover every night without overlap;
+- multi-stop plans use the same location-graph, tool, assembly, and validation code for every market; destination names never select a route implementation;
+- a selected candidate outside the declared route is rejected before assembly;
+- every adjacent stop boundary has exactly one validated transfer selection;
 - hard early-departure and mobility constraints filter correctly;
 - target budget creates a warning; maximum budget creates an error;
 - scoped stay change preserves travel and unrelated activities;
@@ -1640,6 +1657,7 @@ Do not author all destination data before one end-to-end database-backed vertica
 
 P1:
 
+- comprehensive outbound and return transport coverage from all six normalized origin hubs to every P0 market;
 - inline “Why this?”;
 - undo last applied proposal;
 - richer comparison details and animations;
@@ -1649,7 +1667,7 @@ P2:
 
 - participant-specific activities;
 - alternate activities for subsets;
-- lightweight map visualization from stored coordinates;
+- lightweight schematic map visualization from stored coordinates. Revisit only during end-to-end testing: derive markers and route arcs from `TripProjection`, and bind scanning/loading motion to actual pending request state. Exact road geometry requires later stored route shapes or an external routing provider and remains outside P0;
 - richer motion.
 
 Forbidden during P0:

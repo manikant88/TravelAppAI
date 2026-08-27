@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { zodTextFormat } from "openai/helpers/zod";
 import type { StructuredResponseRunner } from "@/agent/model";
-import { createOpenAIPlannerModel } from "@/agent/model";
+import { createOpenAIExplanationModel, createOpenAIPlannerModel } from "@/agent/model";
 import type { PlannerDecisionInput } from "@/agent/coordinator";
 import type { PlannableTripRequest } from "@/domain/model";
 
@@ -121,5 +121,48 @@ describe("schema-constrained OpenAI planner model", () => {
     ).rejects.toThrow(
       "Every proposed stop requires one night allocation",
     );
+  });
+
+  it("uses a strict sentence-and-fact contract for grounded explanation", async () => {
+    const requests: Array<{ schemaName: string; input: string }> = [];
+    const runner: StructuredResponseRunner = {
+      async run(call) {
+        expect(() => zodTextFormat(call.schema, call.schemaName)).not.toThrow();
+        requests.push({ schemaName: call.schemaName, input: call.input });
+        return {
+          sentences: [
+            { text: "The current trip is valid.", supportingFactIds: ["fact:valid"] },
+          ],
+        };
+      },
+    };
+    const model = createOpenAIExplanationModel({ model: "test-model", runner });
+    const factBundle = {
+      facts: [
+        {
+          id: "fact:valid",
+          subjectType: "trip" as const,
+          subjectId: "trip:one",
+          dimension: "validation",
+          label: "Current trip validation",
+          value: true,
+        },
+      ],
+      allowedComparisonDimensions: ["validation"],
+      allowedFollowUpActions: [],
+    };
+
+    await expect(
+      model.explain({ question: "Is this valid?", factBundle }),
+    ).resolves.toEqual({
+      sentences: [
+        { text: "The current trip is valid.", supportingFactIds: ["fact:valid"] },
+      ],
+    });
+    expect(requests[0]?.schemaName).toBe("grounded_trip_explanation");
+    expect(JSON.parse(requests[0]?.input ?? "{}")).toEqual({
+      question: "Is this valid?",
+      factBundle,
+    });
   });
 });

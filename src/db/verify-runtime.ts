@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { config } from "dotenv";
 import { createDatabase } from "@/db/client";
+import { travelInventorySeed } from "@/db/seed/data";
 
 config({ path: ".env.local" });
 config({ path: ".env" });
@@ -10,6 +11,7 @@ interface RuntimeVerificationRow extends Record<string, unknown> {
   defaultReadOnly: string;
   canInsertInventory: boolean;
   locationCount: number;
+  marketCount: number;
 }
 
 async function verifyRuntimeRole() {
@@ -22,7 +24,8 @@ async function verifyRuntimeRole() {
       current_user as "currentUser",
       current_setting('default_transaction_read_only') as "defaultReadOnly",
       has_table_privilege(current_user, 'public.inventory_meta', 'INSERT') as "canInsertInventory",
-      (select count(*)::int from public.locations) as "locationCount"
+      (select count(*)::int from public.locations) as "locationCount",
+      (select count(*)::int from public.destination_markets) as "marketCount"
   `);
   const row = result.rows[0];
 
@@ -31,7 +34,16 @@ async function verifyRuntimeRole() {
   }
   if (row.defaultReadOnly !== "on") throw new Error("Runtime role is not transaction-read-only");
   if (row.canInsertInventory) throw new Error("Runtime role unexpectedly has INSERT privilege");
-  if (row.locationCount !== 8) throw new Error(`Expected 8 locations, found ${row.locationCount}`);
+  if (row.locationCount !== travelInventorySeed.locations.length) {
+    throw new Error(
+      `Expected ${travelInventorySeed.locations.length} locations, found ${row.locationCount}`,
+    );
+  }
+  if (row.marketCount !== travelInventorySeed.markets.length) {
+    throw new Error(
+      `Expected ${travelInventorySeed.markets.length} markets, found ${row.marketCount}`,
+    );
+  }
 
   return row;
 }
