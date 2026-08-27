@@ -9,3 +9,4 @@ npm-debug.log*
 coverage
 test-results
 playwright-report
+PROJECT_CONTEXT.md
