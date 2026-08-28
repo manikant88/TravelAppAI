@@ -15,6 +15,13 @@
       "when": 1787752701422,
       "tag": "0001_cheerful_tenebrous",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787917200000,
+      "tag": "0002_pexels_image_assets",
+      "breakpoints": true
     }
   ]
 }

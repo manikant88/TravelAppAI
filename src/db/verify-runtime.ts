@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { config } from "dotenv";
-import { createDatabase } from "@/db/client";
+import { createRuntimeDatabase } from "@/db/client";
 import { travelInventorySeed } from "@/db/seed/data";
 
 config({ path: ".env.local" });
@@ -18,7 +18,7 @@ async function verifyRuntimeRole() {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) throw new Error("DATABASE_URL is required to verify the runtime role");
 
-  const db = createDatabase(connectionString);
+  const db = createRuntimeDatabase(connectionString);
   const result = await db.execute<RuntimeVerificationRow>(sql`
     select
       current_user as "currentUser",

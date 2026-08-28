@@ -122,9 +122,8 @@ describe("open-ended destination discovery", () => {
     expect(recommendDestinations).not.toHaveBeenCalled();
   });
 
-  it("rejects recommendation facts that were not produced by the domain", async () => {
-    await expect(
-      runDestinationDiscovery(request, {
+  it("falls back to a deterministic grounded recommendation when model output is invalid", async () => {
+    const result = await runDestinationDiscovery(request, {
         model: {
           recommendDestinations: vi.fn().mockResolvedValue({
             candidateMarketIds: ["city:goa", "region:thailand-andaman"],
@@ -135,9 +134,9 @@ describe("open-ended destination discovery", () => {
         },
         repository,
         discover: vi.fn().mockResolvedValue(discoveryResult()),
-      }),
-    ).rejects.toMatchObject({
-      code: "INVALID_MODEL_OUTPUT",
-    });
+      });
+    expect(result.type).toBe("destination_options");
+    if (result.type !== "destination_options") return;
+    expect(result.block.emphasis?.recommendedId).toBe("city:goa");
   });
 });

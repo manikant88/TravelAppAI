@@ -17,10 +17,14 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "tsx src/db/seed/index.ts",
+    "db:seed:images": "tsx src/db/seed/pexels-images.ts",
+    "db:sync:images": "tsx src/db/seed/sync-images.ts",
     "db:verify": "tsx src/db/verify.ts",
-    "db:verify-runtime": "tsx src/db/verify-runtime.ts"
+    "db:verify-runtime": "tsx src/db/verify-runtime.ts",
+    "inventory:verify": "tsx src/inventory/verify-runtime.ts"
   },
   "dependencies": {
+    "@lottiefiles/dotlottie-react": "^0.19.16",
     "@neondatabase/serverless": "^1.0.0",
     "drizzle-orm": "^0.45.0",
     "next": "^16.0.0",

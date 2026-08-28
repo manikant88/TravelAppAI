@@ -230,9 +230,27 @@ describe("deterministic trip projection", () => {
       title: "Palace walk",
       startAt: activity.startsAt,
     });
+    expect(projection.itinerary[0].events).toContainEqual(
+      expect.objectContaining({ type: "free_time", title: "Open time around travel" }),
+    );
     expect(projection.validation.valid).toBe(true);
     expect(projection.validation.issues).toContainEqual(
       expect.objectContaining({ code: "BUDGET_EXCEEDED", severity: "warning" }),
+    );
+  });
+
+  it("rejects an empty initial itinerary but keeps open time explicit", async () => {
+    const trip = validTrip();
+    trip.selectedActivities = [];
+
+    const projection = await projectTrip(trip, context());
+
+    expect(projection.validation.valid).toBe(false);
+    expect(projection.validation.issues).toContainEqual(
+      expect.objectContaining({ code: "ITINERARY_INCOMPLETE", severity: "error" }),
+    );
+    expect(projection.itinerary[1].events).toContainEqual(
+      expect.objectContaining({ type: "free_time" }),
     );
   });
 

@@ -74,15 +74,17 @@ Environment:
 ```bash
 DATABASE_URL=
 DATABASE_ADMIN_URL=
+INVENTORY_SOURCE=snapshot
 OPENAI_API_KEY=
 OPENAI_MODEL=
-INVENTORY_VERSION=travel-seed-v1
+INVENTORY_VERSION=travel-seed-v2
 ```
 
 Rules:
 
 - `DATABASE_ADMIN_URL` is used only by migrations and seeding.
-- `DATABASE_URL` uses an application role with `SELECT` permission only.
+- `DATABASE_URL` uses an application role with `SELECT` permission only. Serverless deployments use that role's pooled Neon connection string (`-pooler` hostname); migration and seed commands continue to use the direct admin URL.
+- `INVENTORY_SOURCE` defaults to `snapshot` for a deployment-safe, versioned, read-only inventory bundled from the canonical seed. Use `hybrid` to prefer Neon with a circuit-breaker fallback, or `neon` when explicitly verifying the database adapter.
 - database and OpenAI credentials remain server-side.
 - `OPENAI_MODEL` is configurable.
 - inventory routes run in the Node.js runtime.
@@ -288,7 +290,7 @@ The database is pre-seeded, deterministic, synthetic, and read-only at applicati
 - `currency`;
 - `dataProvenance = synthetic`.
 
-Every search response includes `inventoryVersion`. P0 inventory supports **2026-09-01 through 2027-03-31**, inclusive. Requests outside that range return `outside_inventory_window`; the system never projects availability beyond the seeded contract.
+Every search response includes `inventoryVersion`. P0 inventory supports **2026-08-28 through 2027-03-31**, inclusive. Requests outside that range return `outside_inventory_window`; the system never projects availability beyond the seeded contract.
 
 `seededAt` is a fixed release timestamp from the seed manifest, not the runtime execution time, so repeated seeding produces identical metadata.
 
@@ -810,6 +812,8 @@ export interface ItineraryDay {
 
 Direct itinerary edits translate into typed trip operations. They never mutate an independent itinerary store.
 
+Initial PLAN quality requires pace-appropriate activity coverage on full interior trip days when dated activity inventory is available: relaxed plans cover at least `ceil(interiorDays / 3)` distinct days, balanced plans `ceil(interiorDays / 2)`, and packed plans every interior day, capped at four activity days in P0. This is an initial-plan quality gate, not a permanent hard constraint: later approved proposals may intentionally create more open time. Every day without a selected activity receives an explicit derived `free_time` event so an open day is never rendered as an accidental blank.
+
 ```ts
 export interface TripProjection {
   hydratedSelections: Array<{
@@ -918,7 +922,7 @@ Show at most four choices. Choice IDs resolve through typed handlers; raw string
 
 # 15. Agent intent and request patch
 
-One travel-planner model supports `PLAN`, `MODIFY`, and `EXPLAIN`.
+One travel-planner model supports natural-language intake, `PLAN`, `MODIFY`, and `EXPLAIN`.
 
 ```ts
 export type AgentIntent =
@@ -958,6 +962,8 @@ export interface RequestPatch {
 ```
 
 Code resolves locations, dates, semantic constraint keys, traveller IDs, and all patches. After a trip exists, changes use proposals rather than direct request patches.
+
+The intake model returns semantic location queries, an open/specified destination signal, explicitly stated calendar dates, traveller groups, preferences, and typed constraint drafts. It never returns normalized location IDs. Code resolves origin queries against active locations, maps a destination child to its declared market through the location graph, validates dates against the seeded window, assigns stable draft traveller and constraint IDs, applies the patch to the canonical draft, and computes missing requirements deterministically. The user reviews the populated Trip Brief before discovery or PLAN begins; intake never commits a trip.
 
 ---
 
@@ -1203,6 +1209,7 @@ export type TripOperation =
   | { type: "replace_travel"; selectionId: SelectionID; nextOfferId: OfferID }
   | { type: "replace_stay"; selectionId: SelectionID; nextOfferId: OfferID }
   | { type: "replace_activity"; selectionId: SelectionID; nextOfferId: OfferID }
+  | { type: "add_activity"; nextOfferId: OfferID; travellerIds: ID[] }
   | { type: "remove_activity"; selectionId: SelectionID }
   | { type: "update_activity_participants"; selectionId: SelectionID; travellerIds: ID[] }
   | { type: "set_selection_lock"; selectionId: SelectionID; locked: boolean }
@@ -1210,7 +1217,7 @@ export type TripOperation =
   | { type: "remove_constraint"; constraintId: ID };
 ```
 
-P0 UI requires replace travel/stay/activity, remove activity, constraint changes, and lock changes. Participant updates remain domain-extensible without participant-specific UI.
+P0 UI requires add/replace/remove activity, replace travel/stay, constraint changes, and lock changes. Every itinerary day exposes activity addition. Code resolves that day to its canonical route location, searches dated inventory, filters schedule-invalid candidates, and creates one proposal per valid option. Participant updates remain domain-extensible without participant-specific UI.
 
 Rules:
 
@@ -1219,6 +1226,11 @@ Rules:
 - locked selections cannot be replaced or removed;
 - unlocking requires an explicit `set_selection_lock` operation in the same user-approved proposal before replacement;
 - direct lock/unlock clicks produce a typed single-operation proposal without requiring model interpretation;
+- natural-language constraint changes resolve to exactly one typed `upsert_constraint` or `remove_constraint` intent;
+- code assigns the canonical global constraint ID for an upsert and accepts removal only for an existing constraint ID;
+- constraint operations always receive a derived preview and explicit approval; they never mutate the committed request directly;
+- a proposed hard constraint that invalidates the assembled trip returns `ConstraintConflict`, with a code-validated softer target when one remains valid and a keep-current action in every case;
+- approving a constraint proposal synchronizes the editable Trip Brief from the newly committed canonical `TripRequest`;
 - ambiguous targets produce `SelectionClarification`.
 
 Modification workflow:
@@ -1366,10 +1378,16 @@ Inventory endpoints are declared in section 8. The P0 agent endpoints are:
 
 ```text
 POST /api/agent/discover
+POST /api/agent/intake
 POST /api/agent/plan
 POST /api/agent/modify
 POST /api/agent/explain
+GET /api/health/inventory
 ```
+
+`GET /api/health/inventory` performs one minimal `inventory_meta` read and is never cached. The client calls it once when the workspace loads so a suspended Neon compute begins waking before the user searches or plans. The header shows the real readiness result and exposes manual retry when unavailable.
+
+The runtime read-only database client retries transient network failures and HTTP `408`, `425`, `429`, `500`, `502`, `503`, and `504` responses at most three times with short bounded backoff. It never retries query-validation, authentication, permission, or other permanent `4xx` failures. The retry transport is installed only by the runtime database factory; admin migration and seed writes do not inherit replay behavior.
 
 ```ts
 export interface AgentApiRequest {
@@ -1534,6 +1552,8 @@ Integration and contract tests use a dedicated Neon branch seeded with the same 
 ## Trip and proposals
 
 - itinerary and budget recompute from selections;
+- initial plans meet pace-based distinct activity-day coverage, while approved later changes may intentionally preserve open time;
+- days without selected activities contain an explicit derived `free_time` event;
 - five inclusive trip days produce four accommodation nights;
 - multi-stop stays cover every night without overlap;
 - multi-stop plans use the same location-graph, tool, assembly, and validation code for every market; destination names never select a route implementation;
@@ -1544,6 +1564,7 @@ Integration and contract tests use a dedicated Neon branch seeded with the same 
 - scoped stay change preserves travel and unrelated activities;
 - locked replacement without explicit unlock is rejected;
 - direct lock click produces a typed operation;
+- adding an activity from any itinerary day creates a proposal and preserves the base trip until approval;
 - stale proposal is rejected;
 - proposal UI equals its derived preview;
 - apply increments version exactly once.
@@ -1556,11 +1577,13 @@ Integration and contract tests use a dedicated Neon branch seeded with the same 
 4. scoped second-stay replacement preserving flights and first stay;
 5. impossible budget with locked selections and grounded compromises;
 6. a separate seeded market completing the same base flow without code changes.
+7. add a second schedule-valid activity to either an occupied or open itinerary day through comparison and proposal approval.
 
 ## UI and failure states
 
 - loading reflects real work or one honest pending state;
 - database/API failure preserves current state and offers retry;
+- a suspended database is warmed on page load, transient runtime reads use a bounded retry budget, and the UI reports actual inventory readiness;
 - no-result copy identifies the correct cause;
 - invalid semantic emphasis never renders arbitrary content;
 - all selection/lock/proposal actions are keyboard accessible;

@@ -140,6 +140,22 @@ function validateRecommendation(
   return recommendation;
 }
 
+function deterministicRecommendation(discovery: DestinationDiscoveryResult): DestinationRecommendation {
+  const candidates = [...discovery.observation.candidates]
+    .sort((left, right) => {
+      const price = (candidate: typeof left) => Number(candidate.facts.find((fact) => fact.dimension === "price_floor")?.value ?? Number.POSITIVE_INFINITY);
+      return price(left) - price(right) || left.candidateId.localeCompare(right.candidateId, "en");
+    })
+    .slice(0, 4);
+  const dimensions = discovery.factBundle.allowedComparisonDimensions.slice(0, 2) as DestinationRecommendation["comparisonDimensions"];
+  return destinationRecommendationSchema.parse({
+    candidateMarketIds: candidates.map((candidate) => candidate.candidateId),
+    recommendedMarketId: candidates[0]!.candidateId,
+    supportingFactIds: candidates.flatMap((candidate) => candidate.facts.slice(0, 2).map((fact) => fact.id)).slice(0, 8),
+    comparisonDimensions: dimensions.length > 0 ? dimensions : ["price"],
+  });
+}
+
 export async function runDestinationDiscovery(
   rawRequest: unknown,
   dependencies: DestinationDiscoveryDependencies,
@@ -184,22 +200,20 @@ export async function runDestinationDiscovery(
     };
   }
 
-  let rawRecommendation: DestinationRecommendation;
+  let recommendation: DestinationRecommendation;
   try {
-    rawRecommendation = await dependencies.model.recommendDestinations({
+    const rawRecommendation = await dependencies.model.recommendDestinations({
       request,
       candidates: discovery.observation.candidates,
       allowedComparisonDimensions: discovery.factBundle.allowedComparisonDimensions,
     });
+    recommendation = validateRecommendation(rawRecommendation, discovery);
   } catch {
-    throw new DestinationDiscoveryError(
-      "MODEL_FAILURE",
-      "The planner could not compare the grounded destinations",
-      502,
-      true,
-    );
+    // Candidate validity is deterministic. If the model is unavailable or
+    // returns an ungrounded ranking, continue with a reproducible price-first
+    // recommendation rather than blocking destination discovery.
+    recommendation = deterministicRecommendation(discovery);
   }
-  const recommendation = validateRecommendation(rawRecommendation, discovery);
   const profiles = new Map(discovery.profiles.map((profile) => [profile.id, profile]));
 
   return {

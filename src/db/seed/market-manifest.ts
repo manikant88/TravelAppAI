@@ -1,6 +1,7 @@
 import type { InventorySeed } from "@/db/seed/data";
+import { addMinutesInTimezone, localDateTimeWithOffset } from "@/domain/dates";
 
-const supportedFrom = "2026-09-01";
+const supportedFrom = "2026-08-28";
 const supportedUntil = "2027-03-31";
 const everyDay = [0, 1, 2, 3, 4, 5, 6];
 const delhiOffsetMinutes = 330;
@@ -46,6 +47,7 @@ export interface MarketDefinition {
   region: MarketRegion;
   displayOrder: number;
   tags: string[];
+  aliases?: string[];
   airport?: AirportDefinition;
   stops?: StopDefinition[];
   flightDurationMinutes: number;
@@ -59,6 +61,26 @@ const wholeWindow = (offsetMinutes: number): OffsetPeriod[] => [
 ];
 
 export const marketManifest: MarketDefinition[] = [
+  {
+    id: "city:mumbai", name: "Mumbai", locationType: "city", countryId: "country:in", countryName: "India", countryCode: "IN", timezone: "Asia/Kolkata", offsetPeriods: wholeWindow(330), latitudeE6: 19_076_000, longitudeE6: 72_877_700, region: "india", displayOrder: 21, tags: ["urban", "food", "nightlife", "coast", "origin_hub"], aliases: ["Bombay"],
+    airport: { id: "airport:bom", name: "Chhatrapati Shivaji Maharaj International Airport", code: "BOM", latitudeE6: 19_089_600, longitudeE6: 72_865_600 }, flightDurationMinutes: 135, transportPrice: 7_800, stayPrice: 7_200, activityPrice: 1_400,
+  },
+  {
+    id: "city:chennai", name: "Chennai", locationType: "city", countryId: "country:in", countryName: "India", countryCode: "IN", timezone: "Asia/Kolkata", offsetPeriods: wholeWindow(330), latitudeE6: 13_082_700, longitudeE6: 80_270_700, region: "india", displayOrder: 22, tags: ["coast", "food", "heritage", "family", "origin_hub"], aliases: ["Madras"],
+    airport: { id: "airport:maa", name: "Chennai International Airport", code: "MAA", latitudeE6: 12_994_100, longitudeE6: 80_170_900 }, flightDurationMinutes: 170, transportPrice: 8_400, stayPrice: 6_200, activityPrice: 1_100,
+  },
+  {
+    id: "city:bengaluru", name: "Bengaluru", locationType: "city", countryId: "country:in", countryName: "India", countryCode: "IN", timezone: "Asia/Kolkata", offsetPeriods: wholeWindow(330), latitudeE6: 12_971_600, longitudeE6: 77_594_600, region: "india", displayOrder: 23, tags: ["urban", "food", "technology", "nightlife", "origin_hub"], aliases: ["Bangalore"],
+    airport: { id: "airport:blr", name: "Kempegowda International Airport", code: "BLR", latitudeE6: 13_198_600, longitudeE6: 77_706_600 }, flightDurationMinutes: 170, transportPrice: 8_300, stayPrice: 6_800, activityPrice: 1_300,
+  },
+  {
+    id: "city:hyderabad", name: "Hyderabad", locationType: "city", countryId: "country:in", countryName: "India", countryCode: "IN", timezone: "Asia/Kolkata", offsetPeriods: wholeWindow(330), latitudeE6: 17_385_000, longitudeE6: 78_486_700, region: "india", displayOrder: 24, tags: ["food", "heritage", "urban", "family", "origin_hub"],
+    airport: { id: "airport:hyd", name: "Rajiv Gandhi International Airport", code: "HYD", latitudeE6: 17_240_300, longitudeE6: 78_429_400 }, flightDurationMinutes: 135, transportPrice: 7_600, stayPrice: 6_100, activityPrice: 1_150,
+  },
+  {
+    id: "city:kolkata", name: "Kolkata", locationType: "city", countryId: "country:in", countryName: "India", countryCode: "IN", timezone: "Asia/Kolkata", offsetPeriods: wholeWindow(330), latitudeE6: 22_572_600, longitudeE6: 88_363_900, region: "india", displayOrder: 25, tags: ["food", "arts", "heritage", "culture", "origin_hub"],
+    airport: { id: "airport:ccu", name: "Netaji Subhas Chandra Bose International Airport", code: "CCU", latitudeE6: 22_654_700, longitudeE6: 88_446_700 }, flightDurationMinutes: 130, transportPrice: 7_500, stayPrice: 5_900, activityPrice: 1_100,
+  },
   {
     id: "city:goa", name: "Goa", locationType: "city", countryId: "country:in", countryName: "India", countryCode: "IN", timezone: "Asia/Kolkata", offsetPeriods: wholeWindow(330), latitudeE6: 15_299_300, longitudeE6: 74_124_000, region: "india", displayOrder: 1, tags: ["beaches", "food", "nightlife", "relaxed"],
     airport: { id: "airport:gox", name: "Manohar International Airport", code: "GOX", latitudeE6: 15_744_300, longitudeE6: 73_860_600 }, flightDurationMinutes: 155, transportPrice: 7_200, stayPrice: 5_800, activityPrice: 1_100,
@@ -142,19 +164,6 @@ export const marketManifest: MarketDefinition[] = [
 
 type GeneratedInventory = Omit<InventorySeed, "meta">;
 
-const supplementalOriginLocations: InventorySeed["locations"] = [
-  { id: "city:mumbai", type: "city", name: "Mumbai", countryCode: "IN", parentId: "country:in", timezone: "Asia/Kolkata", latitudeE6: 19_076_000, longitudeE6: 72_877_700, aliases: ["Bombay"], tags: ["origin_hub"] },
-  { id: "airport:bom", type: "airport", name: "Chhatrapati Shivaji Maharaj International Airport", countryCode: "IN", parentId: "city:mumbai", timezone: "Asia/Kolkata", airportCode: "BOM", aliases: ["Mumbai Airport"], tags: ["origin_hub"] },
-  { id: "city:chennai", type: "city", name: "Chennai", countryCode: "IN", parentId: "country:in", timezone: "Asia/Kolkata", latitudeE6: 13_082_700, longitudeE6: 80_270_700, aliases: ["Madras"], tags: ["origin_hub"] },
-  { id: "airport:maa", type: "airport", name: "Chennai International Airport", countryCode: "IN", parentId: "city:chennai", timezone: "Asia/Kolkata", airportCode: "MAA", aliases: ["Chennai Airport"], tags: ["origin_hub"] },
-  { id: "city:bengaluru", type: "city", name: "Bengaluru", countryCode: "IN", parentId: "country:in", timezone: "Asia/Kolkata", latitudeE6: 12_971_600, longitudeE6: 77_594_600, aliases: ["Bangalore"], tags: ["origin_hub"] },
-  { id: "airport:blr", type: "airport", name: "Kempegowda International Airport", countryCode: "IN", parentId: "city:bengaluru", timezone: "Asia/Kolkata", airportCode: "BLR", aliases: ["Bengaluru Airport"], tags: ["origin_hub"] },
-  { id: "city:hyderabad", type: "city", name: "Hyderabad", countryCode: "IN", parentId: "country:in", timezone: "Asia/Kolkata", latitudeE6: 17_385_000, longitudeE6: 78_486_700, aliases: ["Hyderabad"], tags: ["origin_hub"] },
-  { id: "airport:hyd", type: "airport", name: "Rajiv Gandhi International Airport", countryCode: "IN", parentId: "city:hyderabad", timezone: "Asia/Kolkata", airportCode: "HYD", aliases: ["Hyderabad Airport"], tags: ["origin_hub"] },
-  { id: "city:kolkata", type: "city", name: "Kolkata", countryCode: "IN", parentId: "country:in", timezone: "Asia/Kolkata", latitudeE6: 22_572_600, longitudeE6: 88_363_900, aliases: ["Calcutta"], tags: ["origin_hub"] },
-  { id: "airport:ccu", type: "airport", name: "Netaji Subhas Chandra Bose International Airport", countryCode: "IN", parentId: "city:kolkata", timezone: "Asia/Kolkata", airportCode: "CCU", aliases: ["Kolkata Airport"], tags: ["origin_hub"] },
-];
-
 function slug(id: string) {
   return id.split(":")[1];
 }
@@ -166,20 +175,63 @@ function localArrival(departureMinutes: number, durationMinutes: number, fromOff
   return { arrivalLocalTime: `${Math.floor(normalized / 60).toString().padStart(2, "0")}:${(normalized % 60).toString().padStart(2, "0")}:00`, arrivalDayOffset };
 }
 
+function zonedArrival(date: string, departureMinutes: number, durationMinutes: number, fromTimezone: string, toTimezone: string) {
+  const departureTime = `${Math.floor(departureMinutes / 60).toString().padStart(2, "0")}:${(departureMinutes % 60).toString().padStart(2, "0")}:00`;
+  const departureAt = localDateTimeWithOffset(date, departureTime, fromTimezone);
+  const arrivalAt = addMinutesInTimezone(departureAt, durationMinutes, toTimezone);
+  const arrivalDate = arrivalAt.slice(0, 10);
+  return {
+    departureTime,
+    arrivalLocalTime: arrivalAt.slice(11, 19),
+    arrivalDayOffset: Math.round((parseDate(arrivalDate) - parseDate(date)) / 86_400_000),
+  };
+}
+
+function parseDate(date: string): number {
+  return Date.parse(`${date}T00:00:00.000Z`);
+}
+
+function formatDate(date: number): string {
+  return new Date(date).toISOString().slice(0, 10);
+}
+
+function intersectPeriods(left: OffsetPeriod, right: OffsetPeriod): OffsetPeriod | undefined {
+  const from = Math.max(parseDate(left.from), parseDate(right.from));
+  const until = Math.min(parseDate(left.until), parseDate(right.until));
+  if (from > until) return undefined;
+  return {
+    from: formatDate(from),
+    until: formatDate(until),
+    offsetMinutes: right.offsetMinutes,
+    outboundOffsetMinutes: right.outboundOffsetMinutes,
+    returnOffsetMinutes: right.returnOffsetMinutes,
+  };
+}
+
+function distanceKm(left: { latitudeE6: number; longitudeE6: number }, right: { latitudeE6: number; longitudeE6: number }): number {
+  const earthKm = 6_371;
+  const lat1 = left.latitudeE6 / 1_000_000 * Math.PI / 180;
+  const lat2 = right.latitudeE6 / 1_000_000 * Math.PI / 180;
+  const deltaLat = lat2 - lat1;
+  const deltaLon = (right.longitudeE6 - left.longitudeE6) / 1_000_000 * Math.PI / 180;
+  const a = Math.sin(deltaLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLon / 2) ** 2;
+  return earthKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 function emptyInventory(): GeneratedInventory {
-  return { locations: [], markets: [], transportServices: [], transportSegments: [], properties: [], roomOffers: [], activities: [], activitySessions: [], transfers: [] };
+  return { imageAssets: [], locations: [], markets: [], transportServices: [], transportSegments: [], properties: [], roomOffers: [], activities: [], activitySessions: [], transfers: [] };
 }
 
 function generateMarket(definition: MarketDefinition): GeneratedInventory {
   const seed = emptyInventory();
   const marketSlug = slug(definition.id);
   if (definition.countryId !== "country:in") seed.locations.push({ id: definition.countryId, type: "country", name: definition.countryName, countryCode: definition.countryCode, timezone: definition.timezone, aliases: [definition.countryName], tags: [] });
-  seed.locations.push({ id: definition.id, type: definition.locationType, name: definition.name, countryCode: definition.countryCode, parentId: definition.countryId, timezone: definition.timezone, latitudeE6: definition.latitudeE6, longitudeE6: definition.longitudeE6, aliases: [definition.name], tags: definition.tags, imageAssetKey: `market-${marketSlug}` });
+  seed.locations.push({ id: definition.id, type: definition.locationType, name: definition.name, countryCode: definition.countryCode, parentId: definition.countryId, timezone: definition.timezone, latitudeE6: definition.latitudeE6, longitudeE6: definition.longitudeE6, aliases: [...new Set([definition.name, ...(definition.aliases ?? [])])], tags: [...new Set([...definition.tags, "origin_hub"])], imageAssetKey: `market-${marketSlug}` });
   seed.markets.push({ locationId: definition.id, region: definition.region, displayOrder: definition.displayOrder });
 
   const stops: StopDefinition[] = definition.stops ?? [{ id: definition.id, name: definition.name, latitudeE6: definition.latitudeE6, longitudeE6: definition.longitudeE6, tags: definition.tags, airport: definition.airport! }];
   if (definition.stops) for (const stop of stops) seed.locations.push({ id: stop.id, type: "city", name: stop.name, countryCode: definition.countryCode, parentId: definition.id, timezone: definition.timezone, latitudeE6: stop.latitudeE6, longitudeE6: stop.longitudeE6, aliases: [stop.name], tags: stop.tags });
-  for (const stop of stops) seed.locations.push({ id: stop.airport.id, type: "airport", name: stop.airport.name, countryCode: definition.countryCode, parentId: stop.id, timezone: definition.timezone, latitudeE6: stop.airport.latitudeE6, longitudeE6: stop.airport.longitudeE6, airportCode: stop.airport.code, aliases: [stop.airport.code, `${stop.name} Airport`].filter((alias): alias is string => Boolean(alias)), tags: ["arrival_hub"] });
+  for (const stop of stops) seed.locations.push({ id: stop.airport.id, type: "airport", name: stop.airport.name, countryCode: definition.countryCode, parentId: stop.id, timezone: definition.timezone, latitudeE6: stop.airport.latitudeE6, longitudeE6: stop.airport.longitudeE6, airportCode: stop.airport.code, aliases: [stop.airport.code, `${stop.name} Airport`].filter((alias): alias is string => Boolean(alias)), tags: ["arrival_hub", "origin_hub"] });
 
   const arrivalAirport = stops[0].airport;
   const departureAirport = stops.at(-1)!.airport;
@@ -247,11 +299,96 @@ function generateMarket(definition: MarketDefinition): GeneratedInventory {
 
 function merge(seeds: GeneratedInventory[]): GeneratedInventory {
   const merged = emptyInventory();
-  merged.locations.push(...supplementalOriginLocations);
   for (const seed of seeds) {
-    merged.locations.push(...seed.locations); merged.markets.push(...seed.markets); merged.transportServices.push(...seed.transportServices); merged.transportSegments.push(...seed.transportSegments); merged.properties.push(...seed.properties); merged.roomOffers.push(...seed.roomOffers); merged.activities.push(...seed.activities); merged.activitySessions.push(...seed.activitySessions); merged.transfers.push(...seed.transfers);
+    merged.imageAssets.push(...seed.imageAssets); merged.locations.push(...seed.locations); merged.markets.push(...seed.markets); merged.transportServices.push(...seed.transportServices); merged.transportSegments.push(...seed.transportSegments); merged.properties.push(...seed.properties); merged.roomOffers.push(...seed.roomOffers); merged.activities.push(...seed.activities); merged.activitySessions.push(...seed.activitySessions); merged.transfers.push(...seed.transfers);
   }
   return merged;
 }
 
-export const generatedMarketInventory = merge(marketManifest.map(generateMarket));
+function routeAirport(definition: MarketDefinition, direction: "arrival" | "departure"): AirportDefinition {
+  if (definition.stops?.length) {
+    return direction === "arrival" ? definition.stops[0].airport : definition.stops.at(-1)!.airport;
+  }
+  return definition.airport!;
+}
+
+function addCrossMarketTransport(seed: GeneratedInventory, definitions: MarketDefinition[]): GeneratedInventory {
+  const existingRoutes = new Set(
+    seed.transportSegments.map((segment) => `${segment.fromLocationId}->${segment.toLocationId}`),
+  );
+
+  for (const fromMarket of definitions) {
+    if (fromMarket.region !== "india") continue;
+    const fromAirport = routeAirport(fromMarket, "departure");
+    for (const toMarket of definitions) {
+      if (fromMarket.id === toMarket.id) continue;
+      if (toMarket.region !== "india") continue;
+      const toAirport = routeAirport(toMarket, "arrival");
+      const routeKey = `${fromAirport.id}->${toAirport.id}`;
+      if (existingRoutes.has(routeKey)) continue;
+      existingRoutes.add(routeKey);
+
+      const distance = distanceKm(fromAirport, toAirport);
+      const durationMinutes = Math.max(55, Math.round(distance / 780 * 60 + 35));
+      const basePrice = Math.max(
+        2_400,
+        Math.round((fromMarket.transportPrice + toMarket.transportPrice) / 2 * Math.max(0.45, Math.min(1.45, distance / 1_600))),
+      );
+      const periods = fromMarket.offsetPeriods.flatMap((fromPeriod) =>
+        toMarket.offsetPeriods.flatMap((toPeriod) => {
+          if (fromPeriod.outboundOffsetMinutes || fromPeriod.returnOffsetMinutes || toPeriod.outboundOffsetMinutes || toPeriod.returnOffsetMinutes) {
+            return [];
+          }
+          const overlap = intersectPeriods(fromPeriod, toPeriod);
+          return overlap ? [{ fromPeriod, toPeriod, overlap }] : [];
+        }),
+      );
+
+      for (const [periodIndex, { fromPeriod, toPeriod, overlap }] of periods.entries()) {
+        const periodKey = periods.length === 1 ? "" : `-p${periodIndex + 1}`;
+        [
+          { key: "morning", departureMinutes: 540, multiplier: 1, operator: "IndiGo Connect" },
+          { key: "evening", departureMinutes: 1_045, multiplier: 0.92, operator: "Air India Connect" },
+        ].forEach((variant, variantIndex) => {
+          const serviceId = `transport:${slug(fromAirport.id)}-${slug(toAirport.id)}-${variant.key}${periodKey}`;
+          const arrival = zonedArrival(
+            overlap.from,
+            variant.departureMinutes,
+            durationMinutes,
+            fromMarket.timezone,
+            toMarket.timezone,
+          );
+          seed.transportServices.push({
+            id: serviceId,
+            mode: "flight",
+            operator: variant.operator,
+            operatingWeekdays: everyDay,
+            validFrom: overlap.from,
+            validUntil: overlap.until,
+            priceAmount: Math.round(basePrice * variant.multiplier),
+            currency: "INR",
+            priceUnit: "per_traveller",
+          });
+          seed.transportSegments.push({
+            id: `segment:${slug(fromAirport.id)}-${slug(toAirport.id)}-${variant.key}${periodKey}-0`,
+            serviceId,
+            segmentIndex: 0,
+            fromLocationId: fromAirport.id,
+            toLocationId: toAirport.id,
+            departureLocalTime: arrival.departureTime,
+            arrivalLocalTime: arrival.arrivalLocalTime,
+            arrivalDayOffset: arrival.arrivalDayOffset,
+            durationMinutes,
+            operatorNumber: `${variantIndex % 2 === 0 ? "6E" : "AI"} ${fromMarket.displayOrder}${toMarket.displayOrder}${periodIndex}`,
+          });
+        });
+      }
+    }
+  }
+  return seed;
+}
+
+export const generatedMarketInventory = addCrossMarketTransport(
+  merge(marketManifest.map(generateMarket)),
+  marketManifest,
+);

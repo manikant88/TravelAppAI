@@ -5,6 +5,7 @@ import type { TripProjection } from "@/domain/trip";
 import type { ModificationResult } from "@/agent/modification-contracts";
 import type { ProposalPreview, TripProposal } from "@/domain/proposals";
 import type { ExplanationResult } from "@/agent/explanation-contracts";
+import type { NaturalIntakeResponse } from "@/agent/natural-intake-contracts";
 
 export interface ConversationEntry {
   id: string;
@@ -36,22 +37,28 @@ export interface WorkspaceState {
   latestOutcome?: Exclude<SpecifiedPlanApiResult, { type: "trip_ready" }>;
   destinationDiscovery?: DestinationDiscoveryApiResult;
   latestExplanation?: ExplanationResult;
+  latestIntake?: NaturalIntakeResponse;
   conversation: ConversationEntry[];
-  asyncStatus: "idle" | "discovering" | "planning" | "modifying" | "explaining" | "applying" | "error";
+  asyncStatus: "idle" | "interpreting" | "discovering" | "planning" | "modifying" | "explaining" | "applying" | "error";
   error?: WorkspaceError;
   optionalClarificationUsed: boolean;
 }
 
 export type WorkspaceAction =
   | { type: "replace_draft"; request: TripRequest }
-  | { type: "discovery_started"; entry: ConversationEntry }
+  | { type: "conversation_entry_added"; entry: ConversationEntry }
+  | { type: "conversation_started"; entry: ConversationEntry }
+  | { type: "intake_started"; entry: ConversationEntry }
+  | { type: "intake_received"; result: NaturalIntakeResponse; entry: ConversationEntry }
+  | { type: "intake_failed"; error: WorkspaceError; entry: ConversationEntry }
+  | { type: "discovery_started"; entry?: ConversationEntry }
   | {
       type: "discovery_received";
       result: DestinationDiscoveryApiResult;
       entry: ConversationEntry;
     }
   | { type: "destination_selected"; request: TripRequest }
-  | { type: "planning_started"; entry: ConversationEntry }
+  | { type: "planning_started"; entry?: ConversationEntry }
   | {
       type: "planning_succeeded";
       result: Extract<SpecifiedPlanApiResult, { type: "trip_ready" }>;
@@ -80,11 +87,8 @@ export type WorkspaceAction =
 
 export const initialWorkspaceState: WorkspaceState = {
   draftRequest: {
-    travellers: [
-      { id: "traveller:1", type: "adult" },
-      { id: "traveller:2", type: "adult" },
-    ],
-    preferences: { pace: "balanced", interests: [] },
+    travellers: [],
+    preferences: { interests: [] },
     constraints: [],
   },
   proposals: {},
@@ -92,7 +96,7 @@ export const initialWorkspaceState: WorkspaceState = {
     {
       id: "message:welcome",
       role: "assistant",
-      text: "Tell me the trip essentials. I’ll search grounded inventory, assemble a connected plan, and validate it before anything becomes your trip.",
+      text: "I’d love to help you build a great trip. Tell me where you’re leaving from and where you’d like to go—or ask me to suggest a destination.",
     },
   ],
   asyncStatus: "idle",
@@ -110,6 +114,46 @@ export function workspaceReducer(
         draftRequest: action.request,
         destinationDiscovery: undefined,
       };
+    case "conversation_entry_added":
+      return {
+        ...state,
+        conversation: [...state.conversation, action.entry],
+      };
+    case "conversation_started":
+      return {
+        ...state,
+        asyncStatus: "interpreting",
+        error: undefined,
+        latestExplanation: undefined,
+        conversation: [...state.conversation, action.entry],
+      };
+    case "intake_started":
+      return {
+        ...state,
+        asyncStatus: "interpreting",
+        error: undefined,
+        latestOutcome: undefined,
+        destinationDiscovery: undefined,
+        latestIntake: undefined,
+        conversation: [...state.conversation, action.entry],
+      };
+    case "intake_received":
+      return {
+        ...state,
+        draftRequest: action.result.request,
+        latestIntake: action.result,
+        asyncStatus: "idle",
+        error: undefined,
+        destinationDiscovery: undefined,
+        conversation: [...state.conversation, action.entry],
+      };
+    case "intake_failed":
+      return {
+        ...state,
+        asyncStatus: "error",
+        error: action.error,
+        conversation: [...state.conversation, action.entry],
+      };
     case "discovery_started":
       return {
         ...state,
@@ -120,7 +164,7 @@ export function workspaceReducer(
         modificationConflict: undefined,
         modificationAlternatives: undefined,
         latestExplanation: undefined,
-        conversation: [...state.conversation, action.entry],
+        conversation: action.entry ? [...state.conversation, action.entry] : state.conversation,
       };
     case "discovery_received":
       return {
@@ -146,7 +190,7 @@ export function workspaceReducer(
         modificationConflict: undefined,
         modificationAlternatives: undefined,
         latestExplanation: undefined,
-        conversation: [...state.conversation, action.entry],
+        conversation: action.entry ? [...state.conversation, action.entry] : state.conversation,
       };
     case "planning_succeeded":
       return {
@@ -298,6 +342,7 @@ export function workspaceReducer(
     case "proposal_applied":
       return {
         ...state,
+        draftRequest: action.trip.request,
         committedTrip: action.trip,
         projection: action.projection,
         proposals: {},
@@ -314,6 +359,7 @@ export function workspaceReducer(
       delete proposals[action.proposalId];
       return {
         ...state,
+        draftRequest: state.committedTrip?.request ?? state.draftRequest,
         proposals,
         activeProposalId:
           state.activeProposalId === action.proposalId

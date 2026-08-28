@@ -69,6 +69,7 @@ export type ValidationCode =
   | "STAY_CONFLICT"
   | "TRANSFER_CONFLICT"
   | "SCHEDULE_CONFLICT"
+  | "ITINERARY_INCOMPLETE"
   | "LOCK_CONFLICT";
 
 export interface ValidationIssue {
@@ -379,7 +380,7 @@ function routeDateForTransfer(offer: TransferOffer, trip: TripState, graph: Loca
   return undefined;
 }
 
-function dayLocation(date: ISODate, trip: TripState): string {
+export function routeLocationForDate(date: ISODate, trip: TripState): string {
   const stop = trip.route.stops.find((candidate) => candidate.checkIn <= date && date < candidate.checkOut);
   return stop?.locationId ?? trip.route.stops.at(-1)?.locationId ?? trip.route.marketId;
 }
@@ -392,7 +393,7 @@ export function buildItinerary(
   const dayCount = calendarDayDifference(trip.request.startDate, trip.request.endDate) + 1;
   const days = Array.from({ length: dayCount }, (_, index) => {
     const date = addCalendarDays(trip.request.startDate, index);
-    return { date, dayNumber: index + 1, locationId: dayLocation(date, trip), events: [] } as ItineraryDay;
+    return { date, dayNumber: index + 1, locationId: routeLocationForDate(date, trip), events: [] } as ItineraryDay;
   });
   const byDate = new Map(days.map((day) => [day.date, day]));
   const selections = selectionById(trip);
@@ -448,14 +449,64 @@ export function buildItinerary(
     if (date) byDate.get(date)?.events.push(event);
   });
 
-  days.forEach((day) =>
+  days.forEach((day) => {
+    if (!day.events.some((event) => event.type === "activity")) {
+      day.events.push({
+        id: `event:free-time:${day.date}`,
+        type: "free_time",
+        title: day.events.some((event) => event.type === "travel")
+          ? "Open time around travel"
+          : "Open time to explore at your pace",
+        travellerIds: trip.request.travellers.map((traveller) => traveller.id),
+      });
+    }
     day.events.sort(
       (left, right) =>
         (left.startAt ?? "9999").localeCompare(right.startAt ?? "9999", "en") ||
         left.id.localeCompare(right.id, "en"),
-    ),
-  );
+    );
+  });
   return days;
+}
+
+export function minimumPlannedActivityDays(trip: TripState): number {
+  const interiorDays = Math.max(
+    0,
+    calendarDayDifference(trip.request.startDate, trip.request.endDate) - 1,
+  );
+  if (interiorDays === 0) return 0;
+  const pace = trip.request.preferences.pace ?? "balanced";
+  const target = pace === "relaxed"
+    ? Math.ceil(interiorDays / 3)
+    : pace === "packed"
+      ? interiorDays
+      : Math.ceil(interiorDays / 2);
+  return Math.min(4, target);
+}
+
+function validateItineraryCompleteness(trip: TripState): ValidationIssue[] {
+  // Initial PLAN quality is code-owned; later approved proposals may intentionally add open time.
+  if (trip.version !== 0) return [];
+  const minimum = minimumPlannedActivityDays(trip);
+  if (minimum === 0) return [];
+  const interiorActivityDates = new Set(
+    trip.selectedActivities
+      .map((selection) => selection.date)
+      .filter(
+        (date) => date > trip.request.startDate && date < trip.request.endDate,
+      ),
+  );
+  return interiorActivityDates.size >= minimum
+    ? []
+    : [
+        issue(
+          "ITINERARY_INCOMPLETE",
+          "error",
+          "activity-coverage",
+          `Trip pace requires activities on at least ${minimum} full trip day${minimum === 1 ? "" : "s"}`,
+          trip.selectedActivities.map((selection) => selection.id),
+        ),
+      ];
 }
 
 function validateRoute(trip: TripState, graph: LocationNode[]): ValidationIssue[] {
@@ -684,7 +735,7 @@ function validateSelectionDates(
     const selection = selections.get(selectionId);
     if (selection?.kind === "activity" && isActivityOffer(offer)) {
       const offerDate = offer.startsAt.slice(0, 10);
-      const routeLocation = dayLocation(selection.date, trip);
+      const routeLocation = routeLocationForDate(selection.date, trip);
       if (
         selection.date !== offerDate ||
         selection.date < trip.request.startDate ||
@@ -799,6 +850,7 @@ export async function projectTrip(
     ...validateSelectionDates(trip, hydrated, context.locationGraph),
     ...validateConstraints(trip, hydrated),
     ...validateSchedule(trip, hydrated, context.locationGraph),
+    ...validateItineraryCompleteness(trip),
     ...validateBudget(trip, budget),
   ].sort((left, right) => left.id.localeCompare(right.id, "en"));
   return {

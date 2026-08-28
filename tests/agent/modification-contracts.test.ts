@@ -18,6 +18,45 @@ describe("modification model contracts", () => {
     ).toMatchObject({ targetSelectionId: "selection:stay", unlockTarget: false });
   });
 
+  it("accepts a dated activity addition without inventing a target selection", () => {
+    expect(
+      scopedModificationIntentSchema.parse({
+        action: "add",
+        targetDate: "2026-10-11",
+        preserveSelectionIds: ["selection:stay"],
+        goal: "Add something cultural",
+        unlockTarget: false,
+        preferredThemes: ["culture"],
+      }),
+    ).toMatchObject({ action: "add", targetDate: "2026-10-11" });
+  });
+
+  it("accepts typed constraint upsert and removal intents", () => {
+    expect(
+      scopedModificationIntentSchema.parse({
+        action: "upsert_constraint",
+        constraint: {
+          category: "budget",
+          priority: "hard",
+          targetTotal: null,
+          maxTotal: 75_000,
+        },
+        preserveSelectionIds: [],
+        goal: "Keep the trip under ₹75,000",
+        preferredThemes: [],
+      }),
+    ).toMatchObject({ action: "upsert_constraint", constraint: { category: "budget" } });
+    expect(
+      scopedModificationIntentSchema.parse({
+        action: "remove_constraint",
+        constraintId: "constraint:budget:all",
+        preserveSelectionIds: [],
+        goal: "Remove the budget limit",
+        preferredThemes: [],
+      }),
+    ).toMatchObject({ action: "remove_constraint", constraintId: "constraint:budget:all" });
+  });
+
   it("rejects arbitrary actions and comparison dimensions", () => {
     expect(
       scopedModificationIntentSchema.safeParse({

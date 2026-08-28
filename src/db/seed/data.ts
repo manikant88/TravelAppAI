@@ -2,6 +2,7 @@ import type {
   activities,
   activitySessions,
   destinationMarkets,
+  imageAssets,
   inventoryMeta,
   locations,
   properties,
@@ -11,11 +12,13 @@ import type {
   transportServices,
 } from "@/db/schema";
 import { generatedMarketInventory } from "@/db/seed/market-manifest";
+import { syncedImageAssets } from "@/db/seed/image-assets";
 
 type Insert<T extends { $inferInsert: unknown }> = T["$inferInsert"];
 
 export interface InventorySeed {
   meta: Insert<typeof inventoryMeta>[];
+  imageAssets: Insert<typeof imageAssets>[];
   locations: Insert<typeof locations>[];
   markets: Insert<typeof destinationMarkets>[];
   transportServices: Insert<typeof transportServices>[];
@@ -27,7 +30,7 @@ export interface InventorySeed {
   transfers: Insert<typeof transfers>[];
 }
 
-const supportedFrom = "2026-09-01";
+const supportedFrom = "2026-08-28";
 const supportedUntil = "2027-03-31";
 const everyDay = [0, 1, 2, 3, 4, 5, 6];
 
@@ -35,14 +38,15 @@ export const udaipurSeed: InventorySeed = {
   meta: [
     {
       id: "active",
-      version: "travel-seed-v1",
-      seededAt: "2026-08-26T00:00:00.000Z",
+      version: "travel-seed-v2",
+      seededAt: "2026-08-27T00:00:00.000Z",
       supportedFrom,
       supportedUntil,
       currency: "INR",
       dataProvenance: "synthetic",
     },
   ],
+  imageAssets: [],
   locations: [
     {
       id: "country:in",
@@ -86,7 +90,7 @@ export const udaipurSeed: InventorySeed = {
       latitudeE6: 24_585_400,
       longitudeE6: 73_712_500,
       aliases: ["City of Lakes"],
-      tags: ["heritage", "lakes", "culture", "relaxed", "couples"],
+      tags: ["heritage", "lakes", "culture", "relaxed", "couples", "origin_hub"],
       imageAssetKey: "market-udaipur",
     },
     {
@@ -98,7 +102,7 @@ export const udaipurSeed: InventorySeed = {
       timezone: "Asia/Kolkata",
       airportCode: "UDR",
       aliases: ["Udaipur Airport", "Dabok Airport"],
-      tags: ["arrival_hub"],
+      tags: ["arrival_hub", "origin_hub"],
     },
     {
       id: "neighborhood:udaipur-old-city",
@@ -547,6 +551,7 @@ export const udaipurSeed: InventorySeed = {
 
 export const travelInventorySeed: InventorySeed = {
   meta: udaipurSeed.meta,
+  imageAssets: syncedImageAssets,
   locations: [...udaipurSeed.locations, ...generatedMarketInventory.locations],
   markets: [...udaipurSeed.markets, ...generatedMarketInventory.markets],
   transportServices: [

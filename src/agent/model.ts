@@ -28,6 +28,16 @@ import {
   explanationDraftSchema,
   type ExplanationModel,
 } from "@/agent/explanation-contracts";
+import {
+  naturalTripIntentSchema,
+  type NaturalTripIntent,
+} from "@/agent/natural-intake-contracts";
+import type { NaturalIntakeModel } from "@/agent/natural-intake";
+import { createDeterministicPlannerModel } from "@/agent/deterministic-planner";
+import {
+  conversationIntentSchema,
+  type ConversationRouterModel,
+} from "@/agent/conversation-contracts";
 
 export interface StructuredResponseRequest<T> {
   schema: ZodType<T, ZodTypeDef, unknown>;
@@ -44,6 +54,57 @@ export interface OpenAIPlannerModelOptions {
   model: string;
   apiKey?: string;
   runner?: StructuredResponseRunner;
+  timeoutMs?: number;
+}
+
+const naturalIntakeInstructions = `You are the natural-language intent extraction layer of one bounded travel planner.
+Extract only details the user explicitly states or unambiguously implies. Return null or an empty array for details that are absent; do not copy defaults from the current structured brief into the extraction.
+Return location names or airport codes as text queries. Code resolves them to normalized inventory IDs. Never invent location IDs.
+Use destination kind open only when the user asks for recommendations or does not want to choose a destination. Otherwise return the stated destination as a text query.
+Convert explicitly stated calendar dates and unambiguous relative phrases such as "this weekend" or "upcoming weekend" to YYYY-MM-DD using the supplied current date. When the user supplies a start date and an explicit number of nights, set endDate to startDate plus that many calendar nights. Do not shift a date merely to fit the inventory window. Do not invent dates, durations, or a year when the phrase is genuinely ambiguous.
+Create one traveller group per explicitly stated traveller type. When the user gives a total party size and says it includes a child or senior, preserve the stated total and assign the remainder to adults (for example, "6 people including my 4-year-old" means 5 adults and 1 child). Do not infer children, seniors, mobility needs, or traveller counts that are not stated.
+Classify "must", "only", "under", "no", and equivalent non-negotiable language as hard constraints. Treat ordinary preferences as strong or flexible. Maximum budgets use maxTotal; approximate budgets use targetTotal.
+Interests are soft themes, not inventory facts. Do not invent prices, availability, schedules, recommendations, or explanations. Do not expose hidden reasoning.`;
+
+export function createOpenAINaturalIntakeModel(
+  options: OpenAIPlannerModelOptions,
+): NaturalIntakeModel {
+  const model = options.model.trim();
+  if (!model) throw new Error("OPENAI_MODEL is required");
+  const runner = options.runner ?? createOpenAIRunner({ ...options, model });
+  return {
+    async extractTripIntent(input): Promise<NaturalTripIntent> {
+      return runStructured(runner, {
+        schema: naturalTripIntentSchema,
+        schemaName: "natural_trip_intent",
+        instructions: naturalIntakeInstructions,
+        input: jsonForModel(input),
+      });
+    },
+  };
+}
+
+const conversationRouterInstructions = `You route one user message inside an existing travel-planning conversation.
+Choose modify_trip when the user asks to add, remove, replace, preserve, lock, unlock, constrain, relax, or otherwise change the committed trip.
+Choose explain_trip when the user asks why, how, what, when, where, how much, or requests context about the current committed trip without asking to change it.
+Use only the supplied message and canonical trip. Do not answer the user, plan a trip, invent facts, or mutate state. Return only the schema-constrained intent.`;
+
+export function createOpenAIConversationRouterModel(
+  options: OpenAIPlannerModelOptions,
+): ConversationRouterModel {
+  const model = options.model.trim();
+  if (!model) throw new Error("OPENAI_MODEL is required");
+  const runner = options.runner ?? createOpenAIRunner({ ...options, model });
+  return {
+    classify(input) {
+      return runStructured(runner, {
+        schema: conversationIntentSchema,
+        schemaName: "travel_conversation_intent",
+        instructions: conversationRouterInstructions,
+        input: jsonForModel(input),
+      });
+    },
+  };
 }
 
 const idSchema = z.string().trim().min(1);
@@ -242,21 +303,45 @@ function decisionEvidence(input: PlannerDecisionInput) {
 
 function createOpenAIRunner(options: OpenAIPlannerModelOptions): StructuredResponseRunner {
   const client = new OpenAI({ apiKey: options.apiKey });
+  const timeoutMs = options.timeoutMs ?? Number(process.env.OPENAI_TIMEOUT_MS ?? 15000);
   return {
     async run<T>(request: StructuredResponseRequest<T>) {
-      const response = await client.responses.parse({
-        model: options.model,
-        instructions: request.instructions,
-        input: request.input,
-        text: {
-          format: zodTextFormat(request.schema, request.schemaName),
-        },
-        store: false,
-      });
-      if (response.status !== "completed" || response.output_parsed === null) {
-        throw new Error("OpenAI returned no completed structured output");
+      const startedAt = Date.now();
+      try {
+        const response = await client.responses.parse(
+          {
+            model: options.model,
+            instructions: request.instructions,
+            input: request.input,
+            text: {
+              format: zodTextFormat(request.schema, request.schemaName),
+            },
+            store: false,
+          },
+          { signal: AbortSignal.timeout(timeoutMs) },
+        );
+        if (response.status !== "completed" || response.output_parsed === null) {
+          throw new Error("OpenAI returned no completed structured output");
+        }
+        console.info("Travel planner model call completed", {
+          schema: request.schemaName,
+          model: options.model,
+          durationMs: Date.now() - startedAt,
+        });
+        return response.output_parsed;
+      } catch (error) {
+        const durationMs = Date.now() - startedAt;
+        const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+        console.error("Travel planner model call failed", {
+          schema: request.schemaName,
+          model: options.model,
+          durationMs,
+          timedOut,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        if (timedOut) throw new Error(`OpenAI request timed out after ${timeoutMs}ms`);
+        throw error;
       }
-      return response.output_parsed;
     },
   };
 }
@@ -277,7 +362,8 @@ Choose a route strategy from ordinary location relationships. A single-stop rout
 Use a multi-stop route only when the catalog graph exposes meaningful sibling destination nodes and the trip has enough nights to allocate at least one whole night to every stop. Do not rely on destination-name rules.
 Allocate every trip night exactly once in route order.
 This is an initial plan with no committed selections, so preserveSelectionIds must be an empty array; location or market IDs are never selection IDs.
-The first tool plan must include transport from the origin to the first stop on trip day 1, one exact date-aligned stay search per stop, every adjacent inter-stop transfer in route order, and transport from the final stop back to the origin on the final trip day. Activities are optional but should be scoped to the stop and trip days where they occur.
+The first tool plan must include transport from the origin to the first stop on trip day 1, one exact date-aligned stay search per stop, every adjacent inter-stop transfer in route order, and transport from the final stop back to the origin on the final trip day.
+Search activity evidence for every calendar day at that day's route stop, including arrival and departure days. Select one activity per day whenever a retrieved session fits around deterministic travel and transfer times; never force an overlapping activity. Pace controls activity intensity and duration, not whether an otherwise viable day is left empty.
 Do not invent prices, schedules, availability, candidate IDs, or inventory facts.
 Do not perform arithmetic that belongs to code. Do not include hidden reasoning.`;
 
@@ -287,7 +373,7 @@ Use only candidate IDs, fact IDs, comparison dimensions, locations, themes, and 
 Hard validity, dates, prices, budgets, locks, assembly, and state mutation belong to code.
 You may request a materially different search when evidence is insufficient and the supplied budget permits it.
 When proposing a plan, select a coherent set of observed candidates and ground every choice in that candidate's facts.
-Select exactly one observed candidate for every required outbound transport, stop stay, inter-stop transfer, and return transport search. Select activities only from searches scoped to the proposed route.
+Select exactly one observed candidate for every required outbound transport, stop stay, inter-stop transfer, and return transport search. Select activities only from searches scoped to the proposed route. Cover every trip day with one activity when the evidence contains a schedule-valid candidate; omit a day only when deterministic timing or inventory makes coverage impossible.
 The proposed market, ordered stops, and night allocation must describe a route fully supported by the executed searches; they may differ from the initial hypothesis only when materially different evidence for that route has already been retrieved.
 When structured validation feedback is present, make at most one targeted revision and never override it.
 Do not invent facts or expose hidden reasoning.`;
@@ -300,6 +386,7 @@ export function createOpenAIPlannerModel(
   const runner = options.runner ?? createOpenAIRunner({ ...options, model });
 
   return {
+    deterministicStrategy: true,
     async createPlanningHypothesis(input: {
       request: PlannableTripRequest;
       catalogScope: {
@@ -333,7 +420,11 @@ export function createOpenAIPlannerModel(
 
 const modificationIntentInstructions = `You are the intent and scoping layer of one bounded travel-planner model.
 Interpret the user's requested modification against the supplied canonical trip selections.
-Return exactly one target selection ID. Use replace for changing an inventory choice and remove only when the user asks to remove an activity.
+For replacement or removal, return exactly one target selection ID. Use replace for changing an inventory choice and remove only when the user asks to remove an activity.
+Use add only when the user explicitly requests an activity on a trip date, and return that exact supplied ISO date.
+Use upsert_constraint when the user asks to add or change a budget, travel, stay, activity, or daily-schedule rule. Extract exactly one complete typed constraint for that category and scope, carrying forward still-applicable fields from the existing canonical constraint. Do not assign its canonical ID; code owns constraint identity, replacement, and validation.
+Use remove_constraint only when the user explicitly asks to remove an existing constraint, and return exactly one constraint ID from the canonical trip.
+Classify "must", "only", "under", "no", and equivalent non-negotiable language as hard. Treat ordinary preferences as strong or flexible. A maximum budget uses maxTotal; an approximate budget uses targetTotal.
 List selections the user explicitly asks to preserve. Code will additionally preserve every unrelated selection.
 Set unlockTarget to true only when the user explicitly asks to unlock the target; never infer permission to unlock from a generic request to change it.
 Use only supplied selection IDs and supported themes. preferredThemes may capture relevant supported activity themes from the request.

@@ -546,6 +546,11 @@ function buildStayOffer(
       accessibility: catalog.accessibility,
       tags: catalog.tags,
       imageAssetKey: catalog.imageAssetKey,
+      imageUrl: catalog.imageUrl,
+      imageAltText: catalog.imageAltText,
+      imageCredit: catalog.imageCredit,
+      imageCreditUrl: catalog.imageCreditUrl,
+      imageSourceUrl: catalog.imageSourceUrl,
     },
     roomFacts: {
       roomLabel: catalog.roomLabel,
@@ -828,6 +833,11 @@ function buildActivityOffer(
       childFriendly: session.childFriendly,
       seniorFriendly: session.seniorFriendly,
       imageAssetKey: session.imageAssetKey,
+      imageUrl: session.imageUrl,
+      imageAltText: session.imageAltText,
+      imageCredit: session.imageCredit,
+      imageCreditUrl: session.imageCreditUrl,
+      imageSourceUrl: session.imageSourceUrl,
     },
     price: {
       amount: session.priceAmount,

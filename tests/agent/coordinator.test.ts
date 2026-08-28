@@ -14,6 +14,7 @@ import type { InventoryToolServices } from "@/agent/executor";
 import type { PlannableTripRequest } from "@/domain/model";
 import type { ResolvedOffer } from "@/domain/trip";
 import type {
+  ActivityOffer,
   SearchResponse,
   StayOffer,
   TransportOffer,
@@ -97,10 +98,30 @@ const stay: StayOffer = {
   price: { amount: 3_000, currency: "INR", unit: "per_room_per_night" },
 };
 
+const activity: ActivityOffer = {
+  id: "offer:activity:udaipur-heritage",
+  activityId: "activity:udaipur-heritage",
+  sessionId: "session:udaipur-heritage",
+  locationId: "city:udaipur",
+  startsAt: "2026-10-11T11:00:00+05:30",
+  endsAt: "2026-10-11T13:00:00+05:30",
+  capacity: 20,
+  activityFacts: {
+    name: "Udaipur heritage story",
+    tags: ["heritage"],
+    mobility: "low",
+    childFriendly: true,
+    seniorFriendly: true,
+    imageAssetKey: "udaipur-heritage",
+  },
+  price: { amount: 500, currency: "INR", unit: "per_participant" },
+};
+
 const offers = new Map<string, ResolvedOffer>([
   [outbound.id, outbound],
   [returning.id, returning],
   [stay.id, stay],
+  [activity.id, activity],
 ]);
 
 const request: PlannableTripRequest = {
@@ -139,6 +160,14 @@ const stayCall = {
   locationId: "city:udaipur",
   checkInDayNumber: 1,
   nights: 2,
+};
+const activityCall = {
+  id: "call:activity",
+  tool: "search_activities" as const,
+  purpose: "Plan the full interior day",
+  locationId: "city:udaipur",
+  tripDayNumbers: [2],
+  themes: ["heritage"],
 };
 
 function toolPlan(calls: ToolPlan["calls"]): ToolPlan {
@@ -191,7 +220,7 @@ function services(): InventoryToolServices {
         : response("query:return", [returning]),
     ),
     searchStays: vi.fn(async () => response("query:stay", [stay])),
-    searchActivities: vi.fn(async () => response("query:activities", [])),
+    searchActivities: vi.fn(async () => response("query:activities", [activity])),
     searchTransfers: vi.fn(async () => response("query:transfers", [])),
   };
 }
@@ -234,7 +263,7 @@ function coordinatorInput(
 describe("bounded specified-destination PLAN coordinator", () => {
   it("completes after one evidence round and one valid assembly", async () => {
     const planner = model(
-      hypothesis([outboundCall, returnCall, stayCall]),
+      hypothesis([outboundCall, returnCall, stayCall, activityCall]),
       (input) => proposal(input),
     );
     const result = await coordinateSpecifiedDestinationPlan(coordinatorInput(planner));
@@ -242,18 +271,18 @@ describe("bounded specified-destination PLAN coordinator", () => {
     expect(result.status).toBe("completed");
     if (result.status !== "completed") return;
     expect(result.projection.validation.valid).toBe(true);
-    expect(result.projection.budget.total).toEqual({ amount: 25_000, currency: "INR" });
+    expect(result.projection.budget.total).toEqual({ amount: 26_000, currency: "INR" });
     expect(result.trace.finalBudget).toMatchObject({
       evidenceRoundsUsed: 1,
       repairRoundsUsed: 0,
-      searchCallsUsed: 3,
+      searchCallsUsed: 4,
     });
     expect(result.trace.validationAttempts).toHaveLength(1);
   });
 
   it("allows one materially different second evidence round", async () => {
     const planner = model(
-      hypothesis([outboundCall, stayCall]),
+      hypothesis([outboundCall, stayCall, activityCall]),
       (input) => {
         if (input.phase === "after_evidence_round_1") {
           return { type: "search_more", toolPlan: toolPlan([returnCall]) };
@@ -267,7 +296,7 @@ describe("bounded specified-destination PLAN coordinator", () => {
     expect(result.trace.finalBudget).toMatchObject({
       evidenceRoundsUsed: 2,
       repairRoundsUsed: 0,
-      searchCallsUsed: 3,
+      searchCallsUsed: 4,
     });
     expect(result.trace.actions.map((action) => action.type)).toEqual([
       "search_more",
@@ -278,7 +307,7 @@ describe("bounded specified-destination PLAN coordinator", () => {
   it("uses structured validation feedback and at most one repair search", async () => {
     const phases: string[] = [];
     const planner = model(
-      hypothesis([outboundCall, stayCall]),
+      hypothesis([outboundCall, stayCall, activityCall]),
       (input) => {
         phases.push(input.phase);
         if (input.phase === "after_evidence_round_1") return proposal(input);
@@ -305,7 +334,7 @@ describe("bounded specified-destination PLAN coordinator", () => {
     expect(result.trace.finalBudget).toMatchObject({
       evidenceRoundsUsed: 1,
       repairRoundsUsed: 1,
-      searchCallsUsed: 3,
+      searchCallsUsed: 4,
     });
     expect(result.trace.validationAttempts).toHaveLength(2);
     expect(result.trace.validationAttempts[0].valid).toBe(false);
@@ -314,7 +343,7 @@ describe("bounded specified-destination PLAN coordinator", () => {
 
   it("stops after a second invalid assembly without another model loop", async () => {
     const planner = model(
-      hypothesis([outboundCall, stayCall]),
+      hypothesis([outboundCall, stayCall, activityCall]),
       (input) => proposal(input),
     );
     const result = await coordinateSpecifiedDestinationPlan(coordinatorInput(planner));
@@ -327,7 +356,7 @@ describe("bounded specified-destination PLAN coordinator", () => {
 
   it("rejects repeated searches and supports a terminal optional clarification", async () => {
     const repeated = model(
-      hypothesis([outboundCall, stayCall]),
+      hypothesis([outboundCall, stayCall, activityCall]),
       () => ({ type: "search_more", toolPlan: toolPlan([outboundCall]) }),
     );
     await expect(
@@ -335,7 +364,7 @@ describe("bounded specified-destination PLAN coordinator", () => {
     ).rejects.toMatchObject({ code: "INVALID_MODEL_OUTPUT" });
 
     const clarification = model(
-      hypothesis([outboundCall, returnCall, stayCall]),
+      hypothesis([outboundCall, returnCall, stayCall, activityCall]),
       () => ({ type: "clarify", topic: "pace" }),
     );
     const result = await coordinateSpecifiedDestinationPlan(coordinatorInput(clarification));

@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { zodTextFormat } from "openai/helpers/zod";
 import type { StructuredResponseRunner } from "@/agent/model";
-import { createOpenAIExplanationModel, createOpenAIPlannerModel } from "@/agent/model";
+import {
+  createOpenAIConversationRouterModel,
+  createOpenAIExplanationModel,
+  createOpenAIModificationModel,
+  createOpenAINaturalIntakeModel,
+  createOpenAIPlannerModel,
+} from "@/agent/model";
 import type { PlannerDecisionInput } from "@/agent/coordinator";
-import type { PlannableTripRequest } from "@/domain/model";
+import type { PlannableTripRequest, TripState } from "@/domain/model";
 
 const request: PlannableTripRequest = {
   origin: "city:delhi",
@@ -39,6 +45,78 @@ const hypothesis = {
 };
 
 describe("schema-constrained OpenAI planner model", () => {
+  it("routes an existing-trip message through a typed conversation intent", async () => {
+    const requests: Array<{ schemaName: string; input: string }> = [];
+    const runner: StructuredResponseRunner = {
+      async run(call) {
+        expect(() => zodTextFormat(call.schema, call.schemaName)).not.toThrow();
+        requests.push({ schemaName: call.schemaName, input: call.input });
+        return { intent: "explain_trip" };
+      },
+    };
+    const model = createOpenAIConversationRouterModel({ model: "test-model", runner });
+    const trip: TripState = {
+      id: "trip:one",
+      inventoryVersion: "travel-seed-v1",
+      request,
+      route: {
+        marketId: "city:udaipur",
+        stops: [{ locationId: "city:udaipur", checkIn: request.startDate, checkOut: request.endDate }],
+      },
+      selectedTravel: [],
+      selectedStays: [],
+      selectedActivities: [],
+      version: 1,
+    };
+
+    await expect(model.classify({ message: "Why this route?", trip })).resolves.toEqual({
+      intent: "explain_trip",
+    });
+    expect(requests[0]?.schemaName).toBe("travel_conversation_intent");
+    expect(JSON.parse(requests[0]?.input ?? "{}")).toEqual({
+      message: "Why this route?",
+      trip,
+    });
+  });
+
+  it("uses a strict semantic schema for natural-language intake without location IDs", async () => {
+    const requests: Array<{ schemaName: string; input: string }> = [];
+    const runner: StructuredResponseRunner = {
+      async run(call) {
+        expect(() => zodTextFormat(call.schema, call.schemaName)).not.toThrow();
+        requests.push({ schemaName: call.schemaName, input: call.input });
+        return {
+          originQuery: "Delhi",
+          destination: { kind: "open" },
+          startDate: "2026-10-10",
+          endDate: "2026-10-15",
+          travellerGroups: [{ type: "adult", count: 2, mobility: null }],
+          pace: "relaxed",
+          interests: ["beaches"],
+          constraints: [],
+        };
+      },
+    };
+    const model = createOpenAINaturalIntakeModel({ model: "test-model", runner });
+    const currentRequest = { travellers: [], preferences: {}, constraints: [] };
+
+    await expect(
+      model.extractTripIntent({
+        message: "A relaxed beach trip from Delhi",
+        currentRequest,
+        today: "2026-08-27",
+        inventoryWindow: { from: "2026-09-01", until: "2027-03-31" },
+      }),
+    ).resolves.toMatchObject({ originQuery: "Delhi", destination: { kind: "open" } });
+    expect(requests[0]?.schemaName).toBe("natural_trip_intent");
+    expect(JSON.parse(requests[0]?.input ?? "{}")).toEqual({
+      message: "A relaxed beach trip from Delhi",
+      currentRequest,
+      today: "2026-08-27",
+      inventoryWindow: { from: "2026-09-01", until: "2027-03-31" },
+    });
+  });
+
   it("uses the planning hypothesis schema and canonical request only", async () => {
     const requests: Array<{ schemaName: string; input: string }> = [];
     const runner: StructuredResponseRunner = {
@@ -164,5 +242,57 @@ describe("schema-constrained OpenAI planner model", () => {
       question: "Is this valid?",
       factBundle,
     });
+  });
+
+  it("uses typed constraint operations for natural-language modification", async () => {
+    const requests: Array<{ schemaName: string; input: string }> = [];
+    const runner: StructuredResponseRunner = {
+      async run(call) {
+        expect(() => zodTextFormat(call.schema, call.schemaName)).not.toThrow();
+        requests.push({ schemaName: call.schemaName, input: call.input });
+        return {
+          action: "upsert_constraint",
+          constraint: {
+            category: "travel",
+            priority: "hard",
+            earliestDeparture: null,
+            latestArrival: null,
+            allowedModes: ["flight"],
+            maxStops: 0,
+          },
+          preserveSelectionIds: [],
+          goal: "Use direct flights only",
+          preferredThemes: [],
+        };
+      },
+    };
+    const model = createOpenAIModificationModel({ model: "test-model", runner });
+    const trip: TripState = {
+      id: "trip:one",
+      inventoryVersion: "travel-seed-v1",
+      request,
+      route: {
+        marketId: "city:udaipur",
+        stops: [{ locationId: "city:udaipur", checkIn: request.startDate, checkOut: request.endDate }],
+      },
+      selectedTravel: [],
+      selectedStays: [],
+      selectedActivities: [],
+      version: 1,
+    };
+
+    await expect(
+      model.interpretModification({
+        message: "Make all travel direct flights only",
+        trip,
+        selections: [],
+        supportedThemes: ["heritage"],
+      }),
+    ).resolves.toMatchObject({
+      action: "upsert_constraint",
+      constraint: { category: "travel", allowedModes: ["flight"], maxStops: 0 },
+    });
+    expect(requests[0]?.schemaName).toBe("travel_modification_intent");
+    expect(JSON.parse(requests[0]?.input ?? "{}").trip).toEqual(trip);
   });
 });

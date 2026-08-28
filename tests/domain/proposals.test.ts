@@ -99,6 +99,15 @@ const activity: ActivityOffer = {
   },
   price: { amount: 500, currency: "INR", unit: "per_participant" },
 };
+const addedActivity: ActivityOffer = {
+  ...activity,
+  id: "offer:activity:food",
+  activityId: "activity:food",
+  sessionId: "session:food",
+  startsAt: "2026-10-11T16:00:00+05:30",
+  endsAt: "2026-10-11T18:00:00+05:30",
+  activityFacts: { ...activity.activityFacts, name: "Food trail", tags: ["food"] },
+};
 
 const offers = new Map<string, ResolvedOffer>([
   [outbound.id, outbound],
@@ -108,6 +117,7 @@ const offers = new Map<string, ResolvedOffer>([
   [stay.id, stay],
   [cheaperStay.id, cheaperStay],
   [activity.id, activity],
+  [addedActivity.id, addedActivity],
 ]);
 
 const context = {
@@ -173,6 +183,73 @@ function replaceStay(base: TripState, operations: TripProposal["operations"]): T
 }
 
 describe("canonical trip proposals", () => {
+  it("previews a complete validated replan as one typed request change", async () => {
+    const base = trip();
+    const nextTrip: TripState = {
+      ...base,
+      request: {
+        ...base.request,
+        preferences: { ...base.request.preferences, pace: "relaxed" },
+      },
+      version: 1,
+    };
+    const proposal: TripProposal = {
+      id: "proposal:replan",
+      baseTripVersion: base.version,
+      operations: [{ type: "replace_trip_plan", nextTrip }],
+    };
+
+    const evaluated = await deriveProposalPreview(base, proposal, await projection(base), context);
+    expect(evaluated.preview.nextTrip.version).toBe(base.version + 1);
+    expect(evaluated.preview.nextTrip.request.preferences.pace).toBe("relaxed");
+    expect(evaluated.preview.changedCategories).toEqual(["request"]);
+    expect(evaluated.preview.changedSelectionIds).toEqual([]);
+    expect(evaluated.preview.preservedSelectionIds).toHaveLength(6);
+  });
+
+  it("rejects a complete replan that does not preserve a locked selection", async () => {
+    const base = trip(true);
+    const nextTrip: TripState = {
+      ...base,
+      selectedStays: [{ ...base.selectedStays[0], offerId: cheaperStay.id, locked: false }],
+      version: 1,
+    };
+
+    await expect(
+      deriveProposalPreview(
+        base,
+        {
+          id: "proposal:locked-replan",
+          baseTripVersion: base.version,
+          operations: [{ type: "replace_trip_plan", nextTrip }],
+        },
+        await projection(base),
+        context,
+      ),
+    ).rejects.toMatchObject({ code: "LOCKED_SELECTION" });
+  });
+
+  it("adds a dated activity only through an approved typed operation", async () => {
+    const base = trip();
+    const proposal: TripProposal = {
+      id: "proposal:add-activity",
+      baseTripVersion: base.version,
+      operations: [{
+        type: "add_activity",
+        nextOfferId: addedActivity.id,
+        travellerIds: base.request.travellers.map((traveller) => traveller.id),
+      }],
+    };
+
+    const preview = await deriveProposalPreview(base, proposal, await projection(base), context);
+    expect(base.selectedActivities).toHaveLength(1);
+    expect(preview.preview.nextTrip.selectedActivities).toHaveLength(2);
+    expect(preview.preview.changedSelectionIds).toContain(
+      `selection:activity:${addedActivity.id}`,
+    );
+    expect(preview.preview.changedCategories).toEqual(["activities"]);
+  });
+
   it("derives a valid preview and preserves every unrelated selection", async () => {
     const base = trip();
     const result = await deriveProposalPreview(
@@ -263,5 +340,60 @@ describe("canonical trip proposals", () => {
     expect(result.trip.selectedStays[0].locked).toBe(true);
     expect(result.trip.selectedTravel).toEqual(base.selectedTravel);
     expect(result.trip.selectedActivities).toEqual(base.selectedActivities);
+  });
+
+  it("upserts and removes typed constraints without changing inventory selections", async () => {
+    const base = trip();
+    const constraint = {
+      id: "constraint:budget:all",
+      category: "budget" as const,
+      priority: "hard" as const,
+      value: { maxTotal: { amount: 30_000, currency: "INR" as const } },
+    };
+    const upsert: TripProposal = {
+      id: "proposal:budget",
+      baseTripVersion: base.version,
+      operations: [{ type: "upsert_constraint", constraint }],
+    };
+
+    const evaluated = await deriveProposalPreview(base, upsert, await projection(base), context);
+    expect(evaluated.preview.changedCategories).toEqual(["constraints"]);
+    expect(evaluated.preview.changedSelectionIds).toEqual([]);
+    expect(evaluated.preview.preservedSelectionIds).toHaveLength(6);
+    const added = await applyProposal(base, upsert, await projection(base), context);
+    expect(added.trip.request.constraints).toEqual([constraint]);
+    expect(added.trip.selectedTravel).toEqual(base.selectedTravel);
+    expect(added.trip.selectedStays).toEqual(base.selectedStays);
+    expect(added.trip.selectedActivities).toEqual(base.selectedActivities);
+
+    const remove: TripProposal = {
+      id: "proposal:remove-budget",
+      baseTripVersion: added.trip.version,
+      operations: [{ type: "remove_constraint", constraintId: constraint.id }],
+    };
+    const removed = await applyProposal(added.trip, remove, added.projection, context);
+    expect(removed.trip.request.constraints).toEqual([]);
+    expect(removed.trip.version).toBe(base.version + 2);
+  });
+
+  it("blocks a hard constraint that invalidates the committed trip", async () => {
+    const base = trip();
+    const proposal: TripProposal = {
+      id: "proposal:impossible-budget",
+      baseTripVersion: base.version,
+      operations: [{
+        type: "upsert_constraint",
+        constraint: {
+          id: "constraint:budget:all",
+          category: "budget",
+          priority: "hard",
+          value: { maxTotal: { amount: 1_000, currency: "INR" } },
+        },
+      }],
+    };
+
+    await expect(
+      deriveProposalPreview(base, proposal, await projection(base), context),
+    ).rejects.toMatchObject({ code: "INVALID_RESULT" });
   });
 });

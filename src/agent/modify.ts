@@ -8,6 +8,10 @@ import {
 } from "@/agent/adaptive-contracts";
 import { factsForInventoryOffer } from "@/agent/executor";
 import {
+  constraintDraftFromNatural,
+  type NaturalConstraint,
+} from "@/agent/natural-intake-contracts";
+import {
   scopedModificationIntentSchema,
   type ModificationPlannerModel,
   type ModificationResult,
@@ -17,17 +21,25 @@ import {
 } from "@/agent/modification-contracts";
 import type {
   ActivitySelection,
+  Constraint,
   StaySelection,
   TravelSelection,
   TripState,
 } from "@/domain/model";
 import {
   deriveProposalPreview,
+  ProposalError,
   type ProposalEvaluation,
   type TripOperation,
   type TripProposal,
 } from "@/domain/proposals";
-import { projectTrip, tripStateSchema, type ResolvedOffer } from "@/domain/trip";
+import { constraintSchema } from "@/domain/request";
+import {
+  projectTrip,
+  routeLocationForDate,
+  tripStateSchema,
+  type ResolvedOffer,
+} from "@/domain/trip";
 import { createInventoryRepository } from "@/inventory/repository";
 import {
   resolveOffer,
@@ -42,10 +54,15 @@ const modifyRequestSchema = z
   .object({
     message: z.string().trim().min(1).max(800),
     trip: tripStateSchema,
+    targetDate: z.string().date().optional(),
   })
   .strict();
 
 type Selection = TravelSelection | StaySelection | ActivitySelection;
+type SelectionModificationIntent = Extract<
+  ScopedModificationIntent,
+  { targetSelectionId: string }
+>;
 
 export interface ModifyDependencies {
   model: ModificationPlannerModel;
@@ -101,7 +118,7 @@ async function searchAlternatives(
   trip: TripState,
   selection: Selection,
   currentOffer: ResolvedOffer,
-  intent: ScopedModificationIntent,
+  intent: SelectionModificationIntent,
   repository: ReturnType<typeof createInventoryRepository>,
 ): Promise<{ offers: ResolvedOffer[]; coverage: CoverageResult }> {
   const travellers = travellersFor(trip, selection);
@@ -331,7 +348,7 @@ function replacementOperation(selection: Selection, nextOfferId: string): TripOp
 
 function operationsFor(
   selection: Selection,
-  intent: ScopedModificationIntent,
+  intent: SelectionModificationIntent,
   nextOfferId?: string,
 ): TripOperation[] {
   const operations: TripOperation[] = [];
@@ -358,14 +375,33 @@ function validateIntent(
   const intent = parsed.data;
   const selections = allSelections(trip);
   const knownIds = new Set(selections.map((selection) => selection.id));
+  if (
+    intent.preserveSelectionIds.some((id) => !knownIds.has(id)) ||
+    intent.preferredThemes.some((theme) => !supportedThemes.has(theme))
+  ) {
+    throw new ModifyError("INVALID_MODEL_OUTPUT", "The planner returned an invalid preservation scope", 502, false);
+  }
+  if (intent.action === "upsert_constraint") return intent;
+  if (intent.action === "remove_constraint") {
+    if (!trip.request.constraints.some((constraint) => constraint.id === intent.constraintId)) {
+      throw new ModifyError("INVALID_MODEL_OUTPUT", "The planner targeted an unknown constraint", 502, false);
+    }
+    return intent;
+  }
+  if (intent.action === "add") {
+    if (
+      intent.targetDate < trip.request.startDate ||
+      intent.targetDate > trip.request.endDate ||
+      intent.preserveSelectionIds.some((id) => !knownIds.has(id))
+    ) {
+      throw new ModifyError("INVALID_MODEL_OUTPUT", "The planner returned an invalid activity-addition scope", 502, false);
+    }
+    return intent;
+  }
   if (!knownIds.has(intent.targetSelectionId)) {
     throw new ModifyError("INVALID_MODEL_OUTPUT", "The planner targeted an unknown selection", 502, false);
   }
-  if (
-    intent.preserveSelectionIds.some((id) => !knownIds.has(id)) ||
-    intent.preserveSelectionIds.includes(intent.targetSelectionId) ||
-    intent.preferredThemes.some((theme) => !supportedThemes.has(theme))
-  ) {
+  if (intent.preserveSelectionIds.includes(intent.targetSelectionId)) {
     throw new ModifyError("INVALID_MODEL_OUTPUT", "The planner returned an invalid preservation scope", 502, false);
   }
   const target = selections.find((selection) => selection.id === intent.targetSelectionId)!;
@@ -373,6 +409,246 @@ function validateIntent(
     throw new ModifyError("INVALID_MODEL_OUTPUT", "Only activities can be removed in P0", 502, false);
   }
   return intent;
+}
+
+function canonicalConstraint(
+  trip: TripState,
+  natural: NaturalConstraint,
+): Constraint {
+  const draft = constraintDraftFromNatural(natural);
+  const existing = trip.request.constraints.find(
+    (constraint) => constraint.category === draft.category && !constraint.travellerIds?.length,
+  );
+  return constraintSchema.parse({
+    ...draft,
+    id: existing?.id ?? `constraint:${draft.category}:all`,
+  }) as Constraint;
+}
+
+function constraintSummary(constraint: Constraint): string {
+  if (constraint.category === "budget") {
+    const amount = constraint.value.maxTotal?.amount ?? constraint.value.targetTotal?.amount;
+    const kind = constraint.value.maxTotal ? "maximum" : "target";
+    return amount
+      ? `${kind} trip budget of ₹${amount.toLocaleString("en-IN")}`
+      : "trip budget constraint";
+  }
+  if (constraint.category === "travel") {
+    const details = [
+      constraint.value.earliestDeparture ? `depart after ${constraint.value.earliestDeparture}` : undefined,
+      constraint.value.latestArrival ? `arrive by ${constraint.value.latestArrival}` : undefined,
+      constraint.value.allowedModes?.length ? `use ${constraint.value.allowedModes.join("/")}` : undefined,
+      constraint.value.maxStops !== undefined ? `at most ${constraint.value.maxStops} stops` : undefined,
+    ].filter(Boolean);
+    return details.join(", ") || "travel constraint";
+  }
+  if (constraint.category === "stay") {
+    const details = [
+      constraint.value.maxNightlyPrice
+        ? `nightly stay under ₹${constraint.value.maxNightlyPrice.amount.toLocaleString("en-IN")}`
+        : undefined,
+      constraint.value.requiredAmenities?.length
+        ? `require ${constraint.value.requiredAmenities.join(", ")}`
+        : undefined,
+      constraint.value.seniorFriendly ? "senior-friendly stay" : undefined,
+      constraint.value.requiredRooms ? `${constraint.value.requiredRooms} rooms` : undefined,
+    ].filter(Boolean);
+    return details.join(", ") || "stay constraint";
+  }
+  if (constraint.category === "activity") {
+    const details = [
+      constraint.value.maxMobility ? `${constraint.value.maxMobility} mobility maximum` : undefined,
+      constraint.value.childFriendly ? "child-friendly activities" : undefined,
+      constraint.value.seniorFriendly ? "senior-friendly activities" : undefined,
+    ].filter(Boolean);
+    return details.join(", ") || "activity constraint";
+  }
+  return `maximum ${constraint.value.maxActiveMinutesPerDay} active minutes per day`;
+}
+
+function constraintFact(
+  trip: TripState,
+  constraint: Constraint,
+  label: string,
+): GroundedFact {
+  return {
+    id: `fact:constraint:${createHash("sha256")
+      .update(`${trip.id}:${constraint.id}:${JSON.stringify(constraint)}`)
+      .digest("hex")
+      .slice(0, 20)}`,
+    subjectType: "trip",
+    subjectId: trip.id,
+    dimension: "constraint_change",
+    label,
+    value: constraintSummary(constraint),
+  };
+}
+
+function keepConstraintAction(tripId: string) {
+  return {
+    id: `action:keep-current-constraints:${tripId}`,
+    label: "Keep the current trip constraints",
+    type: "keep_current" as const,
+  };
+}
+
+async function constraintConflict(
+  trip: TripState,
+  attempted: Constraint,
+  projection: Awaited<ReturnType<typeof projectTrip>>,
+  context: Parameters<typeof projectTrip>[1],
+  createId: () => string,
+  reason: string,
+  allowSoftening = true,
+): Promise<Extract<ModificationResult, { type: "conflict" }>> {
+  const alreadyActive = reason === "that rule is already active";
+  const proposals: ModificationProposalOption[] = [];
+  if (allowSoftening && attempted.priority === "hard") {
+    let softened: Constraint = { ...attempted, priority: "strong" } as Constraint;
+    if (attempted.category === "budget" && attempted.value.maxTotal) {
+      softened = {
+        ...attempted,
+        priority: "strong",
+        value: { targetTotal: attempted.value.maxTotal },
+      };
+    }
+    const proposal: TripProposal = {
+      id: `proposal:${createId()}`,
+      baseTripVersion: trip.version,
+      operations: [{ type: "upsert_constraint", constraint: softened }],
+    };
+    try {
+      const evaluation = await deriveProposalPreview(trip, proposal, projection, context);
+      proposals.push(
+        proposalOption(
+          `compromise:soften:${attempted.id}`,
+          proposal,
+          evaluation,
+          `Treat ${constraintSummary(attempted)} as a strong target instead of a hard limit.`,
+        ),
+      );
+    } catch {
+      // If softening still cannot validate, keep-current remains the only honest action.
+    }
+  }
+  const fact = constraintFact(
+    trip,
+    attempted,
+    alreadyActive
+      ? "Requested constraint is already active"
+      : `Requested constraint conflicts with the committed trip: ${reason}`,
+  );
+  const keepAction = keepConstraintAction(trip.id);
+  const alternatives = [
+    ...proposals.map((option) => ({ id: option.optionId, proposalId: option.proposal.id })),
+    { id: `compromise:keep-constraints:${trip.id}`, actionId: keepAction.id },
+  ];
+  return {
+    type: "conflict",
+    code: "CONSTRAINT_CONFLICT",
+    proposals,
+    block: constraintConflictBlockSchema.parse({
+      type: "constraint_conflict",
+      constraintIds: [attempted.id],
+      alternatives,
+      emphasis: {
+        recommendedId: alternatives[0].id,
+        summary: alreadyActive
+          ? "This rule is already part of the committed trip, so no state change is needed."
+          : "The requested rule would invalidate the committed trip. Review a softer target or keep the current constraints.",
+        supportingFactIds: [fact.id],
+        suggestedFollowUpActionIds: proposals.length === 0 ? [keepAction.id] : undefined,
+      },
+    }),
+    factBundle: factBundleSchema.parse({
+      facts: [fact],
+      allowedComparisonDimensions: ["constraint_change"],
+      allowedFollowUpActions: [keepAction],
+    }),
+    message: alreadyActive
+      ? `${constraintSummary(attempted)} is already active. The current trip is unchanged.`
+      : `I can’t apply ${constraintSummary(attempted)} as requested without invalidating the current trip.`,
+  };
+}
+
+async function runConstraintModification(
+  trip: TripState,
+  projection: Awaited<ReturnType<typeof projectTrip>>,
+  intent: Extract<
+    ScopedModificationIntent,
+    { action: "upsert_constraint" | "remove_constraint" }
+  >,
+  context: Parameters<typeof projectTrip>[1],
+  createId: () => string,
+): Promise<ModificationResult> {
+  const operation: TripOperation = intent.action === "remove_constraint"
+    ? { type: "remove_constraint", constraintId: intent.constraintId }
+    : { type: "upsert_constraint", constraint: canonicalConstraint(trip, intent.constraint) };
+  const current = operation.type === "remove_constraint"
+    ? trip.request.constraints.find((constraint) => constraint.id === operation.constraintId)!
+    : operation.constraint;
+  const existing = trip.request.constraints.find((constraint) => constraint.id === current.id);
+  if (operation.type === "upsert_constraint" && JSON.stringify(existing) === JSON.stringify(current)) {
+    return constraintConflict(
+      trip,
+      current,
+      projection,
+      context,
+      createId,
+      "that rule is already active",
+      false,
+    );
+  }
+
+  const proposal: TripProposal = {
+    id: `proposal:${createId()}`,
+    baseTripVersion: trip.version,
+    operations: [operation],
+  };
+  try {
+    const evaluation = await deriveProposalPreview(trip, proposal, projection, context);
+    const fact = constraintFact(
+      trip,
+      current,
+      operation.type === "remove_constraint"
+        ? "Existing constraint proposed for removal"
+        : "Typed constraint proposed for approval",
+    );
+    const verb = operation.type === "remove_constraint" ? "remove" : "apply";
+    return {
+      type: "proposal",
+      proposal,
+      preview: evaluation.preview,
+      projection: evaluation.projection,
+      block: changeProposalBlockSchema.parse({
+        type: "change_proposal",
+        proposalId: proposal.id,
+        emphasis: {
+          recommendedId: current.id,
+          comparisonDimensions: ["constraint_change"],
+          supportingFactIds: [fact.id],
+        },
+      }),
+      factBundle: factBundleSchema.parse({
+        facts: [fact],
+        allowedComparisonDimensions: ["constraint_change"],
+        allowedFollowUpActions: [],
+      }),
+      message: `I prepared a proposal to ${verb} ${constraintSummary(current)}. Every selection remains unchanged unless you approve it.`,
+    };
+  } catch (error: unknown) {
+    if (error instanceof ProposalError && error.code === "INVALID_RESULT") {
+      return constraintConflict(
+        trip,
+        current,
+        projection,
+        context,
+        createId,
+        error.message,
+      );
+    }
+    throw error;
+  }
 }
 
 function recommendationIsGrounded(
@@ -395,7 +671,7 @@ async function evaluateCandidate(
   trip: TripState,
   currentProjection: Awaited<ReturnType<typeof projectTrip>>,
   selection: Selection,
-  intent: ScopedModificationIntent,
+  intent: SelectionModificationIntent,
   offer: ResolvedOffer,
   context: Parameters<typeof projectTrip>[1],
   createId: () => string,
@@ -413,6 +689,180 @@ async function evaluateCandidate(
   } catch {
     return undefined;
   }
+}
+
+async function runActivityAddition(
+  trip: TripState,
+  projection: Awaited<ReturnType<typeof projectTrip>>,
+  intent: Extract<ScopedModificationIntent, { action: "add" }>,
+  repository: ReturnType<typeof createInventoryRepository>,
+  context: Parameters<typeof projectTrip>[1],
+  model: ModificationPlannerModel,
+  createId: () => string,
+): Promise<ModificationResult> {
+  const locationId = routeLocationForDate(intent.targetDate, trip);
+  const result = await searchActivities(
+    {
+      locationId,
+      startDate: intent.targetDate,
+      endDate: intent.targetDate,
+      travellers: trip.request.travellers,
+      interests: intent.preferredThemes.length > 0
+        ? intent.preferredThemes
+        : (trip.request.preferences.interests ?? []),
+      constraints: constraintsFor(trip, "activity"),
+    },
+    repository,
+  );
+  const selectedOfferIds = new Set(trip.selectedActivities.map((selection) => selection.offerId));
+  const candidates = (
+    await Promise.all(
+      result.results
+        .filter((offer) => !selectedOfferIds.has(offer.id))
+        .slice(0, 6)
+        .map(async (offer) => {
+          const proposal: TripProposal = {
+            id: `proposal:${createId()}`,
+            baseTripVersion: trip.version,
+            operations: [{
+              type: "add_activity",
+              nextOfferId: offer.id,
+              travellerIds: trip.request.travellers.map((traveller) => traveller.id),
+            }],
+          };
+          try {
+            return {
+              offer,
+              proposal,
+              evaluation: await deriveProposalPreview(trip, proposal, projection, context),
+              facts: factsForInventoryOffer(offer, trip.request.travellers.length),
+            };
+          } catch {
+            return undefined;
+          }
+        }),
+    )
+  ).flatMap((candidate) => candidate ? [candidate] : []);
+
+  if (candidates.length === 0) {
+    const fact = conflictFact(
+      trip.id,
+      "activity_coverage",
+      `Activity availability on ${intent.targetDate}`,
+      result.coverage.status,
+    );
+    const actionId = `action:keep-current:${intent.targetDate}`;
+    return {
+      type: "conflict",
+      code: "NO_VALID_ALTERNATIVE",
+      proposals: [],
+      block: constraintConflictBlockSchema.parse({
+        type: "constraint_conflict",
+        constraintIds: result.coverage.status === "eliminated_by_constraints"
+          ? result.coverage.constraintIds.slice(0, 8)
+          : [],
+        alternatives: [{ id: `compromise:keep:${intent.targetDate}`, actionId }],
+        emphasis: {
+          recommendedId: `compromise:keep:${intent.targetDate}`,
+          summary: "No dated activity can be added without breaking the current trip.",
+          supportingFactIds: [fact.id],
+          suggestedFollowUpActionIds: [actionId],
+        },
+      }),
+      factBundle: factBundleSchema.parse({
+        facts: [fact],
+        allowedComparisonDimensions: ["activity_coverage"],
+        allowedFollowUpActions: [{
+          id: actionId,
+          label: "Keep this day as open time",
+          type: "keep_current",
+        }],
+      }),
+      message: `No schedule-valid activity is available for ${intent.targetDate}. The current trip is unchanged.`,
+    };
+  }
+
+  let recommendation = {
+    candidateId: candidates[0].offer.id,
+    supportingFactIds: candidates[0].facts.slice(0, 2).map((fact) => fact.id),
+    comparisonDimensions: ["activity_fit"],
+  };
+  try {
+    const modelRecommendation = await model.recommendModification({
+      intent,
+      targetDate: intent.targetDate,
+      candidates: candidates.map((candidate) => ({
+        candidateId: candidate.offer.id,
+        facts: candidate.facts,
+      })),
+    });
+    if (
+      recommendationIsGrounded(
+        modelRecommendation.candidateId,
+        modelRecommendation.supportingFactIds,
+        modelRecommendation.comparisonDimensions,
+        candidates,
+      )
+    ) {
+      recommendation = modelRecommendation;
+    }
+  } catch {
+    // The first hard-valid activity remains the deterministic semantic fallback.
+  }
+  const chosen = candidates.find((candidate) => candidate.offer.id === recommendation.candidateId)
+    ?? candidates[0];
+  const factBundle = factBundleSchema.parse({
+    facts: candidates.flatMap((candidate) => candidate.facts),
+    allowedComparisonDimensions: allowedDimensions(chosen.offer),
+    allowedFollowUpActions: [],
+  });
+  const options = candidates.slice(0, 4).map((candidate) =>
+    proposalOption(
+      candidate.offer.id,
+      candidate.proposal,
+      candidate.evaluation,
+      `Add ${candidate.offer.activityFacts.name} on ${intent.targetDate}.`,
+    ),
+  );
+  if (options.length >= 2) {
+    return {
+      type: "alternatives",
+      options,
+      block: optionComparisonBlockSchema.parse({
+        type: "option_comparison",
+        entityType: "activity",
+        choices: options.map((option) => ({
+          optionId: option.optionId,
+          proposalId: option.proposal.id,
+        })),
+        emphasis: {
+          recommendedId: chosen.offer.id,
+          comparisonDimensions: recommendation.comparisonDimensions,
+          supportingFactIds: recommendation.supportingFactIds,
+          summary: `Every option is available on ${intent.targetDate} and keeps the trip valid.`,
+        },
+      }),
+      factBundle,
+      message: `Choose an activity to add on ${intent.targetDate}.`,
+    };
+  }
+  return {
+    type: "proposal",
+    proposal: chosen.proposal,
+    preview: chosen.evaluation.preview,
+    projection: chosen.evaluation.projection,
+    block: changeProposalBlockSchema.parse({
+      type: "change_proposal",
+      proposalId: chosen.proposal.id,
+      emphasis: {
+        recommendedId: chosen.offer.id,
+        comparisonDimensions: recommendation.comparisonDimensions,
+        supportingFactIds: recommendation.supportingFactIds,
+      },
+    }),
+    factBundle,
+    message: `One schedule-valid activity is available on ${intent.targetDate}. Review it before adding it.`,
+  };
 }
 
 export async function runModification(
@@ -454,17 +904,51 @@ export async function runModification(
     }));
 
     let rawIntent: ScopedModificationIntent;
-    try {
-      rawIntent = await dependencies.model.interpretModification({
-        message: parsed.data.message,
-        trip,
-        selections,
-        supportedThemes: catalog.supportedThemes,
-      });
-    } catch {
-      throw new ModifyError("MODEL_FAILURE", "The planner could not interpret this change", 502, true);
+    if (parsed.data.targetDate) {
+      const supportedThemes = new Set(catalog.supportedThemes);
+      rawIntent = {
+        action: "add",
+        targetDate: parsed.data.targetDate,
+        preserveSelectionIds: allSelections(trip).map((selection) => selection.id),
+        goal: parsed.data.message,
+        unlockTarget: false,
+        preferredThemes: (trip.request.preferences.interests ?? []).filter((theme) =>
+          supportedThemes.has(theme),
+        ),
+      };
+    } else {
+      try {
+        rawIntent = await dependencies.model.interpretModification({
+          message: parsed.data.message,
+          trip,
+          selections,
+          supportedThemes: catalog.supportedThemes,
+        });
+      } catch {
+        throw new ModifyError("MODEL_FAILURE", "The planner could not interpret this change", 502, true);
+      }
     }
     const intent = validateIntent(rawIntent, trip, new Set(catalog.supportedThemes));
+    if (intent.action === "upsert_constraint" || intent.action === "remove_constraint") {
+      return runConstraintModification(
+        trip,
+        projection,
+        intent,
+        context,
+        createId,
+      );
+    }
+    if (intent.action === "add") {
+      return runActivityAddition(
+        trip,
+        projection,
+        intent,
+        repository,
+        context,
+        dependencies.model,
+        createId,
+      );
+    }
     const selection = allSelections(trip).find((item) => item.id === intent.targetSelectionId)!;
     const currentOffer = offers.get(selection.id)!;
 

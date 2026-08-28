@@ -91,7 +91,7 @@ function marketCoverage(seed: InventorySeed, marketId: string) {
 
 export function validateInventorySeed(seed: InventorySeed): void {
   if (seed.meta.length !== 1) throw new Error("Seed must contain exactly one inventory metadata row");
-  if (seed.meta[0].version !== "travel-seed-v1") throw new Error("Unexpected inventory version");
+  if (seed.meta[0].version !== "travel-seed-v2") throw new Error("Unexpected inventory version");
 
   const locationIds = seed.locations.map((item) => item.id);
   const locationIdSet = new Set(locationIds);
@@ -99,6 +99,7 @@ export function validateInventorySeed(seed: InventorySeed): void {
   const propertyIds = seed.properties.map((item) => item.id);
   const activityIds = seed.activities.map((item) => item.id);
 
+  assertUnique(seed.imageAssets.map((item) => item.key), "image asset");
   assertUnique(locationIds, "location");
   assertUnique(seed.markets.map((item) => item.locationId), "market");
   assertUnique(seed.markets.map((item) => String(item.displayOrder)), "market display order");
@@ -152,17 +153,37 @@ export function validateInventorySeed(seed: InventorySeed): void {
     "transfer location",
   );
 
-  if (seed.markets.length !== 20) throw new Error("P0 inventory must declare exactly 20 markets");
+  const imageAssetKeys = new Set(seed.imageAssets.map((item) => item.key));
+  for (const image of seed.imageAssets) {
+    if (image.source !== "pexels") throw new Error(`Unsupported image source: ${image.source}`);
+    if (!image.url.startsWith("https://images.pexels.com/")) throw new Error(`Unsupported image URL for ${image.key}`);
+    if (image.width <= 0 || image.height <= 0) throw new Error(`Invalid image dimensions for ${image.key}`);
+  }
+  for (const key of [
+    ...seed.locations.flatMap((item) => item.imageAssetKey ? [item.imageAssetKey] : []),
+    ...seed.properties.map((item) => item.imageAssetKey),
+    ...seed.activities.map((item) => item.imageAssetKey),
+  ]) {
+    if (imageAssetKeys.size > 0 && !imageAssetKeys.has(key)) {
+      throw new Error(`Missing image asset row for ${key}`);
+    }
+  }
+
+  if (seed.markets.length < 20) throw new Error("P0 inventory must declare at least 20 markets");
   const indiaMarkets = seed.markets.filter((market) => market.region === "india");
   const internationalMarkets = seed.markets.filter(
     (market) => market.region === "international",
   );
-  if (indiaMarkets.length !== 10 || internationalMarkets.length !== 10) {
-    throw new Error("P0 inventory requires 10 Indian and 10 international markets");
+  if (indiaMarkets.length < 10 || internationalMarkets.length < 10) {
+    throw new Error("P0 inventory requires at least 10 Indian and 10 international markets");
   }
 
   for (const market of seed.markets) {
     const coverage = marketCoverage(seed, market.locationId);
+    const marketLocation = seed.locations.find((location) => location.id === market.locationId);
+    if (marketLocation?.type === "city" && !marketLocation.tags?.includes("origin_hub")) {
+      throw new Error(`${market.locationId} must be usable as an origin hub`);
+    }
     if (coverage.outboundTransport < 2 || coverage.returnTransport < 2) {
       throw new Error(`${market.locationId} requires two outbound and two return choices`);
     }

@@ -73,7 +73,7 @@ async function verifyDatabase() {
   }
 
   const [meta] = await db.select().from(inventoryMeta).where(eq(inventoryMeta.id, "active"));
-  if (!meta || meta.version !== "travel-seed-v1") throw new Error("Active inventory version mismatch");
+  if (!meta || meta.version !== "travel-seed-v2") throw new Error("Active inventory version mismatch");
 
   const marketRows = await db
     .select({ id: destinationMarkets.locationId, name: locations.name, region: destinationMarkets.region })

@@ -58,6 +58,44 @@ function entry(id: string, role: ConversationEntry["role"]): ConversationEntry {
 }
 
 describe("workspace reducer", () => {
+  it("starts without assuming a traveller count or pace", () => {
+    expect(initialWorkspaceState.draftRequest.travellers).toEqual([]);
+    expect(initialWorkspaceState.draftRequest.preferences.pace).toBeUndefined();
+  });
+
+  it("populates only the draft when natural-language intake succeeds", () => {
+    const interpreted: TripRequest = {
+      ...request,
+      destination: { kind: "open" },
+    };
+    const started = workspaceReducer(initialWorkspaceState, {
+      type: "intake_started",
+      entry: entry("message:natural", "user"),
+    });
+    const next = workspaceReducer(started, {
+      type: "intake_received",
+      result: {
+        request: interpreted,
+        resolvedLocations: {
+          origin: { id: "city:delhi", label: "Delhi" },
+          destination: { id: "destination:open", label: "Open to recommendations" },
+        },
+        appliedFields: ["origin", "destination", "dates", "travellers"],
+        missingRequired: [],
+        suggestedDateRanges: [],
+        issues: [],
+        message: "Review the trip brief.",
+      },
+      entry: entry("message:interpreted", "assistant"),
+    });
+
+    expect(started.asyncStatus).toBe("interpreting");
+    expect(next.asyncStatus).toBe("idle");
+    expect(next.draftRequest).toEqual(interpreted);
+    expect(next.committedTrip).toBeUndefined();
+    expect(next.latestIntake?.appliedFields).toContain("destination");
+  });
+
   it("starts planning without discarding a committed trip", () => {
     const state: WorkspaceState = {
       ...initialWorkspaceState,
@@ -326,7 +364,21 @@ describe("workspace reducer", () => {
   });
 
   it("commits an approved version and removes every now-stale proposal", () => {
-    const nextTrip = { ...trip, version: 2 };
+    const nextTrip = {
+      ...trip,
+      version: 2,
+      request: {
+        ...trip.request,
+        constraints: [
+          {
+            id: "constraint:budget:all",
+            category: "budget" as const,
+            priority: "hard" as const,
+            value: { maxTotal: { amount: 60_000, currency: "INR" as const } },
+          },
+        ],
+      },
+    };
     const state: WorkspaceState = {
       ...initialWorkspaceState,
       committedTrip: trip,
@@ -368,6 +420,7 @@ describe("workspace reducer", () => {
     });
 
     expect(next.committedTrip).toBe(nextTrip);
+    expect(next.draftRequest).toBe(nextTrip.request);
     expect(next.proposals).toEqual({});
     expect(next.activeProposalId).toBeUndefined();
   });

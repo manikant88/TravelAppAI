@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createOpenAIPlannerModel } from "@/agent/model";
+import { createDeterministicPlannerModel } from "@/agent/deterministic-planner";
 import {
   runSpecifiedPlanApi,
   SpecifiedPlanApiError,
@@ -12,20 +13,16 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => undefined);
   const modelName = process.env.OPENAI_MODEL?.trim();
   const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!modelName || !apiKey) {
-    return NextResponse.json(
-      {
-        code: "CONFIGURATION_ERROR",
-        message: "The travel planner model is not configured",
-        retryable: false,
-      },
-      { status: 503 },
-    );
-  }
+  const deterministicModel = createDeterministicPlannerModel();
+  const hasModelConfiguration = Boolean(modelName && apiKey);
 
   try {
     const result = await runSpecifiedPlanApi(body, {
-      model: createOpenAIPlannerModel({ model: modelName, apiKey }),
+      model: hasModelConfiguration
+        ? createOpenAIPlannerModel({ model: modelName!, apiKey: apiKey! })
+        : deterministicModel,
+      fallbackModel: hasModelConfiguration ? deterministicModel : undefined,
+      modelMode: hasModelConfiguration ? "ai" : "deterministic_fallback",
     });
     return NextResponse.json(result);
   } catch (error: unknown) {

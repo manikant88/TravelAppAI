@@ -22,9 +22,17 @@ import type {
 const idSchema = z.string().trim().min(1);
 
 export const tripOperationSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("replace_trip_plan"), nextTrip: tripStateSchema }).strict(),
   z.object({ type: z.literal("replace_travel"), selectionId: idSchema, nextOfferId: idSchema }).strict(),
   z.object({ type: z.literal("replace_stay"), selectionId: idSchema, nextOfferId: idSchema }).strict(),
   z.object({ type: z.literal("replace_activity"), selectionId: idSchema, nextOfferId: idSchema }).strict(),
+  z
+    .object({
+      type: z.literal("add_activity"),
+      nextOfferId: idSchema,
+      travellerIds: z.array(idSchema).min(1),
+    })
+    .strict(),
   z.object({ type: z.literal("remove_activity"), selectionId: idSchema }).strict(),
   z
     .object({
@@ -51,6 +59,7 @@ export const tripProposalSchema = z
 export type TripProposal = z.infer<typeof tripProposalSchema>;
 
 export type ChangedCategory =
+  | "request"
   | "travel"
   | "stays"
   | "activities"
@@ -140,11 +149,14 @@ async function resolveReplacement(
 
 function changedCategory(operation: TripOperation): ChangedCategory {
   switch (operation.type) {
+    case "replace_trip_plan":
+      return "request";
     case "replace_travel":
       return "travel";
     case "replace_stay":
       return "stays";
     case "replace_activity":
+    case "add_activity":
     case "remove_activity":
     case "update_activity_participants":
       return "activities";
@@ -174,6 +186,72 @@ async function applyOperation(
   operation: TripOperation,
   context: TripProjectionContext,
 ): Promise<TripState> {
+  if (operation.type === "replace_trip_plan") {
+    const replacement = operation.nextTrip as TripState;
+    if (replacement.inventoryVersion !== trip.inventoryVersion) {
+      throw new ProposalError(
+        "INVALID_PROPOSAL",
+        "A full-plan replacement must use the current inventory version",
+      );
+    }
+    const replacementSelections = new Map(
+      allSelections(replacement).map((selection) => [selection.id, selection]),
+    );
+    for (const current of allSelections(trip).filter((selection) => selection.locked)) {
+      const next = replacementSelections.get(current.id);
+      if (
+        !next ||
+        next.kind !== current.kind ||
+        next.offerId !== current.offerId ||
+        JSON.stringify(next.travellerIds) !== JSON.stringify(current.travellerIds)
+      ) {
+        throw new ProposalError(
+          "LOCKED_SELECTION",
+          `Locked selection ${current.id} must be preserved by the updated plan`,
+        );
+      }
+    }
+    return {
+      ...replacement,
+      id: trip.id,
+      version: trip.version,
+    };
+  }
+
+  if (operation.type === "add_activity") {
+    const offer = await resolveReplacement(operation.nextOfferId, context);
+    if (!isActivityOffer(offer)) {
+      throw new ProposalError("OPERATION_KIND_MISMATCH", "Activity addition requires activity inventory");
+    }
+    if (trip.selectedActivities.some((selection) => selection.offerId === offer.id)) {
+      throw new ProposalError("INVALID_OPERATION_ORDER", "Activity is already selected");
+    }
+    const knownTravellerIds = new Set(trip.request.travellers.map((traveller) => traveller.id));
+    const travellerIds = [...new Set(operation.travellerIds)];
+    if (travellerIds.some((id) => !knownTravellerIds.has(id))) {
+      throw new ProposalError("INVALID_PROPOSAL", "Activity addition contains an unknown traveller ID");
+    }
+    const selectionId = `selection:activity:${offer.id}`;
+    if (allSelections(trip).some((selection) => selection.id === selectionId)) {
+      throw new ProposalError("INVALID_OPERATION_ORDER", "Activity selection ID already exists");
+    }
+    const addedSelection: ActivitySelection = {
+      id: selectionId,
+      kind: "activity",
+      offerId: offer.id,
+      travellerIds,
+      locked: false,
+      date: offer.startsAt.slice(0, 10),
+    };
+    return {
+      ...trip,
+      selectedActivities: [
+        ...trip.selectedActivities,
+        addedSelection,
+      ].sort((left, right) => left.id.localeCompare(right.id, "en")),
+    };
+  }
+
   if (operation.type === "set_selection_lock") {
     const selection = selectionById(trip, operation.selectionId);
     if (selection.locked === operation.locked) {
@@ -371,13 +449,22 @@ export async function deriveProposalPreview(
     );
   }
 
+  const currentSelections = new Map(allSelections(trip).map((selection) => [selection.id, selection]));
+  const nextSelections = new Map(allSelections(nextTrip).map((selection) => [selection.id, selection]));
   const changedSelectionIds = [
-    ...new Set(proposal.operations.map(changedSelectionId).filter((id): id is string => Boolean(id))),
+    ...new Set([
+      ...proposal.operations.map(changedSelectionId).filter((id): id is string => Boolean(id)),
+      ...[...new Set([...currentSelections.keys(), ...nextSelections.keys()])].filter((id) => {
+        const current = currentSelections.get(id);
+        const next = nextSelections.get(id);
+        return !current || !next || JSON.stringify(current) !== JSON.stringify(next);
+      }),
+    ]),
   ];
   const changed = new Set(changedSelectionIds);
   const preservedSelectionIds = allSelections(trip)
     .map((selection) => selection.id)
-    .filter((id) => !changed.has(id));
+    .filter((id) => !changed.has(id) && nextSelections.has(id));
   const changedCategories = [
     ...new Set(proposal.operations.map(changedCategory)),
   ];

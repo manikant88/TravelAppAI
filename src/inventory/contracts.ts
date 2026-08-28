@@ -77,6 +77,11 @@ export interface PropertyFacts {
   accessibility: string[];
   tags: string[];
   imageAssetKey: string;
+  imageUrl?: string;
+  imageAltText?: string;
+  imageCredit?: string;
+  imageCreditUrl?: string;
+  imageSourceUrl?: string;
 }
 
 export interface RoomFacts {
@@ -106,6 +111,11 @@ export interface ActivityFacts {
   childFriendly: boolean;
   seniorFriendly: boolean;
   imageAssetKey: string;
+  imageUrl?: string;
+  imageAltText?: string;
+  imageCredit?: string;
+  imageCreditUrl?: string;
+  imageSourceUrl?: string;
 }
 
 export interface ActivityOffer {
@@ -398,6 +408,11 @@ const propertyFactsSchema = z
     accessibility: z.array(z.string().min(1)),
     tags: z.array(z.string().min(1)),
     imageAssetKey: z.string().min(1),
+    imageUrl: z.string().url().optional(),
+    imageAltText: z.string().min(1).optional(),
+    imageCredit: z.string().min(1).optional(),
+    imageCreditUrl: z.string().url().optional(),
+    imageSourceUrl: z.string().url().optional(),
   })
   .strict();
 
@@ -433,6 +448,11 @@ const activityFactsSchema = z
     childFriendly: z.boolean(),
     seniorFriendly: z.boolean(),
     imageAssetKey: z.string().min(1),
+    imageUrl: z.string().url().optional(),
+    imageAltText: z.string().min(1).optional(),
+    imageCredit: z.string().min(1).optional(),
+    imageCreditUrl: z.string().url().optional(),
+    imageSourceUrl: z.string().url().optional(),
   })
   .strict();
 

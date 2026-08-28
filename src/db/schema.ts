@@ -35,6 +35,19 @@ export const priceUnitEnum = pgEnum("price_unit", [
   "per_vehicle",
 ]);
 
+export const imageAssets = pgTable("image_assets", {
+  key: text("key").primaryKey(),
+  source: text("source").notNull(),
+  sourceId: text("source_id").notNull(),
+  url: text("url").notNull(),
+  photographer: text("photographer").notNull(),
+  photographerUrl: text("photographer_url").notNull(),
+  sourceUrl: text("source_url").notNull(),
+  altText: text("alt_text").notNull(),
+  width: integer("width").notNull(),
+  height: integer("height").notNull(),
+});
+
 export const inventoryMeta = pgTable(
   "inventory_meta",
   {
@@ -268,6 +281,7 @@ export const transfers = pgTable(
 );
 
 export const inventoryTables = {
+  imageAssets,
   inventoryMeta,
   locations,
   destinationMarkets,

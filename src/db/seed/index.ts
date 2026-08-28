@@ -4,6 +4,7 @@ import {
   activities,
   activitySessions,
   destinationMarkets,
+  imageAssets,
   inventoryMeta,
   locations,
   properties,
@@ -35,9 +36,13 @@ async function seedInventory() {
     db.delete(transportSegments),
     db.delete(transportServices),
     db.delete(destinationMarkets),
+    db.delete(imageAssets),
     db.delete(locations),
     db.delete(inventoryMeta),
     db.insert(inventoryMeta).values(travelInventorySeed.meta),
+    ...(travelInventorySeed.imageAssets.length > 0
+      ? [db.insert(imageAssets).values(travelInventorySeed.imageAssets)]
+      : []),
     db.insert(locations).values(travelInventorySeed.locations),
     db.insert(destinationMarkets).values(travelInventorySeed.markets),
     db.insert(transportServices).values(travelInventorySeed.transportServices),
@@ -53,7 +58,7 @@ async function seedInventory() {
 seedInventory()
   .then(() => {
     process.stdout.write(
-      `Seeded ${travelInventorySeed.markets.length} markets with travel-seed-v1\n`,
+      `Seeded ${travelInventorySeed.markets.length} markets with travel-seed-v2\n`,
     );
   })
   .catch((error: unknown) => {

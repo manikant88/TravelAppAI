@@ -9,19 +9,48 @@ import type {
   ConstraintConflictBlock,
   OptionComparisonBlock,
 } from "@/agent/adaptive-contracts";
+import { naturalConstraintSchema } from "@/agent/natural-intake-contracts";
 
 const idSchema = z.string().trim().min(1);
 
-export const scopedModificationIntentSchema = z
-  .object({
-    action: z.enum(["replace", "remove"]),
-    targetSelectionId: idSchema,
-    preserveSelectionIds: z.array(idSchema),
-    goal: z.string().trim().min(1).max(500),
-    unlockTarget: z.boolean(),
-    preferredThemes: z.array(z.string().trim().min(1)).max(8),
-  })
-  .strict();
+const intentShared = {
+  preserveSelectionIds: z.array(idSchema),
+  goal: z.string().trim().min(1).max(500),
+  preferredThemes: z.array(z.string().trim().min(1)).max(8),
+};
+
+export const scopedModificationIntentSchema = z.discriminatedUnion("action", [
+  z
+    .object({
+      action: z.enum(["replace", "remove"]),
+      targetSelectionId: idSchema,
+      unlockTarget: z.boolean(),
+      ...intentShared,
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("add"),
+      targetDate: z.string().date(),
+      unlockTarget: z.literal(false),
+      ...intentShared,
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("upsert_constraint"),
+      constraint: naturalConstraintSchema,
+      ...intentShared,
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("remove_constraint"),
+      constraintId: idSchema,
+      ...intentShared,
+    })
+    .strict(),
+]);
 
 export type ScopedModificationIntent = z.infer<typeof scopedModificationIntentSchema>;
 
@@ -60,7 +89,8 @@ export interface ModificationPlannerModel {
   }): Promise<ScopedModificationIntent>;
   recommendModification(input: {
     intent: ScopedModificationIntent;
-    currentSelection: ModificationSelectionSummary;
+    currentSelection?: ModificationSelectionSummary;
+    targetDate?: string;
     candidates: ModificationCandidate[];
   }): Promise<ModificationRecommendation>;
 }
@@ -92,7 +122,11 @@ export type ModificationResult =
     }
   | {
       type: "conflict";
-      code: "LOCKED_SELECTION" | "NO_VALID_ALTERNATIVE" | "UNSUPPORTED_MODIFICATION";
+      code:
+        | "LOCKED_SELECTION"
+        | "NO_VALID_ALTERNATIVE"
+        | "CONSTRAINT_CONFLICT"
+        | "UNSUPPORTED_MODIFICATION";
       targetSelectionId?: string;
       proposals: ModificationProposalOption[];
       block: ConstraintConflictBlock;

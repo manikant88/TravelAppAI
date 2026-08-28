@@ -6,6 +6,7 @@ import type { InventoryToolServices } from "@/agent/executor";
 import type { PlannableTripRequest } from "@/domain/model";
 import type { ResolvedOffer } from "@/domain/trip";
 import type {
+  ActivityOffer,
   SearchResponse,
   StayOffer,
   TransferOffer,
@@ -13,7 +14,7 @@ import type {
 } from "@/inventory/contracts";
 
 const generatedAt = "2026-08-27T00:00:00.000Z";
-const price = (amount: number, unit: "per_traveller" | "per_room_per_night" | "per_vehicle") =>
+const price = (amount: number, unit: "per_traveller" | "per_room_per_night" | "per_vehicle" | "per_participant") =>
   ({ amount, currency: "INR" as const, unit });
 
 function response<T>(queryId: string, results: T[]): SearchResponse<T> {
@@ -82,6 +83,38 @@ const interstop: TransferOffer = {
   price: price(4_500, "per_vehicle"),
 };
 
+function activity(id: string, locationId: string, startsAt: string): ActivityOffer {
+  return {
+    id,
+    activityId: id.replace("offer:", "activity:"),
+    sessionId: id.replace("offer:", "session:"),
+    locationId,
+    startsAt,
+    endsAt: startsAt.replace("10:00:00", "12:00:00"),
+    capacity: 20,
+    activityFacts: {
+      name: `${locationId} coastal experience`,
+      tags: ["beaches"],
+      mobility: "low",
+      childFriendly: true,
+      seniorFriendly: true,
+      imageAssetKey: id,
+    },
+    price: price(1_000, "per_participant"),
+  };
+}
+
+const phuketActivity = activity(
+  "offer:phuket-activity",
+  "city:phuket",
+  "2026-10-11T10:00:00+07:00",
+);
+const krabiActivity = activity(
+  "offer:krabi-activity",
+  "city:krabi",
+  "2026-10-13T10:00:00+07:00",
+);
+
 const request: PlannableTripRequest = {
   origin: "city:delhi",
   destination: { kind: "specified", locationId: "region:thailand-andaman" },
@@ -98,6 +131,8 @@ const calls: ToolPlan["calls"] = [
   { id: "call:interstop", tool: "search_transfers", purpose: "Connect route stops", from: "city:phuket", to: "city:krabi" },
   { id: "call:krabi-stay", tool: "search_stays", purpose: "Cover Krabi nights", locationId: "city:krabi", checkInDayNumber: 3, nights: 2 },
   { id: "call:return", tool: "search_transport", purpose: "Return from final stop", from: "city:krabi", to: "city:delhi", tripDayNumber: 5 },
+  { id: "call:phuket-activity", tool: "search_activities", purpose: "Plan a Phuket day", locationId: "city:phuket", tripDayNumbers: [2], themes: ["beaches"] },
+  { id: "call:krabi-activity", tool: "search_activities", purpose: "Plan a Krabi day", locationId: "city:krabi", tripDayNumbers: [4], themes: ["beaches"] },
 ];
 
 const hypothesis: PlanningHypothesis = {
@@ -113,7 +148,7 @@ const hypothesis: PlanningHypothesis = {
 
 describe("end-to-end generic multi-stop PLAN", () => {
   it("assembles and validates a connected two-stop trip without destination branches", async () => {
-    const observed = [outbound, phuketStay, interstop, krabiStay, returning];
+    const observed = [outbound, phuketStay, interstop, krabiStay, returning, phuketActivity, krabiActivity];
     const offers = new Map<string, ResolvedOffer>(observed.map((offer) => [offer.id, offer]));
     const services: InventoryToolServices = {
       searchTransport: vi.fn(async (search) =>
@@ -125,7 +160,10 @@ describe("end-to-end generic multi-stop PLAN", () => {
           ? response("query:phuket-stay", [phuketStay])
           : response("query:krabi-stay", [krabiStay])),
       searchTransfers: vi.fn(async () => response("query:interstop", [interstop])),
-      searchActivities: vi.fn(async () => response("query:activities", [])),
+      searchActivities: vi.fn(async (search) =>
+        search.locationId === "city:phuket"
+          ? response("query:phuket-activity", [phuketActivity])
+          : response("query:krabi-activity", [krabiActivity])),
     };
     const model: SpecifiedDestinationPlannerModel = {
       createPlanningHypothesis: vi.fn(async () => hypothesis),
@@ -189,6 +227,7 @@ describe("end-to-end generic multi-stop PLAN", () => {
     ]);
     expect(result.trip.selectedStays).toHaveLength(2);
     expect(result.trip.selectedTravel).toHaveLength(3);
+    expect(result.trip.selectedActivities).toHaveLength(2);
     expect(result.projection.validation).toEqual({ valid: true, issues: [] });
     expect(result.projection.itinerary.find((day) => day.date === "2026-10-12")?.locationId).toBe("city:krabi");
   });

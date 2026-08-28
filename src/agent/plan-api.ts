@@ -50,6 +50,7 @@ export type SpecifiedPlanApiResult =
       projection: TripProjection;
       message: string;
       actionSummary: string[];
+      planningMode?: "ai" | "deterministic_fallback";
     }
   | {
       type: "clarification";
@@ -75,6 +76,8 @@ export type SpecifiedPlanApiResult =
 
 export interface SpecifiedPlanApiDependencies {
   model: SpecifiedDestinationPlannerModel;
+  fallbackModel?: SpecifiedDestinationPlannerModel;
+  modelMode?: "ai" | "deterministic_fallback";
   repository?: ReturnType<typeof createInventoryRepository>;
   coordinator?: typeof coordinateSpecifiedDestinationPlan;
 }
@@ -107,17 +110,21 @@ const clarificationQuestions = {
 function mapCoordinatorResult(
   result: SpecifiedPlanCoordinatorResult,
   tripId: string,
+  planningMode: "ai" | "deterministic_fallback" = "ai",
 ): SpecifiedPlanApiResult {
   if (result.status === "completed") {
     return {
       type: "trip_ready",
       trip: result.trip,
       projection: result.projection,
-      message: "Your trip plan is ready to review.",
+      message: planningMode === "deterministic_fallback"
+        ? "I've assembled and validated this trip deterministically from your selections."
+        : "Your trip plan is ready to review.",
       actionSummary: [
         `Used ${result.trace.finalBudget.searchCallsUsed} grounded inventory searches`,
         `Validated the assembled trip ${result.trace.validationAttempts.length} time${result.trace.validationAttempts.length === 1 ? "" : "s"}`,
       ],
+      planningMode,
     };
   }
   if (result.status === "needs_optional_clarification") {
@@ -145,8 +152,22 @@ function mapCoordinatorResult(
     const fallbackActions: FactBundle["allowedFollowUpActions"] = result.suggestedRelaxationIds.map((id) => ({
       id,
       label: id.startsWith("action:adjust:")
-        ? `Review constraint ${id.slice("action:adjust:".length)}`
-        : "Change the requested trip scope",
+        ? (() => {
+            const category = ["budget", "travel", "stay", "activity", "schedule"].find((name) => id.includes(`:${name}:`)) ?? "";
+            const labels: Record<string, string> = {
+              budget: "Increase the budget",
+              travel: "Allow more travel options",
+              stay: "Relax stay requirements",
+              activity: "Relax activity requirements",
+              schedule: "Loosen the daily schedule",
+            };
+            return labels[category] ?? "Relax this requirement";
+          })()
+        : id.endsWith(":route_gap")
+          ? "Choose a route with complete coverage"
+          : id.endsWith(":schedule_conflict")
+            ? "Relax the daily schedule"
+            : "Choose a compatible trip scope",
       type: id.startsWith("action:adjust:") ? "adjust_constraint" as const : "change_scope" as const,
     }));
     if (fallbackActions.length === 0) {
@@ -328,7 +349,7 @@ export async function runSpecifiedPlanApi(
     }
 
     const coordinator = dependencies.coordinator ?? coordinateSpecifiedDestinationPlan;
-    const result = await coordinator({
+    const coordinatorInput = {
       tripId: parsed.data.tripId,
       request: canonicalRequest,
       locationGraph: catalog.locationGraph,
@@ -338,9 +359,21 @@ export async function runSpecifiedPlanApi(
       expectedInventoryVersion: catalog.inventoryVersion,
       model: dependencies.model,
       inventoryServices: createInventoryToolServices(repository),
-      resolveOffer: (offerId) => resolveOffer(offerId, repository),
-    });
-    return mapCoordinatorResult(result, parsed.data.tripId);
+      resolveOffer: (offerId: string) => resolveOffer(offerId, repository),
+    };
+    let planningMode: "ai" | "deterministic_fallback" = dependencies.modelMode ?? "ai";
+    let result: SpecifiedPlanCoordinatorResult;
+    try {
+      result = await coordinator(coordinatorInput);
+    } catch (error: unknown) {
+      const canFallback = error instanceof PlanCoordinatorError &&
+        (error.code === "MODEL_FAILURE" || error.code === "INVALID_MODEL_OUTPUT") &&
+        dependencies.fallbackModel;
+      if (!canFallback) throw error;
+      planningMode = "deterministic_fallback";
+      result = await coordinator({ ...coordinatorInput, model: dependencies.fallbackModel! });
+    }
+    return mapCoordinatorResult(result, parsed.data.tripId, planningMode);
   } catch (error: unknown) {
     throw mapCoordinatorError(error);
   }

@@ -5,6 +5,7 @@ import {
   activities,
   activitySessions,
   destinationMarkets,
+  imageAssets,
   inventoryMeta,
   locations,
   properties,
@@ -20,6 +21,7 @@ import type {
   MobilityLoad,
   TravelMode,
 } from "@/domain/model";
+import { createSnapshotInventoryRepository } from "@/inventory/snapshot-repository";
 
 export interface InventoryMetaSnapshot {
   version: string;
@@ -124,6 +126,11 @@ export interface StayCatalogOffer {
   accessibility: string[];
   tags: string[];
   imageAssetKey: string;
+  imageUrl?: string;
+  imageAltText?: string;
+  imageCredit?: string;
+  imageCreditUrl?: string;
+  imageSourceUrl?: string;
   roomLabel: string;
   maxOccupancy: number;
   inventoryCount: number;
@@ -154,6 +161,11 @@ export interface ActivityCatalogSession {
   childFriendly: boolean;
   seniorFriendly: boolean;
   imageAssetKey: string;
+  imageUrl?: string;
+  imageAltText?: string;
+  imageCredit?: string;
+  imageCreditUrl?: string;
+  imageSourceUrl?: string;
   operatingWeekdays: number[];
   startsAtLocalTime: LocalTime;
   durationMinutes: number;
@@ -195,15 +207,15 @@ export interface TransferInventoryRepository {
 
 type Database = ReturnType<typeof getRuntimeDatabase>;
 
-export function createInventoryRepository(
-  database: Database = getRuntimeDatabase(),
-): LocationInventoryRepository &
+export type InventoryRepository = LocationInventoryRepository &
   PlannerCatalogRepository &
   DestinationDiscoveryRepository &
   TransportInventoryRepository &
   StayInventoryRepository &
   ActivityInventoryRepository &
-  TransferInventoryRepository {
+  TransferInventoryRepository;
+
+function createNeonInventoryRepository(database: Database): InventoryRepository {
   const parentLocation = alias(locations, "parent_location");
   const routeFromSegment = alias(transportSegments, "route_from_segment");
   const routeToSegment = alias(transportSegments, "route_to_segment");
@@ -333,6 +345,11 @@ export function createInventoryRepository(
     accessibility: properties.accessibility,
     tags: properties.tags,
     imageAssetKey: properties.imageAssetKey,
+    imageUrl: imageAssets.url,
+    imageAltText: imageAssets.altText,
+    imageCredit: imageAssets.photographer,
+    imageCreditUrl: imageAssets.photographerUrl,
+    imageSourceUrl: imageAssets.sourceUrl,
     roomLabel: roomOffers.roomLabel,
     maxOccupancy: roomOffers.maxOccupancy,
     inventoryCount: roomOffers.inventoryCount,
@@ -355,6 +372,11 @@ export function createInventoryRepository(
     childFriendly: activities.childFriendly,
     seniorFriendly: activities.seniorFriendly,
     imageAssetKey: activities.imageAssetKey,
+    imageUrl: imageAssets.url,
+    imageAltText: imageAssets.altText,
+    imageCredit: imageAssets.photographer,
+    imageCreditUrl: imageAssets.photographerUrl,
+    imageSourceUrl: imageAssets.sourceUrl,
     operatingWeekdays: activitySessions.operatingWeekdays,
     startsAtLocalTime: activitySessions.startsAtLocalTime,
     durationMinutes: activitySessions.durationMinutes,
@@ -380,21 +402,35 @@ export function createInventoryRepository(
   };
 
   function normalizeStayRows(
-    rows: Array<Omit<StayCatalogOffer, "currency" | "priceUnit"> & { currency: string; priceUnit: string }>,
+    rows: Array<Omit<StayCatalogOffer, "currency" | "priceUnit" | "imageUrl" | "imageAltText" | "imageCredit" | "imageCreditUrl" | "imageSourceUrl"> & { currency: string; priceUnit: string; imageUrl: string | null; imageAltText: string | null; imageCredit: string | null; imageCreditUrl: string | null; imageSourceUrl: string | null }>,
   ): StayCatalogOffer[] {
     return rows.map((row) => {
       if (row.currency !== "INR" || row.priceUnit !== "per_room_per_night") {
         throw new Error(`Invalid stay price contract for ${row.roomOfferId}`);
       }
-      return { ...row, currency: "INR", priceUnit: "per_room_per_night" };
+      return {
+        ...row,
+        imageUrl: row.imageUrl ?? undefined,
+        imageAltText: row.imageAltText ?? undefined,
+        imageCredit: row.imageCredit ?? undefined,
+        imageCreditUrl: row.imageCreditUrl ?? undefined,
+        imageSourceUrl: row.imageSourceUrl ?? undefined,
+        currency: "INR",
+        priceUnit: "per_room_per_night",
+      };
     });
   }
 
   function normalizeActivityRows(
     rows: Array<
-      Omit<ActivityCatalogSession, "currency" | "priceUnit"> & {
+      Omit<ActivityCatalogSession, "currency" | "priceUnit" | "imageUrl" | "imageAltText" | "imageCredit" | "imageCreditUrl" | "imageSourceUrl"> & {
         currency: string;
         priceUnit: string;
+        imageUrl: string | null;
+        imageAltText: string | null;
+        imageCredit: string | null;
+        imageCreditUrl: string | null;
+        imageSourceUrl: string | null;
       }
     >,
   ): ActivityCatalogSession[] {
@@ -402,7 +438,16 @@ export function createInventoryRepository(
       if (row.currency !== "INR" || row.priceUnit !== "per_participant") {
         throw new Error(`Invalid activity price contract for ${row.sessionId}`);
       }
-      return { ...row, currency: "INR", priceUnit: "per_participant" };
+      return {
+        ...row,
+        imageUrl: row.imageUrl ?? undefined,
+        imageAltText: row.imageAltText ?? undefined,
+        imageCredit: row.imageCredit ?? undefined,
+        imageCreditUrl: row.imageCreditUrl ?? undefined,
+        imageSourceUrl: row.imageSourceUrl ?? undefined,
+        currency: "INR",
+        priceUnit: "per_participant",
+      };
     });
   }
 
@@ -642,6 +687,7 @@ export function createInventoryRepository(
         .select(staySelection)
         .from(roomOffers)
         .innerJoin(properties, eq(roomOffers.propertyId, properties.id))
+        .leftJoin(imageAssets, eq(properties.imageAssetKey, imageAssets.key))
         .innerJoin(locations, eq(properties.locationId, locations.id))
         .where(
           and(
@@ -661,6 +707,7 @@ export function createInventoryRepository(
         .select(staySelection)
         .from(roomOffers)
         .innerJoin(properties, eq(roomOffers.propertyId, properties.id))
+        .leftJoin(imageAssets, eq(properties.imageAssetKey, imageAssets.key))
         .innerJoin(locations, eq(properties.locationId, locations.id))
         .where(
           and(
@@ -682,6 +729,7 @@ export function createInventoryRepository(
         .select(activitySelection)
         .from(activitySessions)
         .innerJoin(activities, eq(activitySessions.activityId, activities.id))
+        .leftJoin(imageAssets, eq(activities.imageAssetKey, imageAssets.key))
         .innerJoin(locations, eq(activities.locationId, locations.id))
         .where(
           and(
@@ -701,6 +749,7 @@ export function createInventoryRepository(
         .select(activitySelection)
         .from(activitySessions)
         .innerJoin(activities, eq(activitySessions.activityId, activities.id))
+        .leftJoin(imageAssets, eq(activities.imageAssetKey, imageAssets.key))
         .innerJoin(locations, eq(activities.locationId, locations.id))
         .where(
           and(
@@ -758,4 +807,75 @@ export function createInventoryRepository(
       return normalizeTransferRows(rows)[0];
     },
   };
+}
+
+type InventorySource = "snapshot" | "hybrid" | "neon";
+
+const repositoryMethods = [
+  "getInventoryMeta",
+  "searchLocations",
+  "getPlannerCatalog",
+  "getDestinationMarketProfiles",
+  "getActiveLocationGraph",
+  "findTransportServices",
+  "findTransportServiceById",
+  "findStayOffers",
+  "findStayOfferById",
+  "findActivitySessions",
+  "findActivitySessionById",
+  "findTransfers",
+  "findTransferById",
+] as const satisfies ReadonlyArray<keyof InventoryRepository>;
+
+let neonUnavailableUntil = 0;
+let fallbackReported = false;
+
+function configuredInventorySource(): InventorySource {
+  const value = process.env.INVENTORY_SOURCE?.trim().toLowerCase();
+  return value === "neon" || value === "hybrid" || value === "snapshot" ? value : "snapshot";
+}
+
+export function createHybridInventoryRepository(
+  neonRepository: InventoryRepository,
+  snapshotRepository: InventoryRepository,
+): InventoryRepository {
+  const entries = repositoryMethods.map((methodName) => [
+    methodName,
+    async (...args: unknown[]) => {
+      if (Date.now() < neonUnavailableUntil) {
+        return (snapshotRepository[methodName] as (...values: unknown[]) => unknown)(...args);
+      }
+      try {
+        return await (neonRepository[methodName] as (...values: unknown[]) => unknown)(...args);
+      } catch (error: unknown) {
+        neonUnavailableUntil = Date.now() + 60_000;
+        if (!fallbackReported) {
+          fallbackReported = true;
+          console.warn("Neon inventory unavailable; using the bundled read-only snapshot", {
+            retryAfterMs: 60_000,
+            reason: error instanceof Error ? error.message : "inventory request failed",
+          });
+        }
+        return (snapshotRepository[methodName] as (...values: unknown[]) => unknown)(...args);
+      }
+    },
+  ]);
+  return Object.fromEntries(entries) as unknown as InventoryRepository;
+}
+
+export function createInventoryRepository(database?: Database): InventoryRepository {
+  if (database) return createNeonInventoryRepository(database);
+
+  const snapshotRepository = createSnapshotInventoryRepository();
+  const source = configuredInventorySource();
+  if (source === "snapshot") return snapshotRepository;
+
+  const neonRepository = createNeonInventoryRepository(getRuntimeDatabase());
+  return source === "neon"
+    ? neonRepository
+    : createHybridInventoryRepository(neonRepository, snapshotRepository);
+}
+
+export function inventorySource(): InventorySource {
+  return configuredInventorySource();
 }
