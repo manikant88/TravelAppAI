@@ -10,6 +10,6 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## Project continuation
 
-Read `AI_HANDOFF.md` before making project changes. It records the current architecture, completed work, verification status, manual test flows, and superseding product decisions. Then read `PROJECT_CONTEXT.md` and the relevant sections of `IMPLEMENTATION_SPEC.md`.
+Read `PROJECT_CONTEXT.md` and the relevant sections of `IMPLEMENTATION_SPEC.md`.
 
 Do not run automated browser tests unless the user explicitly asks for them.
