@@ -12,21 +12,12 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => undefined);
   const modelName = process.env.OPENAI_MODEL?.trim();
   const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!modelName || !apiKey) {
-    return NextResponse.json(
-      {
-        code: "CONFIGURATION_ERROR",
-        message: "The travel planner model is not configured",
-        retryable: false,
-      },
-      { status: 503 },
-    );
-  }
-
   try {
     return NextResponse.json(
       await runDestinationDiscovery(body, {
-        model: createOpenAIDestinationDiscoveryModel({ model: modelName, apiKey }),
+        model: modelName && apiKey
+          ? createOpenAIDestinationDiscoveryModel({ model: modelName, apiKey })
+          : undefined,
       }),
     );
   } catch (error: unknown) {

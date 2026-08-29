@@ -32,6 +32,8 @@ export const scopedModificationIntentSchema = z.discriminatedUnion("action", [
     .object({
       action: z.literal("add"),
       targetDate: z.string().date(),
+      count: z.number().int().min(1).max(3).nullable(),
+      replaceDayActivities: z.boolean().nullable(),
       unlockTarget: z.literal(false),
       ...intentShared,
     })

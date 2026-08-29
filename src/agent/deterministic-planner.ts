@@ -23,10 +23,17 @@ function routeStops(request: PlannableTripRequest, graph: LocationNode[]): strin
   const marketId = request.destination.locationId;
   const market = graph.find((node) => node.id === marketId);
   if (market?.type === "city") return [marketId];
+  const routeOrder = (node: LocationNode): number => {
+    const tag = node.tags?.find((item) => item.startsWith("route_order:"));
+    const value = tag ? Number(tag.slice("route_order:".length)) : Number.POSITIVE_INFINITY;
+    return Number.isFinite(value) ? value : Number.POSITIVE_INFINITY;
+  };
   const childCities = graph
     .filter((node) => node.parentId === marketId && node.type === "city")
-    .map((node) => node.id)
-    .sort((left, right) => left.localeCompare(right, "en"));
+    .sort((left, right) =>
+      routeOrder(left) - routeOrder(right) || left.id.localeCompare(right.id, "en"),
+    )
+    .map((node) => node.id);
   return childCities.length > 0 ? childCities : [marketId];
 }
 
@@ -91,6 +98,37 @@ function overlapsSelectedTravel(candidate: CandidateFactBundle, travel: Candidat
   });
 }
 
+function overlaps(candidate: CandidateFactBundle, selected: CandidateFactBundle[]): boolean {
+  const startsAt = textFact(candidate, "start");
+  const endsAt = textFact(candidate, "end");
+  if (!startsAt || !endsAt) return false;
+  const start = Date.parse(startsAt);
+  const end = Date.parse(endsAt);
+  return selected.some((item) => {
+    const selectedStart = textFact(item, "start");
+    const selectedEnd = textFact(item, "end");
+    if (!selectedStart || !selectedEnd) return false;
+    return start < Date.parse(selectedEnd) && Date.parse(selectedStart) < end;
+  });
+}
+
+function activityDate(candidate: CandidateFactBundle): string | undefined {
+  return textFact(candidate, "start")?.slice(0, 10);
+}
+
+function activityPreferenceScore(
+  candidate: CandidateFactBundle,
+  interests: string[],
+): number {
+  const themes = (textFact(candidate, "themes") ?? "")
+    .split(",")
+    .map((theme) => theme.trim().toLocaleLowerCase("en"));
+  return interests.reduce(
+    (score, interest) => score + (themes.includes(interest.toLocaleLowerCase("en")) ? 1 : 0),
+    0,
+  );
+}
+
 function candidateChoice(candidate: CandidateFactBundle, index: number, allowedDimensions: Set<string>): CandidateChoice {
   const dimensions = candidate.facts.map((fact) => fact.dimension).filter((dimension) => allowedDimensions.has(dimension));
   return {
@@ -124,11 +162,30 @@ function deterministicAction(input: PlannerDecisionInput) {
     if (observation.toolName === "search_transport") selectedTravel.push(candidate);
     decisionIndex += 1;
   }
-  for (const observation of input.observations.filter((item) => item.toolName === "search_activities")) {
-    for (const candidate of observation.candidates.filter((item) => !overlapsSelectedTravel(item, selectedTravel))) {
-      choices.push(candidateChoice(candidate, decisionIndex, allowedDimensions));
-      decisionIndex += 1;
-    }
+  const activityLimitPerDay = input.request.preferences.pace === "packed" ? 2 : 1;
+  const selectedActivities: CandidateFactBundle[] = [];
+  const selectedByDate = new Map<string, number>();
+  const activityCandidates = input.observations
+    .filter((item) => item.toolName === "search_activities")
+    .flatMap((observation) => observation.candidates)
+    .filter((candidate, index, candidates) =>
+      candidates.findIndex((item) => item.candidateId === candidate.candidateId) === index,
+    )
+    .sort((left, right) =>
+      activityPreferenceScore(right, input.request.preferences.interests ?? []) -
+        activityPreferenceScore(left, input.request.preferences.interests ?? []) ||
+      numericFact(left, "total_price") - numericFact(right, "total_price") ||
+      (textFact(left, "start") ?? "").localeCompare(textFact(right, "start") ?? "", "en") ||
+      left.candidateId.localeCompare(right.candidateId, "en"),
+    );
+  for (const candidate of activityCandidates) {
+    const date = activityDate(candidate);
+    if (!date || (selectedByDate.get(date) ?? 0) >= activityLimitPerDay) continue;
+    if (overlapsSelectedTravel(candidate, selectedTravel) || overlaps(candidate, selectedActivities)) continue;
+    selectedActivities.push(candidate);
+    selectedByDate.set(date, (selectedByDate.get(date) ?? 0) + 1);
+    choices.push(candidateChoice(candidate, decisionIndex, allowedDimensions));
+    decisionIndex += 1;
   }
   return {
     type: "propose_plan" as const,

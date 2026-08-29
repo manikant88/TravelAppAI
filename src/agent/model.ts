@@ -33,11 +33,12 @@ import {
   type NaturalTripIntent,
 } from "@/agent/natural-intake-contracts";
 import type { NaturalIntakeModel } from "@/agent/natural-intake";
-import { createDeterministicPlannerModel } from "@/agent/deterministic-planner";
 import {
   conversationIntentSchema,
   type ConversationRouterModel,
 } from "@/agent/conversation-contracts";
+import { communicationOutputSchema, type CommunicationContext } from "@/agent/interaction-contracts";
+import type { CommunicationModel } from "@/agent/communication";
 
 export interface StructuredResponseRequest<T> {
   schema: ZodType<T, ZodTypeDef, unknown>;
@@ -342,6 +343,29 @@ function createOpenAIRunner(options: OpenAIPlannerModelOptions): StructuredRespo
         if (timedOut) throw new Error(`OpenAI request timed out after ${timeoutMs}ms`);
         throw error;
       }
+    },
+  };
+}
+
+const communicationInstructions = `You write concise, natural UI copy for a deterministic travel planner.
+Use only the supplied facts and visible operation events. Never claim an action happened unless its event is completed.
+Do not invent inventory, prices, dates, destinations, availability, or next actions. Do not expose chain-of-thought or hidden reasoning.
+Return one helpful message and short labels only for the supplied action IDs. Preserve every action ID exactly. The labels may improve tone but must not change what an action does.`;
+
+export function createOpenAICommunicationModel(
+  options: OpenAIPlannerModelOptions,
+): CommunicationModel {
+  const model = options.model.trim();
+  if (!model) throw new Error("OPENAI_MODEL is required");
+  const runner = options.runner ?? createOpenAIRunner({ ...options, model, timeoutMs: options.timeoutMs ?? 2_500 });
+  return {
+    compose(context: CommunicationContext) {
+      return runStructured(runner, {
+        schema: communicationOutputSchema,
+        schemaName: "travel_interaction_copy",
+        instructions: communicationInstructions,
+        input: jsonForModel(context),
+      });
     },
   };
 }

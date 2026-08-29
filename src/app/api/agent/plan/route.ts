@@ -1,5 +1,4 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createOpenAIPlannerModel } from "@/agent/model";
 import { createDeterministicPlannerModel } from "@/agent/deterministic-planner";
 import {
   runSpecifiedPlanApi,
@@ -11,18 +10,15 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => undefined);
-  const modelName = process.env.OPENAI_MODEL?.trim();
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
   const deterministicModel = createDeterministicPlannerModel();
-  const hasModelConfiguration = Boolean(modelName && apiKey);
 
   try {
     const result = await runSpecifiedPlanApi(body, {
-      model: hasModelConfiguration
-        ? createOpenAIPlannerModel({ model: modelName!, apiKey: apiKey! })
-        : deterministicModel,
-      fallbackModel: hasModelConfiguration ? deterministicModel : undefined,
-      modelMode: hasModelConfiguration ? "ai" : "deterministic_fallback",
+      // Canonical trip construction is deliberately deterministic. Models may
+      // rank complete valid variants in a later bounded step, but they never
+      // create selections, prices, schedules, or state mutations.
+      model: deterministicModel,
+      modelMode: "deterministic_fallback",
     });
     return NextResponse.json(result);
   } catch (error: unknown) {

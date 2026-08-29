@@ -374,6 +374,18 @@ svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-linecap:
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 
+.interaction-progress { display: grid; gap: 7px; margin: 18px 0 4px; border-left: 2px solid #dbeafe; padding-left: 12px; }
+.interaction-step { display: flex; align-items: center; gap: 8px; color: #708096; font-size: 11px; line-height: 1.35; }
+.interaction-step i { display: grid; width: 16px; height: 16px; flex: 0 0 16px; place-items: center; border: 1px solid #ccd7e5; border-radius: 50%; color: #0877f9; font-size: 9px; font-style: normal; }
+.interaction-step.is-active { color: #163a62; font-weight: 650; }
+.interaction-step.is-active i { border-color: #0877f9; background: #0877f9; box-shadow: 0 0 0 5px rgb(8 119 249 / 12%); animation: interaction-pulse 1.1s ease-in-out infinite; }
+.interaction-step.is-completed i { border-color: #8acfa0; background: #e9f8ed; color: #207a39; }
+.interaction-step.is-failed i { border-color: #ef9c92; background: #fff0ed; color: #ba3e31; }
+.trip-fact.ai-focus { z-index: 2; outline: 2px solid #65a9ff !important; outline-offset: -2px; background: #183b62 !important; animation: interaction-surface-pulse 1.2s ease-in-out infinite; }
+.itinerary-selection.agent-highlight { border-radius: 6px; box-shadow: 0 0 0 3px rgb(8 119 249 / 18%); animation: interaction-surface-pulse 1.2s ease-in-out infinite; }
+@keyframes interaction-pulse { 50% { box-shadow: 0 0 0 10px rgb(8 119 249 / 3%); } }
+@keyframes interaction-surface-pulse { 50% { box-shadow: 0 0 0 7px rgb(8 119 249 / 8%); } }
+
 /* Conversation-first MMT reference layout */
 :root {
   --mmt-blue: #0877f9;
@@ -512,17 +524,32 @@ body { background: white; color: var(--mmt-navy); font-family: Inter, "Open Sans
 .trip-brief-bar.fact-editing-guests .fact-editor { left: 60%; transform: translateX(-50%); }
 .trip-brief-bar.fact-editing-preferences .fact-editor { left: auto; right: 105px; }
 .workspace-main { min-height: calc(100vh - 78px); background: var(--mmt-canvas); }
-.trip-review { width: 100%; max-width: none; margin: 0; padding: 40px 40px 0; }
-.itinerary-overview { display: flex; min-height: 65px; align-items: flex-start; justify-content: space-between; }
+.trip-review { width: 100%; max-width: none; margin: 0; padding: 40px 0px 0px; }
+.itinerary-overview { display: flex; min-height: 65px; align-items: flex-start; justify-content: space-between; padding: 0px 40px; }
 .itinerary-overview p { margin: 0; color: #005cab; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
 .itinerary-overview h1 { margin: 4px 0 0; color: var(--mmt-navy); font-size: 16px; font-weight: 500; }
 .trip-generated-badge { align-self: center; border: 1px solid #c8e7d0; border-radius: 2px; background: #e9f8ed; color: #207a39; padding: 5px 12px; font-size: 8px; font-weight: 700; text-transform: uppercase; }
-.day-navigation { position: sticky; z-index: 35; top: 78px; display: flex; height: 55px; align-items: flex-end; gap: 24px; border-bottom: 1px solid var(--mmt-border); background: rgb(255 255 255 / 96%); padding: 0 16px; backdrop-filter: blur(10px); }
+.day-navigation { position: sticky; z-index: 35; top: 78px; display: flex; height: 55px; align-items: flex-end; gap: 24px; border-bottom: 1px solid var(--mmt-border); background: rgb(255 255 255 / 96%); padding: 0 40px; backdrop-filter: blur(10px); }
 .day-navigation a { height: 39px; border-bottom: 2px solid transparent; color: var(--mmt-copy); font-size: 12px; line-height: 38px; text-decoration: none; }
 .day-navigation a.is-active, .day-navigation a:hover, .day-navigation a:focus-visible { border-color: var(--mmt-blue); color: #005cab; outline: 0; }
-.itinerary-section { margin: 40px 0 0; border: 0; padding: 0 0 170px; }
+.itinerary-section { margin: 40px 0 0; border: 0; padding: 0 40 40px; }
 .timeline { margin: 0; }
 .timeline-day { scroll-margin-top: 150px; display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 16px; }
+.timeline-day.agent-highlight .day-marker strong {
+  border-color: #0b76e0;
+  background: #0b76e0;
+  color: #fff;
+  box-shadow: 0 0 0 8px rgb(11 118 224 / 14%);
+  animation: agent-day-pulse 900ms ease-in-out 2;
+}
+.timeline-day.agent-highlight .day-content {
+  border-radius: 8px;
+  box-shadow: 0 0 0 3px rgb(11 118 224 / 15%);
+}
+
+@keyframes agent-day-pulse {
+  50% { box-shadow: 0 0 0 15px rgb(11 118 224 / 4%); }
+}
 .day-marker strong { width: 48px; height: 48px; border: 1px solid var(--mmt-blue); border-radius: 2px; background: #eaf4ff; color: #005cab; font-family: inherit; font-size: 16px; font-weight: 600; }
 .day-marker i { width: 2px; min-height: 40px; background: #b7c8df; }
 .day-content { padding-bottom: 32px; }
@@ -590,7 +617,7 @@ body { background: white; color: var(--mmt-navy); font-family: Inter, "Open Sans
 .free-time-card > span { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 50%; background: var(--mmt-highlight); color: var(--mmt-blue); }
 .free-time-card strong { color: var(--mmt-copy); font-size: 12px; font-weight: 400; }
 .free-time-card button { border: 0; background: transparent; color: var(--mmt-blue); font-size: 8px; font-weight: 700; text-transform: uppercase; cursor: pointer; }
-.trip-checkout-bar { position: sticky; z-index: 45; right: -40px; bottom: 0; left: -40px; display: grid; min-height: 146px; grid-template-columns: minmax(220px, 1fr) 1px minmax(220px, 1fr) 1px 127px; align-items: stretch; gap: 24px; border-top: 1px solid var(--mmt-border); background: white; box-shadow: 0 -5px 18px rgb(15 28 44 / 8%); padding: 24px; }
+.trip-checkout-bar { position: sticky; z-index: 45; right: -40px; bottom: 0; left: -40px; display: grid; min-height: 146px; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: stretch; gap: 24px; border-top: 1px solid var(--mmt-border); background: white; box-shadow: 0 -5px 18px rgb(15 28 44 / 8%); padding: 24px; }
 .trip-total { display: flex; flex-direction: column; justify-content: center; }
 .trip-total > span { font-size: 11px; font-weight: 700; text-transform: uppercase; }
 .trip-total > strong { margin-top: 4px; font-size: 28px; }

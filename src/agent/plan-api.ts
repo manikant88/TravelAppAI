@@ -118,7 +118,7 @@ function mapCoordinatorResult(
       trip: result.trip,
       projection: result.projection,
       message: planningMode === "deterministic_fallback"
-        ? "I've assembled and validated this trip deterministically from your selections."
+        ? "Your trip has been assembled from valid inventory and passed pricing, route, and schedule checks."
         : "Your trip plan is ready to review.",
       actionSummary: [
         `Used ${result.trace.finalBudget.searchCallsUsed} grounded inventory searches`,

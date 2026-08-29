@@ -64,7 +64,7 @@ export type DestinationDiscoveryApiResult =
     };
 
 export interface DestinationDiscoveryDependencies {
-  model: DestinationDiscoveryModel;
+  model?: DestinationDiscoveryModel;
   repository?: ReturnType<typeof createInventoryRepository>;
   discover?: typeof discoverDestinations;
 }
@@ -202,6 +202,7 @@ export async function runDestinationDiscovery(
 
   let recommendation: DestinationRecommendation;
   try {
+    if (!dependencies.model) throw new Error("No contextual ranker configured");
     const rawRecommendation = await dependencies.model.recommendDestinations({
       request,
       candidates: discovery.observation.candidates,

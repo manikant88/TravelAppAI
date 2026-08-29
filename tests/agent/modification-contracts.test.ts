@@ -23,6 +23,8 @@ describe("modification model contracts", () => {
       scopedModificationIntentSchema.parse({
         action: "add",
         targetDate: "2026-10-11",
+        count: null,
+        replaceDayActivities: null,
         preserveSelectionIds: ["selection:stay"],
         goal: "Add something cultural",
         unlockTarget: false,

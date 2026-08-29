@@ -249,22 +249,20 @@ describe("natural-language trip intake", () => {
     expect(result.missingRequired).not.toContain("dates");
   });
 
-  it("returns a typed retryable error when model extraction fails", async () => {
+  it("keeps explicit facts and returns deterministic missing requirements when model extraction fails", async () => {
     const failingModel: NaturalIntakeModel = {
       async extractTripIntent() {
         throw new Error("offline");
       },
     };
 
-    await expect(
-      runNaturalIntake(
+    const result = await runNaturalIntake(
         { message: "Plan a trip from Delhi", currentRequest: emptyRequest },
         { model: failingModel, repository: repository() },
-      ),
-    ).rejects.toMatchObject({
-      code: "MODEL_FAILURE",
-      status: 502,
-      retryable: true,
-    });
+      );
+
+    expect(result.request.origin).toBe("city:delhi");
+    expect(result.missingRequired).toEqual(["destination_intent", "dates", "travellers"]);
+    expect(result.message).toContain("Please add destination, dates, travellers");
   });
 });

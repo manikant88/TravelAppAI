@@ -48,7 +48,8 @@ import {
   searchTransfers,
   searchTransport,
 } from "@/inventory/service";
-import type { CoverageResult } from "@/inventory/contracts";
+import type { ActivityOffer, CoverageResult } from "@/inventory/contracts";
+import { createDeterministicModificationModel } from "@/agent/deterministic-modification";
 
 const modifyRequestSchema = z
   .object({
@@ -65,7 +66,7 @@ type SelectionModificationIntent = Extract<
 >;
 
 export interface ModifyDependencies {
-  model: ModificationPlannerModel;
+  model?: ModificationPlannerModel;
   repository?: ReturnType<typeof createInventoryRepository>;
   createId?: () => string;
 }
@@ -266,6 +267,7 @@ async function noAlternativeConflict(
   coverage: CoverageResult,
   context: Parameters<typeof projectTrip>[1],
   createId: () => string,
+  copy?: { message: string; summary: string },
 ): Promise<Extract<ModificationResult, { type: "conflict" }>> {
   const constraintIds =
     coverage.status === "eliminated_by_constraints" ? coverage.constraintIds.slice(0, 2) : [];
@@ -319,7 +321,7 @@ async function noAlternativeConflict(
       alternatives,
       emphasis: {
         recommendedId: alternatives[0]?.id,
-        summary: "No replacement preserves the current trip under the active scope.",
+        summary: copy?.summary ?? "No replacement preserves the current trip under the active scope.",
         supportingFactIds: [fact.id],
         suggestedFollowUpActionIds: proposals.length === 0 ? [keepAction.id] : undefined,
       },
@@ -329,11 +331,16 @@ async function noAlternativeConflict(
       allowedComparisonDimensions: ["alternative_coverage"],
       allowedFollowUpActions: [keepAction],
     }),
-    message:
+    message: copy?.message ?? (
       proposals.length > 0
         ? "No hard-valid replacement exists under the current constraints. You can review a constraint-relaxation proposal or keep the current selection."
-        : "No available alternative can replace this selection while keeping the rest of the trip valid.",
+        : "No available alternative can replace this selection while keeping the rest of the trip valid."
+    ),
   };
+}
+
+function asksForLowerPrice(goal: string): boolean {
+  return /\b(?:cheaper|less expensive|lower(?:-|\s+)(?:price|cost)|reduce (?:the )?(?:price|cost)|save money)\b/i.test(goal);
 }
 
 function replacementOperation(selection: Selection, nextOfferId: string): TripOperation {
@@ -700,6 +707,7 @@ async function runActivityAddition(
   model: ModificationPlannerModel,
   createId: () => string,
 ): Promise<ModificationResult> {
+  const requestedCount = intent.count ?? 1;
   const locationId = routeLocationForDate(intent.targetDate, trip);
   const result = await searchActivities(
     {
@@ -714,11 +722,104 @@ async function runActivityAddition(
     },
     repository,
   );
-  const selectedOfferIds = new Set(trip.selectedActivities.map((selection) => selection.offerId));
+  const activitiesOnTargetDay = trip.selectedActivities.filter(
+    (selection) => selection.date === intent.targetDate,
+  );
+  const selectedOfferIds = new Set(
+    trip.selectedActivities
+      .filter((selection) => !intent.replaceDayActivities || selection.date !== intent.targetDate)
+      .map((selection) => selection.offerId),
+  );
+  const availableOffers = result.results
+    .filter((offer) => !selectedOfferIds.has(offer.id))
+    .slice(0, 8);
+
+  if (requestedCount > 1) {
+    const bundles: ActivityOffer[][] = [];
+    const collectBundles = (start: number, selected: ActivityOffer[]) => {
+      if (selected.length === requestedCount) {
+        bundles.push(selected);
+        return;
+      }
+      for (let index = start; index < availableOffers.length; index += 1) {
+        collectBundles(index + 1, [...selected, availableOffers[index]!]);
+      }
+    };
+    collectBundles(0, []);
+    const evaluated = (
+      await Promise.all(bundles.slice(0, 24).map(async (offers) => {
+        const operations: TripOperation[] = [
+          ...(intent.replaceDayActivities
+            ? activitiesOnTargetDay.map((selection): TripOperation => ({
+                type: "remove_activity",
+                selectionId: selection.id,
+              }))
+            : []),
+          ...offers.map((offer): TripOperation => ({
+            type: "add_activity",
+            nextOfferId: offer.id,
+            travellerIds: trip.request.travellers.map((traveller) => traveller.id),
+          })),
+        ];
+        const proposal: TripProposal = {
+          id: `proposal:${createId()}`,
+          baseTripVersion: trip.version,
+          operations,
+        };
+        try {
+          const evaluation = await deriveProposalPreview(trip, proposal, projection, context);
+          const matchedThemes = new Set(
+            offers.flatMap((offer) => offer.activityFacts.tags).filter((tag) => intent.preferredThemes.includes(tag)),
+          );
+          return {
+            offers,
+            proposal,
+            evaluation,
+            themeScore: matchedThemes.size,
+            totalPrice: offers.reduce((sum, offer) => sum + offer.price.amount, 0),
+          };
+        } catch {
+          return undefined;
+        }
+      }))
+    ).flatMap((candidate) => candidate ? [candidate] : [])
+      .sort((left, right) =>
+        right.themeScore - left.themeScore || left.totalPrice - right.totalPrice,
+      );
+
+    const chosenBundle = evaluated[0];
+    if (chosenBundle) {
+      const names = chosenBundle.offers.map((offer) => offer.activityFacts.name);
+      const facts = chosenBundle.offers.flatMap((offer) =>
+        factsForInventoryOffer(offer, trip.request.travellers.length),
+      );
+      return {
+        type: "proposal",
+        proposal: chosenBundle.proposal,
+        preview: chosenBundle.evaluation.preview,
+        projection: chosenBundle.evaluation.projection,
+        block: changeProposalBlockSchema.parse({
+          type: "change_proposal",
+          proposalId: chosenBundle.proposal.id,
+          emphasis: {
+            recommendedId: chosenBundle.offers[0]!.id,
+            comparisonDimensions: ["activity_fit"],
+            supportingFactIds: facts.slice(0, 4).map((fact) => fact.id),
+          },
+        }),
+        factBundle: factBundleSchema.parse({
+          facts,
+          allowedComparisonDimensions: ["price", "timing", "duration", "activity_fit", "pace"],
+          allowedFollowUpActions: [],
+        }),
+        message: `I selected ${names.join(" and ")} for day ${Math.round((Date.parse(`${intent.targetDate}T12:00:00Z`) - Date.parse(`${trip.request.startDate}T12:00:00Z`)) / 86_400_000) + 1}. Both fit the requested themes and the validated schedule.`,
+      };
+    }
+  }
+
   const candidates = (
     await Promise.all(
-      result.results
-        .filter((offer) => !selectedOfferIds.has(offer.id))
+      availableOffers
         .slice(0, 6)
         .map(async (offer) => {
           const proposal: TripProposal = {
@@ -903,12 +1004,15 @@ export async function runModification(
       offerId: selection.offerId,
     }));
 
+    const deterministicModel = createDeterministicModificationModel();
     let rawIntent: ScopedModificationIntent;
     if (parsed.data.targetDate) {
       const supportedThemes = new Set(catalog.supportedThemes);
       rawIntent = {
         action: "add",
         targetDate: parsed.data.targetDate,
+        count: 1,
+        replaceDayActivities: false,
         preserveSelectionIds: allSelections(trip).map((selection) => selection.id),
         goal: parsed.data.message,
         unlockTarget: false,
@@ -917,15 +1021,28 @@ export async function runModification(
         ),
       };
     } else {
-      try {
-        rawIntent = await dependencies.model.interpretModification({
+      const modelInput = {
           message: parsed.data.message,
           trip,
           selections,
           supportedThemes: catalog.supportedThemes,
-        });
+        };
+      try {
+        // Explicit selection/category/budget changes are code-owned. Only an
+        // ambiguous message is offered to the model for semantic resolution.
+        rawIntent = await deterministicModel.interpretModification(modelInput);
       } catch {
-        throw new ModifyError("MODEL_FAILURE", "The planner could not interpret this change", 502, true);
+        try {
+          if (!dependencies.model) throw new Error("No ambiguity resolver configured");
+          rawIntent = await dependencies.model.interpretModification(modelInput);
+        } catch {
+          throw new ModifyError(
+            "INVALID_REQUEST",
+            "Tell me whether you want to change the travel, stay, or an activity.",
+            400,
+            false,
+          );
+        }
       }
     }
     const intent = validateIntent(rawIntent, trip, new Set(catalog.supportedThemes));
@@ -945,7 +1062,7 @@ export async function runModification(
         intent,
         repository,
         context,
-        dependencies.model,
+        dependencies.model ?? deterministicModel,
         createId,
       );
     }
@@ -1024,29 +1141,51 @@ export async function runModification(
       );
     }
 
+    const lowerPriceRequested = asksForLowerPrice(intent.goal);
+    const eligible = lowerPriceRequested
+      ? valid.filter((item) => item.candidate.evaluation.preview.budgetDelta.amount < 0)
+      : valid;
+
+    if (eligible.length === 0) {
+      const currentLabel = selectionLabel(selection, currentOffer);
+      const selectionNoun = selection.kind === "stay" ? "stay" : selection.kind === "travel" ? "travel option" : "activity";
+      return noAlternativeConflict(
+        trip,
+        projection,
+        selection,
+        alternativeSearch.coverage,
+        context,
+        createId,
+        {
+          summary: `${currentLabel} is already the lowest-priced valid option in the available inventory.`,
+          message: `I checked the valid alternatives, but none is cheaper than ${currentLabel}. I kept your current ${selectionNoun} and the rest of the trip unchanged.`,
+        },
+      );
+    }
+
     let recommendation = {
-      candidateId: valid[0].offer.id,
-      supportingFactIds: valid[0].facts
+      candidateId: eligible[0].offer.id,
+      supportingFactIds: eligible[0].facts
         .filter((fact) => ["total_price", "duration", "rating", "location"].includes(fact.dimension))
         .slice(0, 2)
         .map((fact) => fact.id),
-      comparisonDimensions: [allowedDimensions(valid[0].offer)[0]],
+      comparisonDimensions: [allowedDimensions(eligible[0].offer)[0]],
     };
     if (recommendation.supportingFactIds.length === 0) {
-      recommendation.supportingFactIds = [valid[0].facts[0].id];
+      recommendation.supportingFactIds = [eligible[0].facts[0].id];
     }
     try {
-      const modelRecommendation = await dependencies.model.recommendModification({
+      const modelRecommendation = await (dependencies.model ?? deterministicModel).recommendModification({
         intent,
         currentSelection: selections.find((item) => item.selectionId === selection.id)!,
-        candidates: valid.map((item) => ({ candidateId: item.offer.id, facts: item.facts })),
+        candidates: eligible.map((item) => ({ candidateId: item.offer.id, facts: item.facts })),
       });
       if (
         recommendationIsGrounded(
           modelRecommendation.candidateId,
           modelRecommendation.supportingFactIds,
           modelRecommendation.comparisonDimensions,
-          valid,
+          eligible,
         )
       ) {
         recommendation = modelRecommendation;
@@ -1054,9 +1193,9 @@ export async function runModification(
     } catch {
       // Deterministic recommendation above remains the safe semantic fallback.
     }
-    const chosen = valid.find((item) => item.offer.id === recommendation.candidateId)!;
+    const chosen = eligible.find((item) => item.offer.id === recommendation.candidateId)!;
     const factBundle = factBundleSchema.parse({
-      facts: valid.flatMap((item) => item.facts),
+      facts: eligible.flatMap((item) => item.facts),
       allowedComparisonDimensions: allowedDimensions(chosen.offer),
       allowedFollowUpActions: [],
     });
@@ -1065,7 +1204,7 @@ export async function runModification(
       ? "The validated total is unchanged."
       : `The validated trip total changes by ${delta > 0 ? "+" : "−"}₹${Math.abs(delta).toLocaleString("en-IN")}.`;
 
-    const options = valid.slice(0, 4).map((item) =>
+    const options = eligible.slice(0, 4).map((item) =>
       proposalOption(
         item.offer.id,
         item.candidate.proposal,
@@ -1092,7 +1231,9 @@ export async function runModification(
           },
         }),
         factBundle,
-        message: `I found ${options.length} hard-valid alternatives for ${selectionLabel(selection, currentOffer)}. Compare them before opening a proposal.`,
+        message: lowerPriceRequested
+          ? `I found ${options.length} cheaper valid stays that preserve your travel selections. Choose one to update the itinerary.`
+          : `I found ${options.length} hard-valid alternatives for ${selectionLabel(selection, currentOffer)}. Compare them before opening a proposal.`,
       };
     }
     return {

@@ -230,7 +230,7 @@ function generateMarket(definition: MarketDefinition): GeneratedInventory {
   seed.markets.push({ locationId: definition.id, region: definition.region, displayOrder: definition.displayOrder });
 
   const stops: StopDefinition[] = definition.stops ?? [{ id: definition.id, name: definition.name, latitudeE6: definition.latitudeE6, longitudeE6: definition.longitudeE6, tags: definition.tags, airport: definition.airport! }];
-  if (definition.stops) for (const stop of stops) seed.locations.push({ id: stop.id, type: "city", name: stop.name, countryCode: definition.countryCode, parentId: definition.id, timezone: definition.timezone, latitudeE6: stop.latitudeE6, longitudeE6: stop.longitudeE6, aliases: [stop.name], tags: stop.tags });
+  if (definition.stops) for (const [stopIndex, stop] of stops.entries()) seed.locations.push({ id: stop.id, type: "city", name: stop.name, countryCode: definition.countryCode, parentId: definition.id, timezone: definition.timezone, latitudeE6: stop.latitudeE6, longitudeE6: stop.longitudeE6, aliases: [stop.name], tags: [...stop.tags, `route_order:${stopIndex + 1}`] });
   for (const stop of stops) seed.locations.push({ id: stop.airport.id, type: "airport", name: stop.airport.name, countryCode: definition.countryCode, parentId: stop.id, timezone: definition.timezone, latitudeE6: stop.airport.latitudeE6, longitudeE6: stop.airport.longitudeE6, airportCode: stop.airport.code, aliases: [stop.airport.code, `${stop.name} Airport`].filter((alias): alias is string => Boolean(alias)), tags: ["arrival_hub", "origin_hub"] });
 
   const arrivalAirport = stops[0].airport;
@@ -344,7 +344,7 @@ function addCrossMarketTransport(seed: GeneratedInventory, definitions: MarketDe
         }),
       );
 
-      for (const [periodIndex, { fromPeriod, toPeriod, overlap }] of periods.entries()) {
+      for (const [periodIndex, { overlap }] of periods.entries()) {
         const periodKey = periods.length === 1 ? "" : `-p${periodIndex + 1}`;
         [
           { key: "morning", departureMinutes: 540, multiplier: 1, operator: "IndiGo Connect" },

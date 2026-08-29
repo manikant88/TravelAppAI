@@ -4,14 +4,17 @@ import { runNaturalIntake, NaturalIntakeError } from "@/agent/natural-intake";
 import { runModification, ModifyError } from "@/agent/modify";
 import { runExplanation, ExplainError } from "@/agent/explain";
 import {
-  createOpenAIConversationRouterModel,
   createOpenAIExplanationModel,
+  createOpenAICommunicationModel,
   createOpenAIModificationModel,
   createOpenAINaturalIntakeModel,
 } from "@/agent/model";
 import { tripRequestSchema } from "@/domain/request";
 import { tripStateSchema } from "@/domain/trip";
-import type { TripState } from "@/domain/model";
+import { createDeterministicModificationModel } from "@/agent/deterministic-modification";
+import { createInventoryRepository } from "@/inventory/repository";
+import { intakePresentation } from "@/agent/interaction-guidance";
+import { applyCommunication, composeCommunication } from "@/agent/communication";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,17 +59,6 @@ export async function POST(request: NextRequest) {
 
   const model = process.env.OPENAI_MODEL?.trim();
   const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!model || !apiKey) {
-    return NextResponse.json(
-      {
-        code: "CONFIGURATION_ERROR",
-        message: "The travel planner model is not configured",
-        retryable: false,
-      },
-      { status: 503 },
-    );
-  }
-
   try {
     if (parsed.data.phase === "draft") {
       const result = await runNaturalIntake(
@@ -74,17 +66,45 @@ export async function POST(request: NextRequest) {
           message: parsed.data.message,
           currentRequest: parsed.data.currentRequest,
         },
-        { model: createOpenAINaturalIntakeModel({ model, apiKey }) },
+        {
+          model: model && apiKey
+            ? createOpenAINaturalIntakeModel({ model, apiKey })
+            : undefined,
+        },
       );
-      return NextResponse.json({ kind: "intake", result });
+      const catalog = await createInventoryRepository().getPlannerCatalog();
+      const originSuggestions = catalog.locationGraph
+        .filter((location) => location.type === "city" && location.name)
+        .sort((left, right) => left.name!.localeCompare(right.name!))
+        .slice(0, 4)
+        .map((location) => ({ id: location.id, label: location.name! }));
+      const operationId = `intake:${Date.now()}`;
+      const presentation = intakePresentation(result, operationId, originSuggestions);
+      const communication = await composeCommunication(
+        {
+          intent: "clarify",
+          userMessage: parsed.data.message,
+          fallbackMessage: presentation.message,
+          facts: result.appliedFields.map((field) => `${field} was extracted from the user's message`),
+          events: presentation.events,
+          availableActions: presentation.actions,
+        },
+        model && apiKey
+          ? createOpenAICommunicationModel({ model, apiKey, timeoutMs: 2_500 })
+          : undefined,
+      );
+      return NextResponse.json({
+        kind: "intake",
+        result,
+        interaction: applyCommunication(presentation, communication),
+      });
     }
 
-    const intent = parsed.data.actionHint ?? (
-      await createOpenAIConversationRouterModel({ model, apiKey }).classify({
-        message: parsed.data.message,
-        trip: parsed.data.trip as TripState,
-      })
-    ).intent;
+    const deterministicIntent = /\b(?:why|explain|how much|what|when|where|reason|breakdown)\b/i.test(parsed.data.message) &&
+      !/\b(?:change|replace|remove|add|cheaper|lock|unlock|update|make)\b/i.test(parsed.data.message)
+      ? "explain_trip" as const
+      : "modify_trip" as const;
+    const intent = parsed.data.actionHint ?? deterministicIntent;
 
     if (intent === "explain_trip") {
       const result = await runExplanation(
@@ -93,7 +113,11 @@ export async function POST(request: NextRequest) {
           trip: parsed.data.trip,
           selectionId: parsed.data.selectionId,
         },
-        { model: createOpenAIExplanationModel({ model, apiKey }) },
+        {
+          model: model && apiKey
+            ? createOpenAIExplanationModel({ model, apiKey })
+            : undefined,
+        },
       );
       return NextResponse.json({ kind: "explanation", result });
     }
@@ -104,7 +128,11 @@ export async function POST(request: NextRequest) {
         trip: parsed.data.trip,
         targetDate: parsed.data.targetDate,
       },
-      { model: createOpenAIModificationModel({ model, apiKey }) },
+      {
+        model: model && apiKey
+          ? createOpenAIModificationModel({ model, apiKey })
+          : createDeterministicModificationModel(),
+      },
     );
     return NextResponse.json({ kind: "modification", result });
   } catch (error: unknown) {

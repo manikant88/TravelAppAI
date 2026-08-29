@@ -38,11 +38,17 @@ import type {
 import {
   initialWorkspaceState,
   workspaceReducer,
-  type StoredProposal,
 } from "@/state";
 import type { TripProposal } from "@/domain/proposals";
 import { cachedInventoryPost } from "@/ui/inventory-cache";
 import { PlanningAnimation } from "@/ui/planning-animation";
+import {
+  interactionPresentationSchema,
+  type GuidedAction,
+  type InteractionEvent,
+  type InteractionPresentation,
+} from "@/agent/interaction-contracts";
+import { completePlanningEvents, planningEvents } from "@/agent/interaction-guidance";
 
 type InventoryReadiness = "checking" | "ready" | "unavailable";
 type BriefFact = "origin" | "destination" | "dates" | "guests" | "preferences";
@@ -50,6 +56,21 @@ type InventoryPicker =
   | { kind: "travel"; selectionId: string; currentOfferId: string; offers: Array<TransportOffer | TransferOffer>; loading: boolean; error?: string }
   | { kind: "stay"; selectionId: string; currentOfferId: string; offers: StayOffer[]; loading: boolean; error?: string }
   | { kind: "activity"; date: string; selectionId?: string; currentOfferId?: string; offers: ActivityOffer[]; loading: boolean; error?: string };
+
+const MINIMUM_PLANNING_VISIBLE_MS = 5_000;
+const GUIDED_CHANGE_VISIBLE_MS = 6_000;
+
+function minimumPlanningVisibility(): Promise<void> {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, MINIMUM_PLANNING_VISIBLE_MS));
+}
+
+function waitForUi(milliseconds: number): Promise<void> {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function operationId(prefix: string): string {
+  return `${prefix}:${globalThis.crypto.randomUUID()}`;
+}
 
 function messageId(prefix: string): string {
   return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
@@ -227,27 +248,6 @@ function isNaturalIntakeResponse(value: unknown): value is NaturalIntakeResponse
       Array.isArray(item.issues) &&
       typeof item.message === "string",
   );
-}
-
-function readableFollowUpLabel(action: { id: string; label: string; type: string }): string {
-  const code = action.id.split(":").at(-1)?.toLocaleLowerCase("en");
-  const labels: Record<string, string> = {
-    route_gap: "Choose a route with complete coverage",
-    schedule_conflict: "Relax the daily schedule",
-    budget: "Increase the budget by ₹5,000",
-  };
-  return labels[code ?? ""] ?? action.label
-    .replace(/\broute_gap\b/gi, "route coverage")
-    .replace(/\bschedule_conflict\b/gi, "schedule requirements")
-    .replace(/\bconstraint:[^\s]+/gi, "this requirement");
-}
-
-function isProposalEvaluation(
-  value: unknown,
-): value is Pick<StoredProposal, "preview" | "projection"> {
-  if (!value || typeof value !== "object") return false;
-  const item = value as { preview?: unknown; projection?: unknown };
-  return Boolean(item.preview && item.projection);
 }
 
 interface LocationFieldProps {
@@ -743,9 +743,10 @@ function SelectionActions({
   );
 }
 
-function InventoryOptionPicker({ picker, busy, onSelect, onClose }: {
+function InventoryOptionPicker({ picker, busy, selectingOfferId, onSelect, onClose }: {
   picker: InventoryPicker;
   busy: boolean;
+  selectingOfferId?: string;
   onSelect(offer: TransportOffer | TransferOffer | StayOffer | ActivityOffer): void;
   onClose(): void;
 }) {
@@ -778,6 +779,7 @@ function InventoryOptionPicker({ picker, busy, onSelect, onClose }: {
           {!picker.loading && !picker.error && visibleOffers.length === 0 ? <p className="inventory-picker-status">No matching valid inventory is available.</p> : null}
           {visibleOffers.map((offer) => {
             const selected = offer.id === picker.currentOfferId;
+            const selecting = offer.id === selectingOfferId;
             const priceDelta = currentPrice === undefined ? offer.price.amount : offer.price.amount - currentPrice;
             return <article className={selected ? "drawer-option selected" : "drawer-option"} key={offer.id}>
               <div className="drawer-option-media">
@@ -793,7 +795,7 @@ function InventoryOptionPicker({ picker, busy, onSelect, onClose }: {
               <div className="drawer-option-action">
                 <strong>{selected ? "Current" : priceDelta === 0 ? "No price change" : `${priceDelta > 0 ? "+ " : "− "}${formatMoney(Math.abs(priceDelta))}`}</strong>
                 <small>{isStay(offer) ? "per room / night" : isTransfer(offer) ? "per vehicle" : "per person"}</small>
-                {selected ? <span>Selected</span> : <button type="button" disabled={busy} onClick={() => onSelect(offer)}>{busy ? "Selecting…" : "Select"}</button>}
+                {selected ? <span>Selected</span> : <button type="button" disabled={busy || Boolean(selectingOfferId)} onClick={() => onSelect(offer)}>{selecting ? "Selecting…" : "Select"}</button>}
               </div>
             </article>;
           })}
@@ -812,6 +814,8 @@ function Itinerary({
   onBrowseTravel,
   onBrowseStay,
   onBrowseActivity,
+  highlightedDay,
+  highlightedSelectionId,
 }: {
   trip: TripState;
   projection: TripProjection;
@@ -821,6 +825,8 @@ function Itinerary({
   onBrowseTravel(selectionId: string): void;
   onBrowseStay(selectionId: string): void;
   onBrowseActivity(date: string, selectionId?: string): void;
+  highlightedDay?: string;
+  highlightedSelectionId?: string;
 }) {
   const hydrated = new Map(projection.hydratedSelections.map((item) => [item.selectionId, item]));
   const selections = new Map(
@@ -830,7 +836,7 @@ function Itinerary({
     <section className="itinerary-section" aria-labelledby="itinerary-heading">
       <div className="timeline">
         {projection.itinerary.map((day) => (
-          <article className="timeline-day" id={dayAnchor(day.date)} key={day.date}>
+          <article className={highlightedDay === day.date ? "timeline-day agent-highlight" : "timeline-day"} id={dayAnchor(day.date)} key={day.date}>
             <div className="day-marker">
               <strong>{day.dayNumber}</strong>
               <i />
@@ -859,7 +865,7 @@ function Itinerary({
                       ? () => onBrowseStay(selection.id)
                       : () => onBrowseActivity(selection.date, selection.id);
                   return (
-                    <div className="itinerary-selection" key={event.id}>
+                    <div className={highlightedSelectionId === selection.id ? "itinerary-selection agent-highlight" : "itinerary-selection"} key={event.id}>
                       <SelectionActions
                         locked={selection.locked}
                         busy={busy}
@@ -893,6 +899,8 @@ function TripReview({
   onBrowseActivity,
   onBook,
   onRequestCallback,
+  highlightedDay,
+  highlightedSelectionId,
 }: {
   trip: TripState;
   projection: TripProjection;
@@ -904,6 +912,8 @@ function TripReview({
   onBrowseActivity(date: string, selectionId?: string): void;
   onBook(): void;
   onRequestCallback(): void;
+  highlightedDay?: string;
+  highlightedSelectionId?: string;
 }) {
   const [activeDay, setActiveDay] = useState(projection.itinerary[0]?.date ?? "");
 
@@ -936,11 +946,14 @@ function TripReview({
       <nav className="day-navigation" aria-label="Jump to itinerary day">
         {projection.itinerary.map((day) => <a className={activeDay === day.date ? "is-active" : undefined} key={day.date} href={`#${dayAnchor(day.date)}`} onClick={() => setActiveDay(day.date)}>Day {day.dayNumber}</a>)}
       </nav>
-      <Itinerary trip={trip} projection={projection} busy={busy} onToggleLock={onToggleLock} onAddActivity={onAddActivity} onBrowseTravel={onBrowseTravel} onBrowseStay={onBrowseStay} onBrowseActivity={onBrowseActivity} />
+      <Itinerary trip={trip} projection={projection} busy={busy} onToggleLock={onToggleLock} onAddActivity={onAddActivity} onBrowseTravel={onBrowseTravel} onBrowseStay={onBrowseStay} onBrowseActivity={onBrowseActivity} highlightedDay={highlightedDay} highlightedSelectionId={highlightedSelectionId} />
       <footer className="trip-checkout-bar">
         <div className="trip-total"><span>Trip total</span><strong>{formatMoney(projection.budget.total.amount)}</strong><small>Calculated from selected offers</small></div>
         <div className="checkout-divider" />
-        <dl className="checkout-breakdown"><div><dt>Travel</dt><dd>{formatMoney(projection.budget.breakdown.travel.amount)}</dd></div><div><dt>Stays</dt><dd>{formatMoney(projection.budget.breakdown.stays.amount)}</dd></div><div><dt>Activities</dt><dd>{formatMoney(projection.budget.breakdown.activities.amount)}</dd></div></dl>
+        <div className="trip-total"><span>Travel total</span><strong>{formatMoney(projection.budget.breakdown.travel.amount)}</strong><small>Calculated from selected offers</small></div>
+        <div className="trip-total"><span>Stays total</span><strong>{formatMoney(projection.budget.breakdown.stays.amount)}</strong><small>Calculated from selected offers</small></div>
+        <div className="trip-total"><span>Activities total</span><strong>{formatMoney(projection.budget.breakdown.activities.amount)}</strong><small>Calculated from selected offers</small></div>
+        {/* <dl className="checkout-breakdown"><div><dt>Travel</dt><dd>{formatMoney(projection.budget.breakdown.travel.amount)}</dd></div><div><dt>Stays</dt><dd>{formatMoney(projection.budget.breakdown.stays.amount)}</dd></div><div><dt>Activities</dt><dd>{formatMoney(projection.budget.breakdown.activities.amount)}</dd></div></dl> */}
         <div className="checkout-divider" />
         <div className="checkout-actions"><button type="button" onClick={onBook}>Book now</button><button type="button" onClick={onRequestCallback}>Request callback</button></div>
       </footer>
@@ -948,107 +961,47 @@ function TripReview({
   );
 }
 
-function StatusNotice({
-  state,
-  onRetry,
-  onSelectProposal,
-  onDismissAdaptiveOutcome,
-}: {
-  state: typeof initialWorkspaceState;
-  onRetry(): void;
-  onSelectProposal(proposalId: string): void;
-  onDismissAdaptiveOutcome(): void;
-}) {
-  if (state.error) {
-    return (
-      <div className="notice notice-error" role="alert">
-        <strong>Action paused</strong>
-        <p>{state.error.message}</p>
-        {state.error.retryable ? <button type="button" onClick={onRetry}>Try again</button> : null}
-      </div>
-    );
-  }
-  if (state.latestOutcome?.type === "clarification") {
-    return (
-      <div className="notice notice-question">
-        <span className="notice-icon">?</span>
-        <strong>One detail could improve the plan</strong>
-        <p>{state.latestOutcome.config.question}</p>
-        <small>Update the Trip Brief, or continue without it.</small>
-        <button type="button" onClick={onRetry}>Continue planning</button>
-      </div>
-    );
-  }
-  if (state.latestOutcome?.type === "conflict") {
-    const actions = state.latestOutcome.factBundle?.allowedFollowUpActions ?? [];
-    return (
-      <div className="constraint-message" role="status">
-        <p>{state.latestOutcome.message}</p>
-        {state.latestOutcome.validation?.issues.slice(0, 2).map((issue) => (
-          <small key={issue.id}>{issue.message}</small>
-        ))}
-        <small>Your trip details are unchanged. Choose an option to adjust the request and continue planning.</small>
-      </div>
-    );
-  }
-  if (state.destinationDiscovery?.type === "conflict") {
-    return (
-      <div className="notice notice-conflict" role="status">
-        <strong>No useful destination comparison yet</strong>
-        <p>{state.destinationDiscovery.message}</p>
-        <small>
-          Valid supported markets found: {state.destinationDiscovery.availableCandidateCount}. Your Trip Brief is unchanged.
-        </small>
-        <button type="button" onClick={onRetry}>Search again</button>
-      </div>
-    );
-  }
-  if (state.modificationConflict) {
-    const actions = new Map(
-      state.modificationConflict.factBundle.allowedFollowUpActions.map((action) => [action.id, action]),
-    );
-    return (
-      <div className="notice notice-conflict" role="status">
-        <strong>
-          {state.modificationConflict.code === "CONSTRAINT_CONFLICT"
-            ? "Review constraint change"
-            : "Constraints prevent this change"}
-        </strong>
-        <p>{state.modificationConflict.message}</p>
-        <div className="conflict-alternatives">
-          {state.modificationConflict.block.alternatives.map((alternative) => {
-            if (alternative.proposalId) {
-              const stored = state.proposals[alternative.proposalId];
-              return stored ? (
-                <button type="button" key={alternative.id} onClick={() => onSelectProposal(alternative.proposalId!)}>
-                  {stored.message}
-                </button>
-              ) : null;
-            }
-            const action = alternative.actionId ? actions.get(alternative.actionId) : undefined;
-            return action ? (
-              <button type="button" key={alternative.id} onClick={onDismissAdaptiveOutcome}>
-                {action.label}
-              </button>
-            ) : null;
-          })}
+function InteractionProgress({ events }: { events: InteractionEvent[] }) {
+  if (events.length === 0) return null;
+  return (
+    <div className="interaction-progress" role="status" aria-label="Planning progress">
+      {events.map((event) => (
+        <div className={`interaction-step is-${event.status}`} key={event.id}>
+          <i aria-hidden="true">{event.status === "completed" ? "✓" : event.status === "failed" ? "!" : ""}</i>
+          <span>{event.label}</span>
         </div>
-        <small>The current trip is unchanged. Any state-changing compromise still requires proposal approval.</small>
-      </div>
-    );
-  }
-  return null;
+      ))}
+    </div>
+  );
 }
 
 export default function TravelWorkspace() {
   const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState);
+  const request = state.itinerary.request;
+  const trip = state.itinerary.trip;
+  const projectionState = state.itinerary.projection;
   const [originLabel, setOriginLabel] = useState("");
   const [destinationLabel, setDestinationLabel] = useState("");
   const [interestText, setInterestText] = useState("");
   const [composerText, setComposerText] = useState("");
   const [inventoryPicker, setInventoryPicker] = useState<InventoryPicker>();
+  const [selectingOfferId, setSelectingOfferId] = useState<string>();
+  const [guidedChangeActive, setGuidedChangeActive] = useState(false);
+  const [highlightedDay, setHighlightedDay] = useState<string>();
+  const [showPlanningAnimation, setShowPlanningAnimation] = useState(false);
   const [editingFact, setEditingFact] = useState<BriefFact>();
   const factEditorRef = useRef<HTMLFormElement | null>(null);
+  const conversationRef = useRef<HTMLElement | null>(null);
+  const initialPlanningDeadlineRef = useRef<Promise<void> | undefined>(undefined);
+
+  function beginInitialPlanningAnimation(): Promise<void> {
+    if (trip) return Promise.resolve();
+    if (!initialPlanningDeadlineRef.current) {
+      setShowPlanningAnimation(true);
+      initialPlanningDeadlineRef.current = minimumPlanningVisibility();
+    }
+    return initialPlanningDeadlineRef.current;
+  }
   const [elapsed, setElapsed] = useState(0);
   const [inventoryReadiness, setInventoryReadiness] =
     useState<InventoryReadiness>("checking");
@@ -1070,12 +1023,20 @@ export default function TravelWorkspace() {
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, [editingFact]);
+  useEffect(() => {
+    const conversation = conversationRef.current;
+    if (!conversation) return;
+    const frame = window.requestAnimationFrame(() => {
+      conversation.scrollTo({ top: conversation.scrollHeight, behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [state.conversation.length, state.interaction]);
   const tripIdRef = useRef<string | null>(null);
   const inventoryWarmupStartedRef = useRef(false);
   const discovering = state.asyncStatus === "discovering";
   const planning = state.asyncStatus === "planning";
   const interpreting = state.asyncStatus === "interpreting";
-  const busy = interpreting || discovering || planning || state.asyncStatus === "modifying" || state.asyncStatus === "explaining" || state.asyncStatus === "applying";
+  const busy = interpreting || discovering || planning || guidedChangeActive || state.asyncStatus === "modifying" || state.asyncStatus === "explaining" || state.asyncStatus === "applying";
 
   const warmInventory = useCallback(async () => {
     setInventoryReadiness("checking");
@@ -1099,8 +1060,7 @@ export default function TravelWorkspace() {
   }, []);
 
   useEffect(() => {
-    const trip = state.committedTrip;
-    const projection = state.projection;
+    const projection = projectionState;
     if (!trip || !projection) return;
 
     for (const selection of trip.selectedStays) {
@@ -1124,7 +1084,7 @@ export default function TravelWorkspace() {
         constraints: trip.request.constraints,
       }).catch(() => undefined);
     }
-  }, [state.committedTrip, state.projection]);
+  }, [trip, projectionState]);
 
   useEffect(() => {
     if (inventoryWarmupStartedRef.current) return;
@@ -1142,36 +1102,28 @@ export default function TravelWorkspace() {
     return () => window.clearInterval(timer);
   }, [interpreting, discovering, planning]);
 
-  function replaceDraft(patch: Partial<TripRequest>) {
+  function updateRequest(patch: Partial<TripRequest>) {
     dispatch({
-      type: "replace_draft",
-      request: { ...state.draftRequest, ...patch },
+      type: "replace_request",
+      request: { ...request, ...patch },
     });
-  }
-
-  function setTravellerCount(count: number) {
-    const travellers: Traveller[] = Array.from({ length: count }, (_, index) => ({
-      id: `traveller:${index + 1}`,
-      type: "adult",
-    }));
-    replaceDraft({ travellers });
   }
 
   function setTravellerComposition(type: Traveller["type"], count: number) {
     const grouped = {
-      adult: state.draftRequest.travellers.filter((traveller) => traveller.type === "adult").length,
-      child: state.draftRequest.travellers.filter((traveller) => traveller.type === "child").length,
-      senior: state.draftRequest.travellers.filter((traveller) => traveller.type === "senior").length,
+      adult: request.travellers.filter((traveller) => traveller.type === "adult").length,
+      child: request.travellers.filter((traveller) => traveller.type === "child").length,
+      senior: request.travellers.filter((traveller) => traveller.type === "senior").length,
       [type]: count,
     };
     const travellers: Traveller[] = (["adult", "child", "senior"] as const).flatMap((travellerType) =>
       Array.from({ length: grouped[travellerType] }, () => ({ id: "", type: travellerType })),
     ).map((traveller, index) => ({ ...traveller, id: `traveller:${index + 1}` }));
-    replaceDraft({ travellers });
+    updateRequest({ travellers });
   }
 
   function setMaximumBudget(raw: string) {
-    const withoutBudget = state.draftRequest.constraints.filter(
+    const withoutBudget = request.constraints.filter(
       (constraint) => constraint.category !== "budget",
     );
     const amount = Number(raw);
@@ -1187,14 +1139,14 @@ export default function TravelWorkspace() {
             },
           ]
         : withoutBudget;
-    replaceDraft({ constraints });
+    updateRequest({ constraints });
   }
 
   function preparedRequest(): TripRequest {
     return {
-      ...state.draftRequest,
+      ...request,
       preferences: {
-        ...state.draftRequest.preferences,
+        ...request.preferences,
         interests: interestText
           .split(",")
           .map((value) => value.trim().toLocaleLowerCase("en"))
@@ -1206,7 +1158,8 @@ export default function TravelWorkspace() {
   async function submitNaturalIntake(event?: FormEvent, overrideMessage?: string) {
     event?.preventDefault();
     const message = (overrideMessage ?? composerText).trim();
-    if (!message || busy || state.committedTrip) return;
+    if (!message || busy || trip) return;
+    void beginInitialPlanningAnimation();
     setElapsed(0);
     dispatch({
       type: "intake_started",
@@ -1232,10 +1185,12 @@ export default function TravelWorkspace() {
           retryable: error?.retryable === true,
         };
       }
-      const result = (body as { kind?: unknown; result?: unknown })?.result;
+      const envelope = body as { kind?: unknown; result?: unknown; interaction?: unknown };
+      const result = envelope.result;
       if ((body as { kind?: unknown })?.kind !== "intake" || !isNaturalIntakeResponse(result)) {
         throw new Error("Invalid intake response");
       }
+      const interaction = interactionPresentationSchema.safeParse(envelope.interaction);
 
       setOriginLabel(result.resolvedLocations.origin?.label ?? originLabel);
       if (result.request.destination?.kind === "open") {
@@ -1248,8 +1203,9 @@ export default function TravelWorkspace() {
       dispatch({
         type: "intake_received",
         result,
-        entry: { id: messageId("assistant"), role: "assistant", text: result.message },
+        entry: { id: messageId("assistant"), role: "assistant", text: interaction.success ? interaction.data.message : result.message },
       });
+      if (interaction.success) dispatch({ type: "interaction_updated", interaction: interaction.data });
 
       // A complete brief is already validated by the intake contract. Continue
       // directly into the appropriate grounded workflow; clarification remains
@@ -1260,8 +1216,15 @@ export default function TravelWorkspace() {
         } else {
           await executeSpecifiedPlan(result.request, undefined, false);
         }
+      } else {
+        await initialPlanningDeadlineRef.current;
+        setShowPlanningAnimation(false);
+        initialPlanningDeadlineRef.current = undefined;
       }
     } catch (error: unknown) {
+      await initialPlanningDeadlineRef.current;
+      setShowPlanningAnimation(false);
+      initialPlanningDeadlineRef.current = undefined;
       const value = error as { code?: unknown; message?: unknown; retryable?: unknown };
       const workspaceError = {
         code: typeof value?.code === "string" ? value.code : "NETWORK_FAILURE",
@@ -1276,6 +1239,11 @@ export default function TravelWorkspace() {
         error: workspaceError,
         entry: { id: messageId("assistant"), role: "assistant", text: workspaceError.message },
       });
+      dispatch({ type: "interaction_updated", interaction: {
+        message: workspaceError.message,
+        events: [{ id: `${operationId("intake-error")}:event`, type: "constraint_detected", status: "failed", label: workspaceError.message }],
+        actions: workspaceError.retryable ? [{ id: operationId("retry"), type: "retry", label: "Try again" }] : [],
+      } });
     }
   }
 
@@ -1285,7 +1253,7 @@ export default function TravelWorkspace() {
     setDestinationLabel(item.destinationLabel);
     setInterestText(item.request.preferences.interests?.join(", ") ?? "");
     setComposerText("");
-    dispatch({ type: "replace_draft", request: item.request });
+    dispatch({ type: "replace_request", request: item.request });
     if (item.request.destination?.kind === "open") {
       await executeDestinationDiscovery(item.request, item.prompt);
       return;
@@ -1297,7 +1265,7 @@ export default function TravelWorkspace() {
     event?.preventDefault();
     const message = composerText.trim();
     if (!message || busy) return;
-    if (!state.committedTrip) {
+    if (!trip) {
       await submitNaturalIntake();
       return;
     }
@@ -1306,6 +1274,30 @@ export default function TravelWorkspace() {
       type: "conversation_started",
       entry: { id: messageId("user"), role: "user", text: message },
     });
+    setComposerText("");
+    const turnOperationId = operationId("turn");
+    const requestedDay = Number(message.match(/\bday\s+(\d+)\b/i)?.[1]);
+    const requestedDate = Number.isInteger(requestedDay) && requestedDay > 0
+      ? projectionState?.itinerary[requestedDay - 1]?.date
+      : undefined;
+    const requestedSelectionId = /\b(?:stay|hotel|room)\b/i.test(message)
+      ? trip.selectedStays[0]?.id
+      : /\b(?:flight|travel|transfer|route)\b/i.test(message)
+        ? trip.selectedTravel[0]?.id
+        : /\bactivit(?:y|ies)\b/i.test(message)
+          ? trip.selectedActivities.find((selection) => !requestedDate || selection.date === requestedDate)?.id
+          : undefined;
+    const turnTarget = requestedDate
+      ? { type: "day" as const, date: requestedDate }
+      : requestedSelectionId
+        ? { type: "selection" as const, selectionId: requestedSelectionId }
+        : undefined;
+    dispatch({ type: "interaction_updated", interaction: {
+      message: "I’m interpreting that request against the current itinerary.",
+      events: [{ id: `${turnOperationId}:understand`, type: "fact_recognized", status: "active", label: "Understanding the requested change", target: turnTarget }],
+      actions: [],
+      focus: turnTarget ? { operationId: turnOperationId, target: turnTarget, phase: "understanding" } : undefined,
+    } });
     try {
       const response = await fetch("/api/agent/conversation", {
         method: "POST",
@@ -1313,7 +1305,7 @@ export default function TravelWorkspace() {
         body: JSON.stringify({
           phase: "committed",
           message,
-          trip: state.committedTrip,
+          trip: trip,
         }),
       });
       const body: unknown = await response.json().catch(() => undefined);
@@ -1334,6 +1326,11 @@ export default function TravelWorkspace() {
           result: envelope.result,
           entry: { id: messageId("assistant"), role: "assistant", text: envelope.result.message },
         });
+        dispatch({ type: "interaction_updated", interaction: {
+          message: envelope.result.message,
+          events: [{ id: `${turnOperationId}:complete`, type: "operation_completed", status: "completed", label: "Explained from the current validated itinerary", target: turnTarget }],
+          actions: [],
+        } });
         return;
       }
       if (envelope.kind === "modification" && isModificationResult(envelope.result)) {
@@ -1368,12 +1365,23 @@ export default function TravelWorkspace() {
     userText?: string,
     appendUserEntry = true,
   ) {
+    const minimumVisibility = beginInitialPlanningAnimation();
     setElapsed(0);
     dispatch({
       type: "planning_started",
       entry: appendUserEntry && userText
         ? { id: messageId("user"), role: "user", text: userText }
         : undefined,
+    });
+    const activeOperationId = operationId("plan");
+    const progress = planningEvents(activeOperationId, request);
+    dispatch({
+      type: "interaction_updated",
+      interaction: {
+        message: "I’m checking grounded travel, stay, and activity options for this trip.",
+        events: progress,
+        actions: [],
+      },
     });
     tripIdRef.current ??= `trip:${globalThis.crypto.randomUUID()}`;
 
@@ -1400,35 +1408,28 @@ export default function TravelWorkspace() {
         };
       }
       if (!isPlanResult(body)) throw new Error("Invalid PLAN response");
+      await minimumVisibility;
+      setShowPlanningAnimation(false);
+      dispatch({
+        type: "interaction_updated",
+        interaction: {
+          message: body.message,
+          events: completePlanningEvents(progress),
+          actions: [],
+        },
+      });
       if (body.type === "trip_ready") {
-        if (state.committedTrip && state.projection) {
+        if (trip && projectionState) {
           const proposal: TripProposal = {
             id: `proposal:${globalThis.crypto.randomUUID()}`,
-            baseTripVersion: state.committedTrip.version,
+            baseTripVersion: trip.version,
             operations: [{ type: "replace_trip_plan", nextTrip: body.trip }],
           };
-          const previewResponse = await fetch("/api/trip/proposals/preview", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ trip: state.committedTrip, proposal }),
-          });
-          const previewBody: unknown = await previewResponse.json().catch(() => undefined);
-          if (!previewResponse.ok) throw previewBody;
-          if (!isProposalEvaluation(previewBody)) throw new Error("Invalid updated-plan preview");
-          dispatch({
-            type: "proposal_previewed",
-            stored: {
-              proposal,
-              preview: previewBody.preview,
-              projection: previewBody.projection,
-              message: "I rebuilt the trip with your edited details. Review the validated update before replacing the current plan.",
-            },
-            entry: {
-              id: messageId("assistant"),
-              role: "assistant",
-              text: "I rebuilt the trip with your edited details. Your current trip remains unchanged until you approve the update.",
-            },
-          });
+          await applyDirectProposal(
+            proposal,
+            "Updated the itinerary from your trip details. Locked selections were preserved.",
+            true,
+          );
           return;
         }
         dispatch({
@@ -1442,8 +1443,16 @@ export default function TravelWorkspace() {
           outcome: body,
           entry: { id: messageId("assistant"), role: "assistant", text: body.message },
         });
+        dispatch({ type: "interaction_updated", interaction: {
+          message: body.message,
+          events: [{ id: `${activeOperationId}:constraint`, type: "constraint_detected", status: "completed", label: body.message }],
+          actions: planningRecoveryActions(body),
+        } });
       }
     } catch (error: unknown) {
+      await minimumVisibility;
+      setShowPlanningAnimation(false);
+      if (!trip) initialPlanningDeadlineRef.current = undefined;
       const value = error as { code?: unknown; message?: unknown; retryable?: unknown };
       const workspaceError = {
         code: typeof value?.code === "string" ? value.code : "NETWORK_FAILURE",
@@ -1462,6 +1471,11 @@ export default function TravelWorkspace() {
           text: workspaceError.message,
         },
       });
+      dispatch({ type: "interaction_updated", interaction: {
+        message: workspaceError.message,
+        events: [{ id: `${operationId("plan-error")}:event`, type: "constraint_detected", status: "failed", label: workspaceError.message }],
+        actions: workspaceError.retryable ? [{ id: operationId("retry"), type: "retry", label: "Try again" }] : [],
+      } });
     }
   }
 
@@ -1470,6 +1484,7 @@ export default function TravelWorkspace() {
     userText?: string,
     appendUserEntry = true,
   ) {
+    const minimumVisibility = beginInitialPlanningAnimation();
     setElapsed(0);
     dispatch({
       type: "discovery_started",
@@ -1478,6 +1493,16 @@ export default function TravelWorkspace() {
         role: "user",
         text: userText ?? `Find grounded destination options from ${originLabel} for ${request.startDate} to ${request.endDate}.`,
       } : undefined,
+    });
+    const activeOperationId = operationId("discover");
+    const progress = planningEvents(activeOperationId, request);
+    dispatch({
+      type: "interaction_updated",
+      interaction: {
+        message: "I’m comparing supported destinations against your route, dates, and budget.",
+        events: progress,
+        actions: [],
+      },
     });
     try {
       const response = await fetch("/api/agent/discover", {
@@ -1498,12 +1523,32 @@ export default function TravelWorkspace() {
         };
       }
       if (!isDestinationDiscoveryResult(body)) throw new Error("Invalid discovery response");
+      await minimumVisibility;
+      setShowPlanningAnimation(false);
+      dispatch({
+        type: "interaction_updated",
+        interaction: {
+          message: body.message,
+          events: completePlanningEvents(progress),
+          actions: [],
+        },
+      });
       dispatch({
         type: "discovery_received",
         result: body,
         entry: { id: messageId("assistant"), role: "assistant", text: body.message },
       });
+      if (body.type === "conflict") {
+        dispatch({ type: "interaction_updated", interaction: {
+          message: body.message,
+          events: [{ id: `${activeOperationId}:constraint`, type: "constraint_detected", status: "completed", label: body.message }],
+          actions: [{ id: `${activeOperationId}:retry`, type: "retry", label: "Search again" }],
+        } });
+      }
     } catch (error: unknown) {
+      await minimumVisibility;
+      setShowPlanningAnimation(false);
+      if (!trip) initialPlanningDeadlineRef.current = undefined;
       reportAsyncError(
         error,
         "Destination discovery is temporarily unavailable. Your Trip Brief is unchanged.",
@@ -1517,6 +1562,7 @@ export default function TravelWorkspace() {
     const request = preparedRequest();
     const problem = validateBrief(request);
     if (problem) {
+      const guidance = nextBriefGuidance(request);
       dispatch({
         type: "planning_failed",
         error: {
@@ -1524,12 +1570,13 @@ export default function TravelWorkspace() {
           message: problem,
           retryable: false,
         },
-        entry: { id: messageId("assistant"), role: "assistant", text: problem },
+        entry: { id: messageId("assistant"), role: "assistant", text: guidance?.message ?? problem },
       });
+      if (guidance) dispatch({ type: "interaction_updated", interaction: guidance });
       return;
     }
 
-    dispatch({ type: "replace_draft", request });
+    dispatch({ type: "replace_request", request });
     if (request.destination?.kind === "open") {
       await executeDestinationDiscovery(request);
       return;
@@ -1540,52 +1587,123 @@ export default function TravelWorkspace() {
     );
   }
 
-  async function handlePlanningFollowUp(action: { id: string; label: string; type: string }) {
+  function nextBriefGuidance(nextRequest: TripRequest): InteractionPresentation | undefined {
+    const nextOperationId = operationId("clarify");
+    if (!nextRequest.origin) return {
+      message: "Where would you like to begin your journey?",
+      events: [{ id: `${nextOperationId}:origin`, type: "fact_missing", status: "active", label: "Starting city needed", target: { type: "trip_field", field: "origin" } }],
+      actions: [],
+      focus: { operationId: nextOperationId, target: { type: "trip_field", field: "origin" }, phase: "understanding" },
+    };
+    if (!nextRequest.destination) return {
+      message: "Do you have a destination in mind, or should I compare supported places?",
+      events: [{ id: `${nextOperationId}:destination`, type: "fact_missing", status: "active", label: "Destination preference needed", target: { type: "trip_field", field: "destination" } }],
+      actions: [{ id: `${nextOperationId}:open`, type: "set_open_destination", label: "Help me choose" }],
+      focus: { operationId: nextOperationId, target: { type: "trip_field", field: "destination" }, phase: "understanding" },
+    };
+    if (!nextRequest.startDate || !nextRequest.endDate) return {
+      message: "When would you like to travel?",
+      events: [{ id: `${nextOperationId}:dates`, type: "fact_missing", status: "active", label: "Travel dates needed", target: { type: "trip_field", field: "dates" } }],
+      actions: (state.latestIntake?.suggestedDateRanges ?? []).map((range) => ({ id: `${nextOperationId}:${range.id}`, type: "set_dates" as const, startDate: range.startDate, endDate: range.endDate, label: range.label })),
+      focus: { operationId: nextOperationId, target: { type: "trip_field", field: "dates" }, phase: "understanding" },
+    };
+    if (nextRequest.travellers.length === 0) return {
+      message: "Who will be travelling?",
+      events: [{ id: `${nextOperationId}:travellers`, type: "fact_missing", status: "active", label: "Traveller count needed", target: { type: "trip_field", field: "travellers" } }],
+      actions: [
+        { id: `${nextOperationId}:solo`, type: "set_travellers", adults: 1, children: 0, seniors: 0, label: "Just me" },
+        { id: `${nextOperationId}:two`, type: "set_travellers", adults: 2, children: 0, seniors: 0, label: "2 adults" },
+        { id: `${nextOperationId}:family`, type: "set_travellers", adults: 2, children: 1, seniors: 0, label: "2 adults + 1 child" },
+      ],
+      focus: { operationId: nextOperationId, target: { type: "trip_field", field: "travellers" }, phase: "understanding" },
+    };
+    return undefined;
+  }
+
+  function planningRecoveryActions(outcome: Exclude<SpecifiedPlanApiResult, { type: "trip_ready" }>): GuidedAction[] {
+    if (outcome.type === "clarification") {
+      return [{ id: operationId("continue"), type: "submit_plan", label: "Continue with current details" }];
+    }
+    return (outcome.factBundle?.allowedFollowUpActions ?? []).slice(0, 4).flatMap((action): GuidedAction[] => {
+      if (action.type === "retry") return [{ id: action.id, type: "retry", label: action.label }];
+      if (action.type === "change_scope") return [{ id: action.id, type: "set_open_destination", label: action.label }];
+      if (action.type === "keep_current") return [{ id: action.id, type: "keep_current", label: action.label }];
+      if (action.type === "adjust_constraint") {
+        const constraintId = action.id.replace(/^action:adjust:/, "");
+        const constraint = request.constraints.find((item) => item.id === constraintId);
+        if (constraint?.category === "budget" && constraint.value.maxTotal) {
+          return [{ id: action.id, type: "set_budget", amount: constraint.value.maxTotal.amount + 5_000, label: action.label }];
+        }
+        return [{ id: action.id, type: "remove_constraint", constraintId, label: action.label }];
+      }
+      return [];
+    });
+  }
+
+  async function handleGuidedAction(action: GuidedAction) {
     if (busy) return;
-    if (action.type === "retry") {
+    if (action.type === "retry" || action.type === "submit_plan") {
       await submitPlan();
       return;
     }
-    const nextRequest: TripRequest = {
-      ...state.draftRequest,
-      constraints: [...state.draftRequest.constraints],
-    };
-    if (action.type === "adjust_constraint") {
-      const constraintId = action.id.replace(/^action:adjust:/, "");
-      const constraint = nextRequest.constraints.find((item) => item.id === constraintId);
-      if (constraint?.category === "budget" && constraint.value.maxTotal) {
-        const nextAmount = constraint.value.maxTotal.amount + 5_000;
-        nextRequest.constraints = nextRequest.constraints.map((item): Constraint => {
-          if (item.id !== constraintId || item.category !== "budget") return item;
-          return { ...item, value: { ...item.value, maxTotal: { amount: nextAmount, currency: "INR" } } };
-        });
+    dispatch({ type: "conversation_entry_added", entry: { id: messageId("user"), role: "user", text: action.label } });
+    if (action.type === "keep_current") {
+      dispatch({ type: "interaction_cleared" });
+      return;
+    }
+    if (action.type === "apply_proposal") {
+      const stored = state.proposals[action.proposalId];
+      if (stored) await runGuidedProposal(stored.proposal, stored.projection, stored.message);
+      return;
+    }
+    const nextRequest: TripRequest = { ...request, constraints: [...request.constraints] };
+    if (action.type === "set_location") {
+      if (action.field === "origin") {
+        nextRequest.origin = action.locationId;
+        setOriginLabel(action.label);
       } else {
-        nextRequest.constraints = nextRequest.constraints.filter((item) => item.id !== constraintId);
+        nextRequest.destination = { kind: "specified", locationId: action.locationId };
+        setDestinationLabel(action.label);
       }
-    } else if (action.type === "change_scope") {
-      // Scope changes remain deterministic: open destination discovery will
-      // choose a supported market with complete coverage.
+    } else if (action.type === "set_open_destination") {
       nextRequest.destination = { kind: "open" };
+      setDestinationLabel("");
+    } else if (action.type === "set_dates") {
+      nextRequest.startDate = action.startDate;
+      nextRequest.endDate = action.endDate;
+    } else if (action.type === "set_travellers") {
+      nextRequest.travellers = [
+        ...Array.from({ length: action.adults }, (_, index): Traveller => ({ id: `traveller:adult:${index + 1}`, type: "adult" })),
+        ...Array.from({ length: action.children }, (_, index): Traveller => ({ id: `traveller:child:${index + 1}`, type: "child" })),
+        ...Array.from({ length: action.seniors }, (_, index): Traveller => ({ id: `traveller:senior:${index + 1}`, type: "senior" })),
+      ];
+    } else if (action.type === "set_budget") {
+      nextRequest.constraints = nextRequest.constraints.filter((constraint) => constraint.category !== "budget");
+      nextRequest.constraints.push({ id: "constraint:budget:all", category: "budget", priority: "hard", value: { maxTotal: { amount: action.amount, currency: "INR" } } });
+    } else if (action.type === "remove_constraint") {
+      nextRequest.constraints = nextRequest.constraints.filter((constraint) => constraint.id !== action.constraintId);
     }
-    dispatch({ type: "replace_draft", request: nextRequest });
-    setComposerText("");
-    if (nextRequest.destination?.kind === "open") {
-      await executeDestinationDiscovery(nextRequest, action.label);
-    } else {
-      await executeSpecifiedPlan(nextRequest, action.label);
+    dispatch({ type: "replace_request", request: nextRequest });
+    const guidance = nextBriefGuidance(nextRequest);
+    if (guidance) {
+      dispatch({ type: "interaction_updated", interaction: guidance });
+      dispatch({ type: "conversation_entry_added", entry: { id: messageId("assistant"), role: "assistant", text: guidance.message } });
+      return;
     }
+    if (nextRequest.destination?.kind === "open") await executeDestinationDiscovery(nextRequest, action.label, false);
+    else await executeSpecifiedPlan(nextRequest, action.label, false);
   }
 
   async function selectDestination(option: DestinationOption) {
     if (busy) return;
-    const request: TripRequest = {
-      ...state.draftRequest,
+    const selectedRequest: TripRequest = {
+      ...request,
       destination: { kind: "specified", locationId: option.id },
     };
     setDestinationLabel(option.name);
-    dispatch({ type: "destination_selected", request });
+    dispatch({ type: "destination_selected", request: selectedRequest });
     await executeSpecifiedPlan(
-      request,
+      selectedRequest,
       `Continue with ${option.name} and build the detailed validated trip.`,
     );
   }
@@ -1606,66 +1724,126 @@ export default function TravelWorkspace() {
         text: workspaceError.message,
       },
     });
+    dispatch({
+      type: "interaction_updated",
+      interaction: {
+        message: workspaceError.message,
+        events: [{
+          id: `${operationId("recover")}:event`,
+          type: "constraint_detected",
+          status: "failed",
+          label: workspaceError.message,
+        }],
+        actions: workspaceError.retryable
+          ? [{ id: operationId("retry"), type: "retry", label: "Try again" }]
+          : [],
+      },
+    });
   }
 
-  async function requestModification(message: string, targetDate?: string) {
-    const trip = state.committedTrip;
-    if (!trip || !message || busy) return;
+  async function runGuidedProposal(
+    proposal: TripProposal,
+    nextProjection: TripProjection,
+    finalMessage: string,
+  ) {
+    if (!trip) return;
+    const activeOperationId = operationId("modify");
+    const replacement = proposal.operations.find((operation) => "selectionId" in operation);
+    const nextOfferId = proposal.operations.find((operation) => "nextOfferId" in operation);
+    const nextOffer = nextOfferId && "nextOfferId" in nextOfferId
+      ? nextProjection.hydratedSelections.find((item) => item.offer.id === nextOfferId.nextOfferId)?.offer
+      : undefined;
+    const targetDate = nextOffer && isActivity(nextOffer)
+      ? nextOffer.startsAt.slice(0, 10)
+      : nextOffer && isStay(nextOffer)
+        ? nextOffer.checkIn
+        : undefined;
+    const target = replacement && "selectionId" in replacement
+      ? { type: "selection" as const, selectionId: replacement.selectionId }
+      : targetDate
+        ? { type: "day" as const, date: targetDate }
+        : { type: "trip_total" as const };
+    const category = proposal.operations.some((operation) => operation.type.includes("stay"))
+      ? "stay"
+      : proposal.operations.some((operation) => operation.type.includes("activity"))
+        ? "activity"
+        : proposal.operations.some((operation) => operation.type.includes("travel"))
+          ? "travel"
+          : "itinerary";
+    const progress: InteractionEvent[] = [
+      { id: `${activeOperationId}:understand`, type: "fact_recognized", status: "completed", label: `Understood the ${category} change`, target },
+      { id: `${activeOperationId}:search`, type: "inventory_search_started", status: "active", label: `Checking compatible ${category} options`, target },
+      { id: `${activeOperationId}:select`, type: "candidate_selected", status: "pending", label: `Selecting the best validated ${category} option`, target },
+      { id: `${activeOperationId}:validate`, type: "trip_validated", status: "pending", label: "Recalculating and validating the itinerary", target: { type: "trip_total" } },
+    ];
+    setGuidedChangeActive(true);
     dispatch({
-      type: "modification_started",
-      entry: { id: messageId("user"), role: "user", text: message },
+      type: "interaction_updated",
+      interaction: {
+        message: `I’m checking a grounded ${category} change while preserving the rest of your itinerary.`,
+        events: progress,
+        actions: [],
+        focus: { operationId: activeOperationId, target, phase: "searching" },
+      },
     });
+    if (targetDate) setHighlightedDay(targetDate);
     try {
-      const response = await fetch("/api/agent/conversation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phase: "committed", message, trip, targetDate, actionHint: "modify_trip" }),
-      });
-      const body: unknown = await response.json().catch(() => undefined);
-      if (!response.ok) {
-        const error = body as { code?: unknown; message?: unknown; retryable?: unknown };
-        throw {
-          code: typeof error?.code === "string" ? error.code : "MODIFICATION_FAILED",
-          message: typeof error?.message === "string" ? error.message : "The change could not be prepared.",
-          retryable: error?.retryable === true,
-        };
-      }
-      const result = (body as { kind?: unknown; result?: unknown })?.result;
-      if ((body as { kind?: unknown })?.kind !== "modification" || !isModificationResult(result)) throw new Error("Invalid MODIFY response");
-      setComposerText("");
-      handleModificationResult(result);
-    } catch (error: unknown) {
-      reportAsyncError(error, "The planner is temporarily unable to prepare this change. Your trip is unchanged.");
+      await waitForUi(GUIDED_CHANGE_VISIBLE_MS / 2);
+      dispatch({ type: "interaction_updated", interaction: {
+        message: `I found a compatible ${category} option and I’m validating the updated total.`,
+        events: progress.map((item, index) => ({ ...item, status: index < 2 ? "completed" : index === 2 ? "active" : "pending" })),
+        actions: [],
+        focus: { operationId: activeOperationId, target, phase: "updating" },
+      } });
+      await waitForUi(GUIDED_CHANGE_VISIBLE_MS / 2);
+      await applyDirectProposal(proposal, finalMessage, true);
+      dispatch({ type: "interaction_updated", interaction: {
+        message: finalMessage,
+        events: progress.map((item) => ({ ...item, status: "completed" })),
+        actions: [],
+        focus: { operationId: activeOperationId, target, phase: "completed" },
+      } });
+      window.setTimeout(() => setHighlightedDay(undefined), 2_200);
+    } finally {
+      setGuidedChangeActive(false);
     }
   }
 
   function handleModificationResult(result: ModificationResult) {
-    const trip = state.committedTrip;
     if (!trip) return;
     if (result.type === "proposal") {
-      void applyDirectProposal(result.proposal, result.message);
+      void runGuidedProposal(result.proposal, result.projection, result.message);
       return;
     }
     if (result.type === "alternatives") {
-      const selectionId = result.options[0]?.preview.changedSelectionIds[0];
-      const selection = [...trip.selectedTravel, ...trip.selectedStays, ...trip.selectedActivities].find((item) => item.id === selectionId);
-      const current = state.projection?.hydratedSelections.find((item) => item.selectionId === selectionId)?.offer;
-      const candidates = result.options.flatMap((option) => option.projection.hydratedSelections.filter((item) => item.selectionId === selectionId).map((item) => item.offer));
-      if (selection && current && selection.kind === "travel") setInventoryPicker({ kind: "travel", selectionId: selection.id, currentOfferId: selection.offerId, offers: [current as TransportOffer | TransferOffer, ...candidates.filter((offer): offer is TransportOffer | TransferOffer => isTransport(offer) || isTransfer(offer))], loading: false });
-      else if (selection && current && selection.kind === "stay" && isStay(current)) setInventoryPicker({ kind: "stay", selectionId: selection.id, currentOfferId: selection.offerId, offers: [current, ...candidates.filter(isStay)], loading: false });
-      else if (selection && selection.kind === "activity") setInventoryPicker({ kind: "activity", date: selection.date, selectionId: selection.id, currentOfferId: selection.offerId, offers: [...(current && isActivity(current) ? [current] : []), ...candidates.filter(isActivity)], loading: false });
+      const preferredOptionId = result.block.emphasis?.recommendedId;
+      const chosen = result.options.find((option) => option.optionId === preferredOptionId)
+        ?? result.options[0];
+      if (chosen) void runGuidedProposal(chosen.proposal, chosen.projection, chosen.message);
       return;
     }
     dispatch({ type: "modification_conflict", result, entry: { id: messageId("assistant"), role: "assistant", text: result.message } });
+    const conflictOperationId = operationId("modify-conflict");
+    dispatch({ type: "interaction_updated", interaction: {
+      message: result.message,
+      events: [{ id: `${conflictOperationId}:constraint`, type: "constraint_detected", status: "completed", label: result.message }],
+      actions: [
+        ...result.proposals.slice(0, 3).map((option) => ({ id: `${conflictOperationId}:${option.proposal.id}`, type: "apply_proposal" as const, proposalId: option.proposal.id, label: option.message })),
+        { id: `${conflictOperationId}:keep`, type: "keep_current" as const, label: "Keep the current trip" },
+      ],
+    } });
   }
 
   async function addActivityToDay(date: string) {
     await browseActivities(date);
   }
 
-  async function applyDirectProposal(proposal: TripProposal, message: string) {
-    const trip = state.committedTrip;
-    if (!trip || busy) return;
+  async function applyDirectProposal(
+    proposal: TripProposal,
+    message: string,
+    allowWhilePlanning = false,
+  ) {
+    if (!trip || (busy && !allowWhilePlanning)) return;
     dispatch({ type: "proposal_apply_started" });
     try {
       const response = await fetch("/api/trip/proposals/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trip, proposal }) });
@@ -1681,9 +1859,8 @@ export default function TravelWorkspace() {
   }
 
   async function browseTravel(selectionId: string) {
-    const trip = state.committedTrip;
     const selected = trip?.selectedTravel.find((item) => item.id === selectionId);
-    const current = state.projection?.hydratedSelections.find((item) => item.selectionId === selectionId)?.offer;
+    const current = projectionState?.hydratedSelections.find((item) => item.selectionId === selectionId)?.offer;
     if (!trip || !selected || !current || busy) return;
     setInventoryPicker({ kind: "travel", selectionId, currentOfferId: selected.offerId, offers: [current as TransportOffer | TransferOffer], loading: true });
     try {
@@ -1700,9 +1877,8 @@ export default function TravelWorkspace() {
   }
 
   async function browseStay(selectionId: string) {
-    const trip = state.committedTrip;
     const selected = trip?.selectedStays.find((item) => item.id === selectionId);
-    const current = state.projection?.hydratedSelections.find((item) => item.selectionId === selectionId)?.offer;
+    const current = projectionState?.hydratedSelections.find((item) => item.selectionId === selectionId)?.offer;
     if (!trip || !selected || !current || !isStay(current) || busy) return;
     setInventoryPicker({ kind: "stay", selectionId, currentOfferId: selected.offerId, offers: [current], loading: true });
     try {
@@ -1714,10 +1890,9 @@ export default function TravelWorkspace() {
   }
 
   async function browseActivities(date: string, selectionId?: string) {
-    const trip = state.committedTrip;
-    const day = state.projection?.itinerary.find((item) => item.date === date);
+    const day = projectionState?.itinerary.find((item) => item.date === date);
     if (!trip || !day || busy) return;
-    const current = selectionId ? state.projection?.hydratedSelections.find((item) => item.selectionId === selectionId)?.offer : undefined;
+    const current = selectionId ? projectionState?.hydratedSelections.find((item) => item.selectionId === selectionId)?.offer : undefined;
     const currentActivity = current && isActivity(current) ? current : undefined;
     const currentOfferId = selectionId ? trip.selectedActivities.find((item) => item.id === selectionId)?.offerId : undefined;
     setInventoryPicker({ kind: "activity", date, selectionId, currentOfferId, offers: currentActivity ? [currentActivity] : [], loading: true });
@@ -1729,8 +1904,7 @@ export default function TravelWorkspace() {
     }
   }
 
-  function selectInventoryOffer(offer: TransportOffer | TransferOffer | StayOffer | ActivityOffer) {
-    const trip = state.committedTrip;
+  async function selectInventoryOffer(offer: TransportOffer | TransferOffer | StayOffer | ActivityOffer) {
     const picker = inventoryPicker;
     if (!trip || !picker) return;
     if (offer.id === picker.currentOfferId) return;
@@ -1746,52 +1920,15 @@ export default function TravelWorkspace() {
           : [{ type: "add_activity", nextOfferId: offer.id, travellerIds: trip.request.travellers.map((traveller) => traveller.id) }],
     };
     const label = isTransport(offer) ? `${offer.operator} ${offer.mode}` : isTransfer(offer) ? `${offer.mode} transfer` : isStay(offer) ? `${offer.propertyFacts.name} · ${offer.roomFacts.roomLabel}` : offer.activityFacts.name;
-    void applyDirectProposal(proposal, `Selected ${label}. The itinerary and trip total are updated.`);
-  }
-
-  async function submitExplanation(
-    eventOrQuestion?: FormEvent | string,
-    selectionId?: string,
-  ) {
-    if (typeof eventOrQuestion !== "string") eventOrQuestion?.preventDefault();
-    const trip = state.committedTrip;
-    const question =
-      typeof eventOrQuestion === "string" ? eventOrQuestion.trim() : composerText.trim();
-    if (!trip || !question || busy) return;
-    dispatch({
-      type: "explanation_started",
-      entry: { id: messageId("user"), role: "user", text: question },
-    });
+    setSelectingOfferId(offer.id);
     try {
-      const response = await fetch("/api/agent/conversation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phase: "committed", message: question, trip, selectionId, actionHint: "explain_trip" }),
-      });
-      const body: unknown = await response.json().catch(() => undefined);
-      if (!response.ok) {
-        const error = body as { code?: unknown; message?: unknown; retryable?: unknown };
-        throw {
-          code: typeof error?.code === "string" ? error.code : "EXPLANATION_FAILED",
-          message: typeof error?.message === "string" ? error.message : "The trip could not be explained.",
-          retryable: error?.retryable === true,
-        };
-      }
-      const result = (body as { kind?: unknown; result?: unknown })?.result;
-      if ((body as { kind?: unknown })?.kind !== "explanation" || !isExplanationResult(result)) throw new Error("Invalid EXPLAIN response");
-      setComposerText("");
-      dispatch({
-        type: "explanation_received",
-        result,
-        entry: { id: messageId("assistant"), role: "assistant", text: result.message },
-      });
-    } catch (error: unknown) {
-      reportAsyncError(error, "The planner cannot explain this trip right now. Your trip is unchanged.");
+      await applyDirectProposal(proposal, `Selected ${label}. The itinerary and trip total are updated.`);
+    } finally {
+      setSelectingOfferId(undefined);
     }
   }
 
   async function changeLock(selectionId: string, currentlyLocked: boolean) {
-    const trip = state.committedTrip;
     if (!trip || busy) return;
     const proposal: TripProposal = {
       id: `proposal:${globalThis.crypto.randomUUID()}`,
@@ -1803,50 +1940,63 @@ export default function TravelWorkspace() {
     await applyDirectProposal(proposal, currentlyLocked ? "Unlocked this selection." : "Locked this selection. Future changes will preserve it.");
   }
 
-  const maxBudget = state.draftRequest.constraints.find(
+  const maxBudget = request.constraints.find(
     (constraint) => constraint.category === "budget",
   );
   const maxBudgetAmount =
     maxBudget?.category === "budget" ? maxBudget.value.maxTotal?.amount : undefined;
-  const openDestination = state.draftRequest.destination?.kind === "open";
+  const openDestination = request.destination?.kind === "open";
   const briefProblem = validateBrief(preparedRequest());
   const hasPreferences = Boolean(
-    state.draftRequest.preferences.pace ||
-    state.draftRequest.preferences.interests?.length ||
+    request.preferences.pace ||
+    request.preferences.interests?.length ||
     maxBudgetAmount,
   );
   const hasBriefFacts = Boolean(
-    state.draftRequest.origin ||
-    state.draftRequest.destination ||
-    state.draftRequest.startDate ||
-    state.draftRequest.endDate ||
-    state.draftRequest.travellers.length ||
+    request.origin ||
+    request.destination ||
+    request.startDate ||
+    request.endDate ||
+    request.travellers.length ||
     hasPreferences,
   );
-  const originFact = state.draftRequest.origin
-    ? originLabel || displayLocation(state.draftRequest.origin)
+  const originFact = request.origin
+    ? originLabel || displayLocation(request.origin)
     : "Select origin";
   const destinationFact = openDestination
     ? "Recommendations"
-    : destinationLabel || (state.draftRequest.destination?.kind === "specified"
-      ? displayLocation(state.draftRequest.destination.locationId)
+    : destinationLabel || (request.destination?.kind === "specified"
+      ? displayLocation(request.destination.locationId)
       : "Select destination");
-  const dateFact = state.draftRequest.startDate && state.draftRequest.endDate
-    ? `${formatDate(state.draftRequest.startDate)} – ${formatDate(state.draftRequest.endDate)}`
-    : state.draftRequest.startDate
-      ? `From ${formatDate(state.draftRequest.startDate)}`
-      : state.draftRequest.endDate
-        ? `Until ${formatDate(state.draftRequest.endDate)}`
+  const dateFact = request.startDate && request.endDate
+    ? `${formatDate(request.startDate)} – ${formatDate(request.endDate)}`
+    : request.startDate
+      ? `From ${formatDate(request.startDate)}`
+      : request.endDate
+        ? `Until ${formatDate(request.endDate)}`
         : "Select dates";
-  const guestsFact = state.draftRequest.travellers.length > 0
-    ? travellerSummary(state.draftRequest.travellers)
+  const guestsFact = request.travellers.length > 0
+    ? travellerSummary(request.travellers)
     : "Select guests";
+  const activeFocus = state.interaction?.focus?.phase === "completed" ? undefined : state.interaction?.focus;
+  const focusedTripField: BriefFact | undefined = activeFocus?.target.type === "trip_field"
+    ? activeFocus.target.field === "travellers"
+      ? "guests"
+      : activeFocus.target.field === "budget" || activeFocus.target.field === "preferences"
+        ? "preferences"
+        : activeFocus.target.field
+    : undefined;
+  const focusedSelectionId = activeFocus?.target.type === "selection" ? activeFocus.target.selectionId : undefined;
+  const focusedDay = activeFocus?.target.type === "day" ? activeFocus.target.date : highlightedDay;
+  function tripFactClass(field: BriefFact, populated: boolean): string {
+    return ["trip-fact", populated ? "" : "trip-fact-empty", focusedTripField === field ? "ai-focus" : ""].filter(Boolean).join(" ");
+  }
   const preferenceFact = [
     maxBudgetAmount ? formatMoney(maxBudgetAmount) : undefined,
-    state.draftRequest.preferences.pace,
-    ...(state.draftRequest.preferences.interests ?? []).slice(0, 2),
+    request.preferences.pace,
+    ...(request.preferences.interests ?? []).slice(0, 2),
   ].filter(Boolean).join(" · ") || "Add preferences";
-  const initialExperience = !hasBriefFacts && !state.committedTrip && !interpreting && !discovering && !planning;
+  const initialExperience = state.conversation.length === 0 && !hasBriefFacts && !trip && !interpreting && !discovering && !planning;
 
   return (
     <main className={initialExperience ? "workspace-shell initial-workspace" : "workspace-shell"}>
@@ -1867,55 +2017,21 @@ export default function TravelWorkspace() {
               <button type="submit" disabled={busy || composerText.trim().length < 2}>{interpreting ? "Planning…" : "Plan"} <span aria-hidden="true">→</span></button>
             </form>
             {interpreting ? <div className="initial-intake-status is-loading" role="status"><i aria-hidden="true" /><div><strong>Understanding your trip</strong><span>Structuring your dates, travellers, budget, and preferences.</span></div></div> : null}
-            {state.error ? <div className="initial-intake-status is-error" role="alert"><span className="initial-status-mark" aria-hidden="true">!</span><div><strong>We couldn&apos;t finish that brief</strong><span>{/interpret|model|planner/i.test(state.error.message) ? "Your idea is still here. Try again, or make the dates and traveller mix a little more specific." : state.error.message}</span><div className="initial-status-actions">{state.error.retryable ? <button type="button" onClick={() => void submitNaturalIntake(undefined, composerText)}>Try again</button> : null}<button type="button" onClick={() => document.querySelector<HTMLTextAreaElement>("#initial-trip-message")?.focus()}>Edit details</button></div></div></div> : null}
             <p className="quick-start-prompt">Or try one of our quick starts</p>
-          </section> : <><section className="conversation" aria-label="Planning conversation">
+          </section> : <><section ref={conversationRef} className="conversation" aria-label="Planning conversation">
             {state.conversation.map((entry) => (
               <div className={`message message-${entry.role}`} key={entry.id}>
                 <p>{entry.text}</p>
               </div>
             ))}
+            {state.interaction ? <InteractionProgress events={state.interaction.events} /> : null}
           </section>
-          <StatusNotice
-            state={state}
-            onSelectProposal={(proposalId) =>
-              dispatch({ type: "alternative_selected", proposalId })
-            }
-            onDismissAdaptiveOutcome={() =>
-              dispatch({ type: "adaptive_outcome_dismissed" })
-            }
-            onRetry={() =>
-              void (composerText.trim() ? submitConversation() : submitPlan())
-            }
-          />
-
           <div className="conversation-actions" aria-label="Suggested actions">
-            {!state.committedTrip && state.latestOutcome?.type === "conflict" ? (
-              state.latestOutcome.factBundle?.allowedFollowUpActions.slice(0, 3).map((action) => (
-                <button type="button" className="build-trip-chip" disabled={busy} key={action.id} onClick={() => void handlePlanningFollowUp(action)}>
-                  <SparkIcon /> {readableFollowUpLabel(action)}
-                </button>
-              ))
-            ) : !state.committedTrip && !briefProblem ? (
-              <button type="button" className="build-trip-chip" disabled={busy} onClick={() => void submitPlan()}>
-                <SparkIcon /> {openDestination ? "Compare destinations" : "Build my trip"}
+            {state.interaction?.actions.map((action) => (
+              <button type="button" className="guided-action-chip" disabled={busy} key={action.id} onClick={() => void handleGuidedAction(action)}>
+                {action.label}
               </button>
-            ) : state.committedTrip ? (
-              <>
-                <button type="button" disabled={busy} onClick={() => void submitExplanation("Why did you choose this route?")}>Explain the route</button>
-                <button type="button" disabled={busy} onClick={() => void requestModification("Find a cheaper stay but preserve my travel selections.")}>Make the stay cheaper</button>
-              </>
-            ) : (
-              <>
-                {!state.draftRequest.origin ? <button type="button" onClick={() => { setOriginLabel("Delhi"); replaceDraft({ origin: "city:delhi" }); }}>Delhi</button> : null}
-                {state.draftRequest.origin && !state.draftRequest.destination ? <button type="button" onClick={() => { setDestinationLabel(""); replaceDraft({ destination: { kind: "open" } }); }}>Help me choose where</button> : null}
-                {!state.draftRequest.startDate && !state.draftRequest.endDate ? state.latestIntake?.suggestedDateRanges.map((range) => (
-                  <button type="button" key={range.id} onClick={() => replaceDraft({ startDate: range.startDate, endDate: range.endDate })}>{range.label} · {formatDate(range.startDate)}–{formatDate(range.endDate)}</button>
-                )) : null}
-                {state.draftRequest.startDate && state.draftRequest.endDate && state.draftRequest.travellers.length === 0 ? <button type="button" onClick={() => setTravellerCount(1)}>Solo</button> : null}
-                {state.draftRequest.startDate && state.draftRequest.endDate && state.draftRequest.travellers.length === 0 ? <button type="button" onClick={() => setTravellerCount(2)}>2 adults</button> : null}
-              </>
-            )}
+            ))}
           </div>
 
           <form className="conversation-composer" onSubmit={submitConversation}>
@@ -1925,7 +2041,7 @@ export default function TravelWorkspace() {
                 id="conversation-message"
                 rows={2}
                 value={composerText}
-                placeholder={state.committedTrip ? "Ask why, or request a change…" : "Describe the trip you have in mind…"}
+                placeholder={trip ? "Ask why, or request a change…" : "Describe the trip you have in mind…"}
                 onChange={(event) => setComposerText(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
@@ -1944,39 +2060,41 @@ export default function TravelWorkspace() {
 
         <div className="workspace-stage">
           {hasBriefFacts ? <section className={`trip-brief-bar${editingFact ? ` fact-editing-${editingFact}` : ""}`} aria-label="Current Trip Brief">
-            <button type="button" className={state.draftRequest.origin ? "trip-fact" : "trip-fact trip-fact-empty"} onClick={() => setEditingFact(editingFact === "origin" ? undefined : "origin")}><span>From city</span><strong>{originFact}</strong></button>
-            <button type="button" className={state.draftRequest.destination ? "trip-fact" : "trip-fact trip-fact-empty"} onClick={() => setEditingFact(editingFact === "destination" ? undefined : "destination")}><span>To city / country</span><strong>{destinationFact}</strong></button>
-            <button type="button" className={state.draftRequest.startDate || state.draftRequest.endDate ? "trip-fact" : "trip-fact trip-fact-empty"} onClick={() => setEditingFact(editingFact === "dates" ? undefined : "dates")}><span>Travel dates</span><strong>{dateFact}</strong></button>
-            <button type="button" className={state.draftRequest.travellers.length > 0 ? "trip-fact" : "trip-fact trip-fact-empty"} onClick={() => setEditingFact(editingFact === "guests" ? undefined : "guests")}><span>Guests</span><strong>{guestsFact}</strong></button>
-            <button type="button" className={hasPreferences ? "trip-fact" : "trip-fact trip-fact-empty"} onClick={() => setEditingFact(editingFact === "preferences" ? undefined : "preferences")}><span>Preferences</span><strong>{preferenceFact}</strong></button>
+            <button type="button" className={tripFactClass("origin", Boolean(request.origin))} onClick={() => setEditingFact(editingFact === "origin" ? undefined : "origin")}><span>From city</span><strong>{originFact}</strong></button>
+            <button type="button" className={tripFactClass("destination", Boolean(request.destination))} onClick={() => setEditingFact(editingFact === "destination" ? undefined : "destination")}><span>To city / country</span><strong>{destinationFact}</strong></button>
+            <button type="button" className={tripFactClass("dates", Boolean(request.startDate || request.endDate))} onClick={() => setEditingFact(editingFact === "dates" ? undefined : "dates")}><span>Travel dates</span><strong>{dateFact}</strong></button>
+            <button type="button" className={tripFactClass("guests", request.travellers.length > 0)} onClick={() => setEditingFact(editingFact === "guests" ? undefined : "guests")}><span>Guests</span><strong>{guestsFact}</strong></button>
+            <button type="button" className={tripFactClass("preferences", hasPreferences)} onClick={() => setEditingFact(editingFact === "preferences" ? undefined : "preferences")}><span>Preferences</span><strong>{preferenceFact}</strong></button>
             <button type="button" className="trip-update-button" disabled={busy || Boolean(briefProblem)} onClick={() => void submitPlan()}>Update</button>
             {editingFact ? <form ref={factEditorRef} className="trip-form fact-editor" onSubmit={(event) => { event.preventDefault(); }}>
-              {editingFact === "origin" ? <LocationField id="edit-origin" label="From city" placeholder="Search city or airport" selectedId={state.draftRequest.origin} selectedLabel={originLabel} onSelectedLabelChange={setOriginLabel} onSelect={(location) => replaceDraft({ origin: location?.id })} /> : null}
-              {editingFact === "destination" ? <><LocationField id="edit-destination" label="To city / country" placeholder="Search destination" selectedId={state.draftRequest.destination?.kind === "specified" ? state.draftRequest.destination.locationId : undefined} selectedLabel={openDestination ? "Open to recommendations" : destinationLabel} disabled={openDestination} onSelectedLabelChange={setDestinationLabel} onSelect={(location) => replaceDraft({ destination: location ? { kind: "specified", locationId: location.id } : undefined })} /><button className={openDestination ? "open-destination-button active" : "open-destination-button"} type="button" onClick={() => { setDestinationLabel(""); replaceDraft({ destination: openDestination ? undefined : { kind: "open" } }); }}>Not sure where? Help me choose</button></> : null}
-              {editingFact === "dates" ? <div className="fact-editor-grid"><div className="field"><label htmlFor="edit-start-date">Start</label><input id="edit-start-date" type="date" min="2026-08-28" max="2027-03-30" value={state.draftRequest.startDate ?? ""} onChange={(event) => replaceDraft({ startDate: event.target.value || undefined })} /></div><div className="field"><label htmlFor="edit-end-date">End</label><input id="edit-end-date" type="date" min="2026-08-29" max="2027-03-31" value={state.draftRequest.endDate ?? ""} onChange={(event) => replaceDraft({ endDate: event.target.value || undefined })} /></div></div> : null}
-              {editingFact === "guests" ? <div className="fact-editor-grid guest-grid">{(["adult", "child", "senior"] as const).map((type) => <div className="field" key={type}><label htmlFor={`guest-${type}`}>{type.charAt(0).toUpperCase() + type.slice(1)}s</label><input id={`guest-${type}`} type="number" min="0" max="20" step="1" inputMode="numeric" value={state.draftRequest.travellers.filter((traveller) => traveller.type === type).length} onChange={(event) => setTravellerComposition(type, Math.max(0, Math.min(20, Number(event.target.value) || 0)))} /></div>)}</div> : null}
-              {editingFact === "preferences" ? <div className="fact-editor-grid"><div className="field"><label htmlFor="edit-budget">Budget</label><div className="money-input"><span>₹</span><input id="edit-budget" type="number" min="1" value={maxBudgetAmount ?? ""} onChange={(event) => setMaximumBudget(event.target.value)} /></div></div><div className="field"><label htmlFor="edit-pace">Pace</label><select id="edit-pace" value={state.draftRequest.preferences.pace ?? ""} onChange={(event) => replaceDraft({ preferences: { ...state.draftRequest.preferences, pace: event.target.value as "relaxed" | "balanced" | "packed" } })}><option value="" disabled>Select pace</option><option value="relaxed">Relaxed</option><option value="balanced">Balanced</option><option value="packed">Packed</option></select></div><div className="field"><label htmlFor="edit-interests">Interests</label><input id="edit-interests" value={interestText} placeholder="food, beaches" onChange={(event) => setInterestText(event.target.value)} /></div></div> : null}
+              {editingFact === "origin" ? <LocationField id="edit-origin" label="From city" placeholder="Search city or airport" selectedId={request.origin} selectedLabel={originLabel} onSelectedLabelChange={setOriginLabel} onSelect={(location) => updateRequest({ origin: location?.id })} /> : null}
+              {editingFact === "destination" ? <><LocationField id="edit-destination" label="To city / country" placeholder="Search destination" selectedId={request.destination?.kind === "specified" ? request.destination.locationId : undefined} selectedLabel={openDestination ? "Open to recommendations" : destinationLabel} disabled={openDestination} onSelectedLabelChange={setDestinationLabel} onSelect={(location) => updateRequest({ destination: location ? { kind: "specified", locationId: location.id } : undefined })} /><button className={openDestination ? "open-destination-button active" : "open-destination-button"} type="button" onClick={() => { setDestinationLabel(""); updateRequest({ destination: openDestination ? undefined : { kind: "open" } }); }}>Not sure where? Help me choose</button></> : null}
+              {editingFact === "dates" ? <div className="fact-editor-grid"><div className="field"><label htmlFor="edit-start-date">Start</label><input id="edit-start-date" type="date" min="2026-08-28" max="2027-03-30" value={request.startDate ?? ""} onChange={(event) => updateRequest({ startDate: event.target.value || undefined })} /></div><div className="field"><label htmlFor="edit-end-date">End</label><input id="edit-end-date" type="date" min="2026-08-29" max="2027-03-31" value={request.endDate ?? ""} onChange={(event) => updateRequest({ endDate: event.target.value || undefined })} /></div></div> : null}
+              {editingFact === "guests" ? <div className="fact-editor-grid guest-grid">{(["adult", "child", "senior"] as const).map((type) => <div className="field" key={type}><label htmlFor={`guest-${type}`}>{type.charAt(0).toUpperCase() + type.slice(1)}s</label><input id={`guest-${type}`} type="number" min="0" max="20" step="1" inputMode="numeric" value={request.travellers.filter((traveller) => traveller.type === type).length} onChange={(event) => setTravellerComposition(type, Math.max(0, Math.min(20, Number(event.target.value) || 0)))} /></div>)}</div> : null}
+              {editingFact === "preferences" ? <div className="fact-editor-grid"><div className="field"><label htmlFor="edit-budget">Budget</label><div className="money-input"><span>₹</span><input id="edit-budget" type="number" min="1" value={maxBudgetAmount ?? ""} onChange={(event) => setMaximumBudget(event.target.value)} /></div></div><div className="field"><label htmlFor="edit-pace">Pace</label><select id="edit-pace" value={request.preferences.pace ?? ""} onChange={(event) => updateRequest({ preferences: { ...request.preferences, pace: event.target.value as "relaxed" | "balanced" | "packed" } })}><option value="" disabled>Select pace</option><option value="relaxed">Relaxed</option><option value="balanced">Balanced</option><option value="packed">Packed</option></select></div><div className="field"><label htmlFor="edit-interests">Interests</label><input id="edit-interests" value={interestText} placeholder="food, beaches" onChange={(event) => setInterestText(event.target.value)} /></div></div> : null}
             </form> : null}
           </section> : null}
 
           <section className="workspace-main">
-          {interpreting || discovering || planning ? (
-            <PlanningState elapsed={elapsed} mode={discovering ? "discovering" : "planning"} request={state.draftRequest} />
+          {showPlanningAnimation ? (
+            <PlanningState elapsed={elapsed} mode={discovering ? "discovering" : "planning"} request={request} />
           ) : state.destinationDiscovery?.type === "destination_options" ? (
             <DestinationComparison
               result={state.destinationDiscovery}
               busy={busy}
               onSelect={(option) => void selectDestination(option)}
             />
-          ) : state.committedTrip && state.projection ? (
+          ) : trip && projectionState ? (
             <>
               {inventoryPicker ? (
-                <InventoryOptionPicker picker={inventoryPicker} busy={busy} onSelect={selectInventoryOffer} onClose={() => setInventoryPicker(undefined)} />
+                <InventoryOptionPicker picker={inventoryPicker} busy={busy} selectingOfferId={selectingOfferId} onSelect={(offer) => void selectInventoryOffer(offer)} onClose={() => setInventoryPicker(undefined)} />
               ) : null}
               <TripReview
-                trip={state.committedTrip}
-                projection={state.projection}
+                trip={trip}
+                projection={projectionState}
                 busy={busy}
+                highlightedDay={focusedDay}
+                highlightedSelectionId={focusedSelectionId}
                 onToggleLock={(selectionId, locked) =>
                   void changeLock(selectionId, locked)
                 }
