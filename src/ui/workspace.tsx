@@ -42,6 +42,8 @@ import {
 import type { TripProposal } from "@/domain/proposals";
 import { cachedInventoryPost } from "@/ui/inventory-cache";
 import { PlanningAnimation } from "@/ui/planning-animation";
+import { Badge, Button, Card, Chip, IconButton } from "@/ui/components/primitives";
+import { PriceSummary } from "@/ui/patterns/price-summary";
 import {
   interactionPresentationSchema,
   type GuidedAction,
@@ -118,6 +120,18 @@ function formatCompactDateTime(value: string): string {
   }).format(new Date(value));
 }
 
+function formatTime(value: string): string {
+  return new Intl.DateTimeFormat("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+}
+
+function locationCode(id: string): string {
+  return (id.split(":").at(-1) ?? id).toUpperCase();
+}
+
 function durationLabel(minutes: number): string {
   const hours = Math.floor(minutes / 60);
   const remainder = minutes % 60;
@@ -132,6 +146,11 @@ function stayImage(offer: StayOffer): string | undefined {
 
 function activityImage(offer: ActivityOffer): string | undefined {
   return offer.activityFacts.imageUrl;
+}
+
+function activitiesOverlap(left: ActivityOffer, right: ActivityOffer): boolean {
+  return Date.parse(left.startsAt) < Date.parse(right.endsAt)
+    && Date.parse(right.startsAt) < Date.parse(left.endsAt);
 }
 
 function SkeletonImage({
@@ -379,14 +398,6 @@ function SparkIcon() {
   );
 }
 
-function ArrowIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M5 12h14M14 7l5 5-5 5" />
-    </svg>
-  );
-}
-
 function PlanningState({ elapsed, mode, request }: { elapsed: number; mode: "discovering" | "planning"; request: TripRequest }) {
   const discovering = mode === "discovering";
   const phase = discovering ? "scanning_route" : elapsed < 3 ? "scanning_route" : elapsed < 7 ? "searching_stays" : elapsed < 11 ? "searching_activities" : "validating";
@@ -401,26 +412,28 @@ function PlanningState({ elapsed, mode, request }: { elapsed: number; mode: "dis
   );
 }
 
-function EmptyWorkspace() {
+function BriefSetupWorkspace({ request, onEdit }: { request: TripRequest; onEdit(field: BriefFact): void }) {
+  const essentials = [
+    { field: "origin" as const, label: "Starting city", complete: Boolean(request.origin) },
+    { field: "destination" as const, label: "Destination or recommendations", complete: Boolean(request.destination) },
+    { field: "dates" as const, label: "Travel dates", complete: Boolean(request.startDate && request.endDate) },
+    { field: "guests" as const, label: "Traveller details", complete: request.travellers.length > 0 },
+  ];
+  const remaining = essentials.filter((item) => !item.complete).length;
   return (
-    <div className="empty-workspace">
-      <div className="empty-visual" aria-hidden="true">
-        <div className="route-node start" />
-        <div className="route-line" />
-        <div className="route-node middle" />
-        <div className="route-line second" />
-        <div className="route-node end" />
-      </div>
-      <p className="eyebrow">One connected workspace</p>
-      <h2>Your itinerary will take shape here</h2>
-      <p>
-        Add the essentials in your Trip Brief. The agent can choose among valid options, while code
-        remains responsible for prices, dates, routes, and final validation.
-      </p>
-      <div className="trust-row">
-        <span>Grounded inventory</span>
-        <span>Explicit trade-offs</span>
-        <span>Direct, validated selection</span>
+    <div className="brief-setup-workspace" role="status" aria-live="polite">
+      <div className="brief-setup-icon" aria-hidden="true">{remaining}</div>
+      <p className="eyebrow">Trip essentials</p>
+      <h2>{remaining > 0 ? `Complete ${remaining} detail${remaining === 1 ? "" : "s"} to start planning` : "Your Trip Brief is ready"}</h2>
+      <p>The highlighted fields in the Trip Brief are required. Add them in any order; this checklist updates immediately.</p>
+      <div className="brief-setup-list">
+        {essentials.map((item) => (
+          <button type="button" className={item.complete ? "is-complete" : "is-missing"} key={item.field} onClick={() => onEdit(item.field)}>
+            <i aria-hidden="true">{item.complete ? "✓" : ""}</i>
+            <span>{item.label}</span>
+            <strong>{item.complete ? "Added" : "Add now"}</strong>
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -449,6 +462,49 @@ function maximumBudget(amount: number): Constraint {
   };
 }
 
+function addDays(date: string, days: number): string {
+  const value = new Date(`${date}T12:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function destinationRecoveryActions(request: TripRequest, operationId: string): GuidedAction[] {
+  const actions: GuidedAction[] = [];
+  const budget = request.constraints.find((constraint) => constraint.category === "budget");
+  if (budget?.category === "budget" && budget.value.maxTotal) {
+    const amount = budget.value.maxTotal.amount + 10_000;
+    actions.push({
+      id: `${operationId}:increase-budget`,
+      type: "set_budget",
+      amount,
+      label: `Increase budget by ${formatMoney(10_000)}`,
+    });
+    actions.push({
+      id: `${operationId}:remove-budget`,
+      type: "remove_constraint",
+      constraintId: budget.id,
+      label: "Remove the budget cap",
+    });
+  }
+  if (request.startDate && request.endDate) {
+    actions.push({
+      id: `${operationId}:extend-dates`,
+      type: "set_dates",
+      startDate: request.startDate,
+      endDate: addDays(request.endDate, 1),
+      label: "Extend the trip by one day",
+    });
+    actions.push({
+      id: `${operationId}:next-week`,
+      type: "set_dates",
+      startDate: addDays(request.startDate, 7),
+      endDate: addDays(request.endDate, 7),
+      label: "Try the following weekend",
+    });
+  }
+  return actions.slice(0, 4);
+}
+
 const quickStarts = [
   {
     id: "weekend",
@@ -461,10 +517,10 @@ const quickStarts = [
       origin: "city:delhi",
       destination: { kind: "open" },
       startDate: "2026-08-29",
-      endDate: "2026-08-30",
+      endDate: "2026-08-31",
       travellers: presetTravellers(["adult", "adult"]),
       preferences: { pace: "relaxed", interests: ["food", "relaxation"] },
-      constraints: [maximumBudget(15_000)],
+      constraints: [maximumBudget(45_000)],
     },
   },
   {
@@ -524,14 +580,14 @@ function QuickStartGrid({ busy, onSelect }: { busy: boolean; onSelect(item: Quic
   return (
     <section className="quick-start-grid" aria-label="Quick start trip ideas">
       {quickStarts.map((item) => (
-        <article className="quick-start-card" key={item.id}>
+        <Card className="quick-start-card" key={item.id}>
           <Image src={item.image} alt="" width={840} height={420} sizes="(max-width: 820px) 100vw, 40vw" loading="eager" />
           <div>
             <h2>{item.title}</h2>
             <p>{item.prompt}</p>
-            <button type="button" disabled={busy} onClick={() => onSelect(item)}>Try this <span aria-hidden="true">→</span></button>
+            <Button variant="text" size="sm" disabled={busy} onClick={() => onSelect(item)}>Try this <span aria-hidden="true">→</span></Button>
           </div>
-        </article>
+        </Card>
       ))}
     </section>
   );
@@ -549,6 +605,19 @@ const comparisonFactDimensions = {
   pace: ["themes"],
   location: ["region", "country"],
 } as const;
+
+const destinationArtwork: Record<string, string> = {
+  "city:goa": "/figma/destination-goa.png",
+  "city:kochi": "/figma/destination-kochi.png",
+  "city:puducherry": "/figma/destination-puducherry.png",
+  "region:thailand-andaman": "/figma/destination-thailand.png",
+  "city:manali": "https://images.pexels.com/photos/38884319/pexels-photo-38884319.jpeg?auto=compress&cs=tinysrgb&w=1200",
+  "city:rishikesh": "https://images.pexels.com/photos/35185649/pexels-photo-35185649.png?auto=compress&cs=tinysrgb&w=1200",
+  "city:darjeeling": "https://images.pexels.com/photos/12100892/pexels-photo-12100892.jpeg?auto=compress&cs=tinysrgb&w=1200",
+  "city:srinagar": "https://images.pexels.com/photos/15963212/pexels-photo-15963212.jpeg?auto=compress&cs=tinysrgb&w=1200",
+  "city:munnar": "https://images.pexels.com/photos/36982207/pexels-photo-36982207.jpeg?auto=compress&cs=tinysrgb&w=1200",
+  "city:puri": "https://images.pexels.com/photos/37121962/pexels-photo-37121962.jpeg?auto=compress&cs=tinysrgb&w=1200",
+};
 
 function formatDestinationFact(dimension: string, value: string | number | boolean): string {
   if (dimension.endsWith("floor") && typeof value === "number") return formatMoney(value);
@@ -573,6 +642,8 @@ function DestinationComparison({
   busy: boolean;
   onSelect(option: DestinationOption): void;
 }) {
+  const [showAll, setShowAll] = useState(false);
+  const [sortBy, setSortBy] = useState<"fit" | "price" | "travel">("fit");
   const factsByMarket = new Map<string, typeof result.factBundle.facts>();
   for (const fact of result.factBundle.facts) {
     factsByMarket.set(fact.subjectId, [...(factsByMarket.get(fact.subjectId) ?? []), fact]);
@@ -582,19 +653,33 @@ function DestinationComparison({
       comparisonFactDimensions[dimension as keyof typeof comparisonFactDimensions] ?? [],
   );
   const supportingFacts = new Set(result.block.emphasis?.supportingFactIds ?? []);
+  const numericFact = (optionId: string, dimension: string) => {
+    const value = factsByMarket.get(optionId)?.find((fact) => fact.dimension === dimension)?.value;
+    return typeof value === "number" ? value : Number.POSITIVE_INFINITY;
+  };
+  const orderedOptions = [...result.options].sort((left, right) => {
+    if (sortBy === "price") return numericFact(left.id, "price_floor") - numericFact(right.id, "price_floor");
+    if (sortBy === "travel") return numericFact(left.id, "travel_minutes") - numericFact(right.id, "travel_minutes");
+    return result.options.indexOf(left) - result.options.indexOf(right);
+  });
 
   return (
     <section className="destination-comparison" aria-labelledby="destination-options-title">
       <header className="destination-comparison-heading">
         <div>
-          <p className="eyebrow">Grounded destination comparison</p>
           <h2 id="destination-options-title">Choose where to continue</h2>
-          <p>{result.message}</p>
+          {/* <p>{result.message}</p> */}
         </div>
-        <span>{result.options.length} valid markets</span>
+        <Badge tone="success">◉ {result.shortlistedDestinationCount ?? result.block.choices.length} shortlisted from {result.matchingDestinationCount ?? result.options.length} matches</Badge>
       </header>
+      <div className="destination-sort-controls" aria-label="Sort destination matches">
+        <span>Sort by</span>
+        <Chip aria-pressed={sortBy === "fit"} onClick={() => setSortBy("fit")}>Best fit</Chip>
+        <Chip aria-pressed={sortBy === "price"} onClick={() => setSortBy("price")}>Lowest cost</Chip>
+        <Chip aria-pressed={sortBy === "travel"} onClick={() => setSortBy("travel")}>Least travel</Chip>
+      </div>
       <div className="destination-option-grid">
-        {result.options.map((option) => {
+        {orderedOptions.slice(0, showAll ? orderedOptions.length : 3).map((option) => {
           const recommended = option.id === result.block.emphasis?.recommendedId;
           const allFacts = factsByMarket.get(option.id) ?? [];
           const facts = preferredDimensions
@@ -602,60 +687,90 @@ function DestinationComparison({
             .filter((fact): fact is (typeof allFacts)[number] => Boolean(fact))
             .filter((fact, index, items) => items.findIndex((item) => item.id === fact.id) === index)
             .slice(0, 3);
+          const priceFact = facts.find((fact) => fact.dimension === "price_floor")
+            ?? allFacts.find((fact) => fact.dimension === "price_floor");
+          const artwork = option.imageUrl ?? destinationArtwork[option.id];
           return (
             <article className={recommended ? "destination-option recommended" : "destination-option"} key={option.id}>
-              <div className="destination-option-art" aria-hidden="true">
-                <span>{option.countryCode}</span>
+              <div className="destination-option-art">
+                {artwork ? <Image src={artwork} alt={option.imageAltText ?? `${option.name} destination`} fill sizes="(max-width: 820px) 100vw, 40vw" /> : <span>{option.countryCode}</span>}
+                {recommended ? <Badge tone="info">Recommended</Badge> : null}
               </div>
               <div className="destination-option-body">
-                <div className="destination-option-labels">
-                  <span>{option.region}</span>
-                  {recommended ? <strong>Recommended</strong> : null}
+                <div className="destination-option-title-row">
+                  <div>
+                    <h3>{option.name.replace(" — Phuket & Krabi", "")}</h3>
+                    <span>{option.region}</span>
+                  </div>
+                  {priceFact ? <div className="destination-floor"><small>Conservative floor</small><strong>{formatDestinationFact(priceFact.dimension, priceFact.value)}</strong></div> : null}
                 </div>
-                <h3>{option.name}</h3>
                 <div className="chip-row">
                   {option.tags.slice(0, 3).map((tag) => <span key={tag}>{tag}</span>)}
                 </div>
-                <dl>
-                  {facts.map((fact) => (
-                    <div key={fact.id}>
-                      <dt>{fact.label}</dt>
-                      <dd>{formatDestinationFact(fact.dimension, fact.value)}</dd>
-                      {supportingFacts.has(fact.id) ? <i title="Used by the planner recommendation">Grounded</i> : null}
-                    </div>
-                  ))}
-                </dl>
-                <button type="button" disabled={busy} onClick={() => onSelect(option)}>
-                  Continue with {option.name}
-                  <ArrowIcon />
-                </button>
+                {facts.some((fact) => supportingFacts.has(fact.id)) ? <span className="sr-only">Recommendation grounded in current inventory</span> : null}
+                <Button variant={recommended ? "primary" : "secondary"} size="lg" disabled={busy} onClick={() => onSelect(option)}>
+                  Continue with {option.name.replace(" — Phuket & Krabi", "")}
+                </Button>
               </div>
             </article>
           );
         })}
       </div>
-      <p className="comparison-disclosure">
-        Prices are conservative floors from currently seeded offers, not booking quotes. Selecting a destination starts the same validated PLAN workflow used for direct destination requests.
-      </p>
+      {result.options.length > 3 ? <Button variant="secondary" className="show-more-destinations" onClick={() => setShowAll((value) => !value)}>{showAll ? "Show shortlist only" : `Show ${result.options.length - 3} more matching destinations`}</Button> : null}
+      <p className="comparison-disclosure">Prices are conservative floors from currently available offers, not booking quotes.</p>
     </section>
   );
+}
+
+function DiscoveryRecovery({
+  result,
+  actions,
+  busy,
+  onAction,
+}: {
+  result: Extract<DestinationDiscoveryApiResult, { type: "conflict" }>;
+  actions: GuidedAction[];
+  busy: boolean;
+  onAction(action: GuidedAction): void;
+}) {
+  return (
+    <section className="discovery-recovery" aria-labelledby="discovery-recovery-title">
+      <div className="recovery-visual" aria-hidden="true"><span>!</span></div>
+      <p className="eyebrow">Let&apos;s adjust the trip</p>
+      <h2 id="discovery-recovery-title">We couldn&apos;t find a complete match yet</h2>
+      <p>{result.message} Changing one detail—usually the dates or budget—can open more supported options.</p>
+      <div className="recovery-actions" aria-label="Ways to adjust this trip">
+        {actions.map((action) => <Chip key={action.id} disabled={busy} onClick={() => onAction(action)}>{action.label}</Chip>)}
+      </div>
+      <small>Your current trip brief is preserved until you choose an adjustment.</small>
+    </section>
+  );
+}
+
+function airlineLogo(operator: string): string | undefined {
+  if (/air india/i.test(operator)) return "/figma/airlines/air-india-connect.svg";
+  if (/indigo/i.test(operator)) return "/figma/airlines/indigo-connect.svg";
+  return undefined;
 }
 
 function TravelCard({ item }: { item: HydratedSelection }) {
   const { offer } = item;
   if (isTransport(offer)) {
+    const logo = airlineLogo(offer.operator);
+    const serviceNumber = offer.segments[0]?.number;
+    const stopDescription = offer.stops === 0 ? "non-stop" : `${offer.stops} stop${offer.stops === 1 ? "" : "s"}`;
     return (
       <article className="itinerary-card itinerary-flight-card">
         <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true">✈</span><strong>{offer.mode} · {displayLocation(offer.from)} to {displayLocation(offer.to)} · {durationLabel(offer.durationMinutes)}</strong></header>
         <div className="flight-card-body">
-          <div className="airline-mark" aria-hidden="true">✈</div>
+          <div className="airline-mark">{logo ? <Image src={logo} alt={`${offer.operator} logo`} width={48} height={48} /> : <span aria-hidden="true">✈</span>}</div>
           <div className="flight-stop"><strong>{offer.departureAt.slice(11, 16)}</strong><span>{formatCompactDateTime(offer.departureAt)}</span><small>{displayLocation(offer.from)}</small></div>
           <div className="flight-line"><i /><span>✈</span></div>
           <div className="flight-stop"><strong>{offer.arrivalAt.slice(11, 16)}</strong><span>{formatCompactDateTime(offer.arrivalAt)}</span><small>{displayLocation(offer.to)}</small></div>
-          <dl className="flight-facts"><div><dt>Operator</dt><dd>{offer.operator}</dd></div><div><dt>Stops</dt><dd>{offer.stops === 0 ? "Non-stop" : `${offer.stops} stop${offer.stops === 1 ? "" : "s"}`}</dd></div></dl>
+          <dl className="flight-facts"><div><dt>Operator</dt><dd>{offer.operator}</dd></div>{serviceNumber ? <div><dt>Flight</dt><dd>{serviceNumber}</dd></div> : null}<div><dt>Stops</dt><dd>{offer.stops === 0 ? "Non-stop" : `${offer.stops} stop${offer.stops === 1 ? "" : "s"}`}</dd></div></dl>
           <div className="card-price"><strong>{formatMoney(offer.price.amount)}</strong><span>/ traveller</span></div>
         </div>
-        <div className="card-grounding"><span>Selected from currently valid transport inventory for this route and date.</span></div>
+        <div className="card-grounding"><i aria-hidden="true">✓</i><span>{offer.operator} was selected for this dated route: it departs at {formatTime(offer.departureAt)}, arrives at {formatTime(offer.arrivalAt)}, and is {stopDescription}.</span></div>
       </article>
     );
   }
@@ -667,6 +782,7 @@ function TravelCard({ item }: { item: HydratedSelection }) {
           <div className="transfer-illustration" aria-hidden="true">🚗</div>
           <div><h3>{offer.mode === "shared" ? "Shared transfer" : "Private transfer"}</h3><p>A direct connection between the selected arrival point and stay area.</p><span>⌖ {displayLocation(offer.from)} to {displayLocation(offer.to)}</span><small>{durationLabel(offer.durationMinutes)} · capacity {offer.capacity} · {formatMoney(offer.price.amount)} / vehicle</small></div>
         </div>
+        <div className="card-grounding"><i aria-hidden="true">✓</i><span>This {offer.mode} transfer directly connects {displayLocation(offer.from)} to {displayLocation(offer.to)} in {durationLabel(offer.durationMinutes)} and fits the validated route.</span></div>
       </article>
     );
   }
@@ -698,10 +814,10 @@ function StayCard({ item, travellerCount, onModify }: { item: HydratedSelection;
           <p>{offer.roomFacts.roomLabel} · {offer.roomFacts.mealPlan === "breakfast" ? "Breakfast included" : "Room only"}</p>
           <div className="card-price"><strong>{formatMoney(offer.price.amount)}</strong><span>/ per night</span></div>
           <ul><li>{offer.rooms} room{offer.rooms === 1 ? "" : "s"} · {travellerCount} traveller{travellerCount === 1 ? "" : "s"}</li><li>{formatDate(offer.checkIn)} – {formatDate(offer.checkOut)}</li><li>{offer.roomFacts.refundable ? "Refundable" : "Non-refundable"}</li></ul>
-          <button type="button" className="inline-card-action" onClick={onModify}>Modify room</button>
+          <Button variant="text" size="sm" className="inline-card-action" onClick={onModify}>Modify room</Button>
         </div>
       </div>
-      <div className="card-grounding"><span>Rated {offer.propertyFacts.rating.toFixed(1)} from {offer.propertyFacts.reviewCount} reviews. {offer.propertyFacts.amenities.slice(0, 2).join(" and ")} are listed amenities.</span><button type="button">Read more</button></div>
+      <div className="card-grounding"><i aria-hidden="true">✓</i><span>This stay covers all {nights} night{nights === 1 ? "" : "s"} for {offer.rooms} room{offer.rooms === 1 ? "" : "s"}. It is rated {offer.propertyFacts.rating.toFixed(1)} from {offer.propertyFacts.reviewCount} reviews and includes {offer.propertyFacts.amenities.slice(0, 2).join(" and ")}.</span></div>
     </article>
   );
 }
@@ -715,9 +831,9 @@ function ActivityCard({ item, onModify }: { item: HydratedSelection; onModify():
       <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true">▧</span><strong>Activity · {durationLabel(durationMinutes)} · {displayLocation(offer.locationId)}</strong></header>
       <div className="activity-card-body">
         <SkeletonImage src={activityImage(offer)} alt={offer.activityFacts.imageAltText ?? offer.activityFacts.name} width={320} height={240} />
-        <div><h3>{offer.activityFacts.name}</h3><p>{formatDateTime(offer.startsAt)} – {formatDateTime(offer.endsAt)}</p><div className="card-price"><strong>{formatMoney(offer.price.amount)}</strong><span>/ per person</span></div><ul><li>Duration {durationLabel(durationMinutes)}</li><li>{offer.activityFacts.mobility} mobility</li><li>Capacity {offer.capacity}</li></ul><button type="button" className="inline-card-action" onClick={onModify}>Modify activity</button></div>
+        <div><h3>{offer.activityFacts.name}</h3><p>{formatDateTime(offer.startsAt)} – {formatDateTime(offer.endsAt)}</p><div className="card-price"><strong>{formatMoney(offer.price.amount)}</strong><span>/ per person</span></div><ul><li>Duration {durationLabel(durationMinutes)}</li><li>{offer.activityFacts.mobility} mobility</li><li>Capacity {offer.capacity}</li></ul><Button variant="text" size="sm" className="inline-card-action" onClick={onModify}>Modify activity</Button></div>
       </div>
-      <div className="card-grounding"><span>{offer.activityFacts.tags.slice(0, 3).join(" · ")}. Suitability and schedule are validated against this trip.</span><button type="button">Read more</button></div>
+      <div className="card-grounding"><i aria-hidden="true">✓</i><span>This {offer.activityFacts.mobility}-mobility experience fits the available time on this day without overlapping travel. It supports {offer.activityFacts.tags.slice(0, 3).join(", ")} interests.</span></div>
     </article>
   );
 }
@@ -737,8 +853,17 @@ function SelectionActions({
 }) {
   return (
     <div className="selection-actions">
-      <button type="button" disabled={busy} onClick={onToggleLock}>{locked ? "Unlock" : "Lock"}</button><span>·</span>
-      {onBrowseAlternatives ? <button type="button" disabled={busy} onClick={onBrowseAlternatives}>{alternativeLabel ?? "Change"}</button> : null}
+      <Button variant="text" size="sm" disabled={busy} onClick={onToggleLock}>{locked ? "Unlock" : "Lock"}</Button><span>·</span>
+      {onBrowseAlternatives ? <Button variant="text" size="sm" disabled={busy} onClick={onBrowseAlternatives}>{alternativeLabel ?? "Change"}</Button> : null}
+    </div>
+  );
+}
+
+function AiFocusStatus({ message }: { message: string }) {
+  return (
+    <div className="ai-focus-status" role="status" aria-live="polite">
+      <i aria-hidden="true" />
+      <span>{message}</span>
     </div>
   );
 }
@@ -770,24 +895,24 @@ function InventoryOptionPicker({ picker, busy, selectingOfferId, onSelect, onClo
         <header className="inventory-drawer-header">
           <h2 id="inventory-picker-title">{title}</h2>
           <label><span className="sr-only">Search {noun}</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${noun}`} /></label>
-          <button type="button" aria-label="Close drawer" onClick={onClose}>×</button>
+          <IconButton aria-label="Close drawer" onClick={onClose}>×</IconButton>
         </header>
         <div className="inventory-drawer-filter">Showing {visibleOffers.length} valid {noun} <span>· Sorted by best fit</span></div>
         <div className="inventory-drawer-list">
           {picker.loading ? <p className="inventory-picker-status">Checking dated availability…</p> : null}
           {picker.error ? <p className="inventory-picker-status error">{picker.error}</p> : null}
-          {!picker.loading && !picker.error && visibleOffers.length === 0 ? <p className="inventory-picker-status">No matching valid inventory is available.</p> : null}
+          {!picker.loading && !picker.error && visibleOffers.length === 0 ? <p className="inventory-picker-status">{picker.kind === "activity" ? "No non-overlapping activities are available for this day." : "No matching valid inventory is available."}</p> : null}
           {visibleOffers.map((offer) => {
             const selected = offer.id === picker.currentOfferId;
             const selecting = offer.id === selectingOfferId;
             const priceDelta = currentPrice === undefined ? offer.price.amount : offer.price.amount - currentPrice;
             return <article className={selected ? "drawer-option selected" : "drawer-option"} key={offer.id}>
               <div className="drawer-option-media">
-                {isStay(offer) ? <SkeletonImage src={stayImage(offer)} alt="" fill sizes="220px" /> : isActivity(offer) ? <SkeletonImage src={activityImage(offer)} alt="" fill sizes="220px" /> : <span aria-hidden="true">{isTransfer(offer) ? "🚗" : "✈"}</span>}
+                {isStay(offer) ? <SkeletonImage src={stayImage(offer)} alt={offer.propertyFacts.imageAltText ?? offer.propertyFacts.name} fill sizes="220px" /> : isActivity(offer) ? <SkeletonImage src={activityImage(offer)} alt={offer.activityFacts.imageAltText ?? offer.activityFacts.name} fill sizes="220px" /> : <Image src={isTransfer(offer) ? "/figma/itinerary/private-transfer.png" : "/figma/flight-option.svg"} alt="" fill sizes="220px" />}
                 {selected ? <b>Selected</b> : null}
               </div>
               <div className="drawer-option-content">
-                {isTransport(offer) ? <><h3>{offer.operator} · {offer.mode}</h3><p>{displayLocation(offer.from)} → {displayLocation(offer.to)}</p><small>{formatCompactDateTime(offer.departureAt)} · {durationLabel(offer.durationMinutes)} · {offer.stops === 0 ? "Non-stop" : `${offer.stops} stop`}</small></> : null}
+                {isTransport(offer) ? <><h3>{offer.operator} · {offer.mode}</h3><p className="drawer-flight-times"><strong>{formatTime(offer.departureAt)}</strong><span>{locationCode(offer.from)}</span><i aria-hidden="true">→</i><strong>{formatTime(offer.arrivalAt)}</strong><span>{locationCode(offer.to)}</span></p><small>{formatCompactDateTime(offer.departureAt)} · {durationLabel(offer.durationMinutes)} · {offer.stops === 0 ? "Non-stop" : `${offer.stops} stop${offer.stops === 1 ? "" : "s"}`}</small></> : null}
                 {isTransfer(offer) ? <><h3>{offer.mode === "shared" ? "Shared transfer" : "Private transfer"}</h3><p>{displayLocation(offer.from)} → {displayLocation(offer.to)}</p><small>{durationLabel(offer.durationMinutes)} · capacity {offer.capacity}</small></> : null}
                 {isStay(offer) ? <><h3>{offer.propertyFacts.name}</h3><p>★ {offer.propertyFacts.rating.toFixed(1)} · {offer.propertyFacts.reviewCount} reviews</p><small>{offer.roomFacts.roomLabel} · {offer.roomFacts.mealPlan === "breakfast" ? "Includes breakfast" : "Room only"} · {offer.roomFacts.refundable ? "Refundable" : "Non-refundable"}</small></> : null}
                 {isActivity(offer) ? <><h3>{offer.activityFacts.name}</h3><p>{formatDateTime(offer.startsAt)} · {offer.activityFacts.mobility} mobility</p><small>{offer.activityFacts.tags.slice(0, 3).join(" · ")}</small></> : null}
@@ -795,7 +920,7 @@ function InventoryOptionPicker({ picker, busy, selectingOfferId, onSelect, onClo
               <div className="drawer-option-action">
                 <strong>{selected ? "Current" : priceDelta === 0 ? "No price change" : `${priceDelta > 0 ? "+ " : "− "}${formatMoney(Math.abs(priceDelta))}`}</strong>
                 <small>{isStay(offer) ? "per room / night" : isTransfer(offer) ? "per vehicle" : "per person"}</small>
-                {selected ? <span>Selected</span> : <button type="button" disabled={busy || Boolean(selectingOfferId)} onClick={() => onSelect(offer)}>{selecting ? "Selecting…" : "Select"}</button>}
+                {selected ? <Badge tone="info">Selected</Badge> : <Button size="sm" disabled={busy || Boolean(selectingOfferId)} onClick={() => onSelect(offer)}>{selecting ? "Selecting…" : "Select"}</Button>}
               </div>
             </article>;
           })}
@@ -816,6 +941,7 @@ function Itinerary({
   onBrowseActivity,
   highlightedDay,
   highlightedSelectionId,
+  focusMessage,
 }: {
   trip: TripState;
   projection: TripProjection;
@@ -827,6 +953,7 @@ function Itinerary({
   onBrowseActivity(date: string, selectionId?: string): void;
   highlightedDay?: string;
   highlightedSelectionId?: string;
+  focusMessage?: string;
 }) {
   const hydrated = new Map(projection.hydratedSelections.map((item) => [item.selectionId, item]));
   const selections = new Map(
@@ -837,6 +964,7 @@ function Itinerary({
       <div className="timeline">
         {projection.itinerary.map((day) => (
           <article className={highlightedDay === day.date ? "timeline-day agent-highlight" : "timeline-day"} id={dayAnchor(day.date)} key={day.date}>
+            {highlightedDay === day.date ? <AiFocusStatus message={focusMessage ?? "Updating this day in your itinerary"} /> : null}
             <div className="day-marker">
               <strong>{day.dayNumber}</strong>
               <i />
@@ -847,14 +975,14 @@ function Itinerary({
                   <h3>{displayLocation(day.locationId)}</h3>
                   <span>{formatDate(day.date)}</span>
                 </div>
-                <button type="button" disabled={busy} onClick={() => onAddActivity(day.date)}>
+                <Button variant="secondary" size="sm" disabled={busy} onClick={() => onAddActivity(day.date)}>
                   + Add activity
-                </button>
+                </Button>
               </header>
               <div className="day-events">
                 {day.events.map((event) => {
                   if (event.type === "free_time") {
-                    return <div className="free-time-card" key={event.id}><span aria-hidden="true">◉</span><strong>{event.title}</strong><button type="button" disabled={busy} onClick={() => onAddActivity(day.date)}>+ Add activity</button></div>;
+                    return <div className="free-time-card" key={event.id}><span aria-hidden="true">◉</span><strong>{event.title}</strong><Button variant="text" size="sm" disabled={busy} onClick={() => onAddActivity(day.date)}>+ Add activity</Button></div>;
                   }
                   const item = event.selectionId ? hydrated.get(event.selectionId) : undefined;
                   const selection = event.selectionId ? selections.get(event.selectionId) : undefined;
@@ -866,6 +994,7 @@ function Itinerary({
                       : () => onBrowseActivity(selection.date, selection.id);
                   return (
                     <div className={highlightedSelectionId === selection.id ? "itinerary-selection agent-highlight" : "itinerary-selection"} key={event.id}>
+                      {highlightedSelectionId === selection.id ? <AiFocusStatus message={focusMessage ?? `Updating this ${selection.kind} option`} /> : null}
                       <SelectionActions
                         locked={selection.locked}
                         busy={busy}
@@ -901,6 +1030,7 @@ function TripReview({
   onRequestCallback,
   highlightedDay,
   highlightedSelectionId,
+  focusMessage,
 }: {
   trip: TripState;
   projection: TripProjection;
@@ -914,8 +1044,11 @@ function TripReview({
   onRequestCallback(): void;
   highlightedDay?: string;
   highlightedSelectionId?: string;
+  focusMessage?: string;
 }) {
   const [activeDay, setActiveDay] = useState(projection.itinerary[0]?.date ?? "");
+  const travellerCount = trip.request.travellers.length;
+  const perPersonCost = (amount: number) => formatMoney(Math.round(amount / travellerCount));
 
   useEffect(() => {
     const days = Array.from(document.querySelectorAll<HTMLElement>(".timeline-day[id]"));
@@ -941,22 +1074,21 @@ function TripReview({
           <p>Day by day</p>
           <h1 id="itinerary-heading">Booking summary</h1>
         </div>
-        <span className="trip-generated-badge">◉ Trip generated</span>
+        <Badge tone="success" className="trip-generated-badge">◉ Trip generated</Badge>
       </header>
       <nav className="day-navigation" aria-label="Jump to itinerary day">
         {projection.itinerary.map((day) => <a className={activeDay === day.date ? "is-active" : undefined} key={day.date} href={`#${dayAnchor(day.date)}`} onClick={() => setActiveDay(day.date)}>Day {day.dayNumber}</a>)}
       </nav>
-      <Itinerary trip={trip} projection={projection} busy={busy} onToggleLock={onToggleLock} onAddActivity={onAddActivity} onBrowseTravel={onBrowseTravel} onBrowseStay={onBrowseStay} onBrowseActivity={onBrowseActivity} highlightedDay={highlightedDay} highlightedSelectionId={highlightedSelectionId} />
-      <footer className="trip-checkout-bar">
-        <div className="trip-total"><span>Trip total</span><strong>{formatMoney(projection.budget.total.amount)}</strong><small>Calculated from selected offers</small></div>
-        <div className="checkout-divider" />
-        <div className="trip-total"><span>Travel total</span><strong>{formatMoney(projection.budget.breakdown.travel.amount)}</strong><small>Calculated from selected offers</small></div>
-        <div className="trip-total"><span>Stays total</span><strong>{formatMoney(projection.budget.breakdown.stays.amount)}</strong><small>Calculated from selected offers</small></div>
-        <div className="trip-total"><span>Activities total</span><strong>{formatMoney(projection.budget.breakdown.activities.amount)}</strong><small>Calculated from selected offers</small></div>
-        {/* <dl className="checkout-breakdown"><div><dt>Travel</dt><dd>{formatMoney(projection.budget.breakdown.travel.amount)}</dd></div><div><dt>Stays</dt><dd>{formatMoney(projection.budget.breakdown.stays.amount)}</dd></div><div><dt>Activities</dt><dd>{formatMoney(projection.budget.breakdown.activities.amount)}</dd></div></dl> */}
-        <div className="checkout-divider" />
-        <div className="checkout-actions"><button type="button" onClick={onBook}>Book now</button><button type="button" onClick={onRequestCallback}>Request callback</button></div>
-      </footer>
+      <Itinerary trip={trip} projection={projection} busy={busy} onToggleLock={onToggleLock} onAddActivity={onAddActivity} onBrowseTravel={onBrowseTravel} onBrowseStay={onBrowseStay} onBrowseActivity={onBrowseActivity} highlightedDay={highlightedDay} highlightedSelectionId={highlightedSelectionId} focusMessage={focusMessage} />
+      <PriceSummary
+        metrics={[
+          { label: "Trip total", amount: formatMoney(projection.budget.total.amount), detail: `${perPersonCost(projection.budget.total.amount)} per person` },
+          { label: "Travel total", amount: formatMoney(projection.budget.breakdown.travel.amount), detail: `${perPersonCost(projection.budget.breakdown.travel.amount)} per person` },
+          { label: "Stays total", amount: formatMoney(projection.budget.breakdown.stays.amount), detail: `${perPersonCost(projection.budget.breakdown.stays.amount)} per person` },
+          { label: "Activities total", amount: formatMoney(projection.budget.breakdown.activities.amount), detail: `${perPersonCost(projection.budget.breakdown.activities.amount)} per person` },
+        ]}
+        actions={<div className="checkout-actions"><Button onClick={onBook}>Book now</Button><Button variant="text" size="sm" onClick={onRequestCallback}>Request callback</Button></div>}
+      />
     </div>
   );
 }
@@ -1103,10 +1235,16 @@ export default function TravelWorkspace() {
   }, [interpreting, discovering, planning]);
 
   function updateRequest(patch: Partial<TripRequest>) {
+    const nextRequest = { ...request, ...patch };
     dispatch({
       type: "replace_request",
-      request: { ...request, ...patch },
+      request: nextRequest,
     });
+    if (!trip) {
+      const guidance = nextBriefGuidance(nextRequest);
+      if (guidance) dispatch({ type: "interaction_updated", interaction: guidance });
+      else dispatch({ type: "interaction_cleared" });
+    }
   }
 
   function setTravellerComposition(type: Traveller["type"], count: number) {
@@ -1270,6 +1408,8 @@ export default function TravelWorkspace() {
       return;
     }
 
+    const responseDeadline = new Promise<void>((resolve) => window.setTimeout(resolve, 3_500));
+
     dispatch({
       type: "conversation_started",
       entry: { id: messageId("user"), role: "user", text: message },
@@ -1306,6 +1446,7 @@ export default function TravelWorkspace() {
           phase: "committed",
           message,
           trip: trip,
+          conversationHistory: state.conversation.slice(-8).map(({ role, text }) => ({ role, text })),
         }),
       });
       const body: unknown = await response.json().catch(() => undefined);
@@ -1318,7 +1459,22 @@ export default function TravelWorkspace() {
         };
       }
 
-      const envelope = body as { kind?: unknown; result?: unknown };
+      await responseDeadline;
+
+      const envelope = body as { kind?: unknown; result?: unknown; message?: unknown };
+      if (envelope.kind === "reply" && typeof envelope.message === "string") {
+        dispatch({ type: "conversation_reply_received", entry: { id: messageId("assistant"), role: "assistant", text: envelope.message } });
+        dispatch({ type: "interaction_updated", interaction: {
+          message: envelope.message,
+          events: [{ id: `${turnOperationId}:complete`, type: "operation_completed", status: "completed", label: "Answered from the current trip context" }],
+          actions: [],
+        } });
+        return;
+      }
+      if (envelope.kind === "suggestion" && isModificationResult(envelope.result)) {
+        handleSuggestionResult(envelope.result);
+        return;
+      }
       if (envelope.kind === "explanation" && isExplanationResult(envelope.result)) {
         setComposerText("");
         dispatch({
@@ -1410,6 +1566,7 @@ export default function TravelWorkspace() {
       if (!isPlanResult(body)) throw new Error("Invalid PLAN response");
       await minimumVisibility;
       setShowPlanningAnimation(false);
+      if (!trip) initialPlanningDeadlineRef.current = undefined;
       dispatch({
         type: "interaction_updated",
         interaction: {
@@ -1525,6 +1682,7 @@ export default function TravelWorkspace() {
       if (!isDestinationDiscoveryResult(body)) throw new Error("Invalid discovery response");
       await minimumVisibility;
       setShowPlanningAnimation(false);
+      if (!trip) initialPlanningDeadlineRef.current = undefined;
       dispatch({
         type: "interaction_updated",
         interaction: {
@@ -1536,13 +1694,14 @@ export default function TravelWorkspace() {
       dispatch({
         type: "discovery_received",
         result: body,
-        entry: { id: messageId("assistant"), role: "assistant", text: body.message },
+        entry: { id: messageId("assistant"), role: "assistant", text: body.type === "destination_options" && body.recommendationExplanation ? `${body.message} ${body.recommendationExplanation}` : body.message },
       });
       if (body.type === "conflict") {
+        const recoveryActions = destinationRecoveryActions(request, activeOperationId);
         dispatch({ type: "interaction_updated", interaction: {
-          message: body.message,
-          events: [{ id: `${activeOperationId}:constraint`, type: "constraint_detected", status: "completed", label: body.message }],
-          actions: [{ id: `${activeOperationId}:retry`, type: "retry", label: "Search again" }],
+          message: "I couldn't find a fully supported match for those exact details. Choose an adjustment below to widen the available options.",
+          events: [{ id: `${activeOperationId}:constraint`, type: "constraint_detected", status: "completed", label: "Dates or budget need a small adjustment" }],
+          actions: recoveryActions,
         } });
       }
     } catch (error: unknown) {
@@ -1589,55 +1748,69 @@ export default function TravelWorkspace() {
 
   function nextBriefGuidance(nextRequest: TripRequest): InteractionPresentation | undefined {
     const nextOperationId = operationId("clarify");
-    if (!nextRequest.origin) return {
-      message: "Where would you like to begin your journey?",
-      events: [{ id: `${nextOperationId}:origin`, type: "fact_missing", status: "active", label: "Starting city needed", target: { type: "trip_field", field: "origin" } }],
-      actions: [],
-      focus: { operationId: nextOperationId, target: { type: "trip_field", field: "origin" }, phase: "understanding" },
-    };
-    if (!nextRequest.destination) return {
-      message: "Do you have a destination in mind, or should I compare supported places?",
-      events: [{ id: `${nextOperationId}:destination`, type: "fact_missing", status: "active", label: "Destination preference needed", target: { type: "trip_field", field: "destination" } }],
-      actions: [{ id: `${nextOperationId}:open`, type: "set_open_destination", label: "Help me choose" }],
-      focus: { operationId: nextOperationId, target: { type: "trip_field", field: "destination" }, phase: "understanding" },
-    };
-    if (!nextRequest.startDate || !nextRequest.endDate) return {
-      message: "When would you like to travel?",
-      events: [{ id: `${nextOperationId}:dates`, type: "fact_missing", status: "active", label: "Travel dates needed", target: { type: "trip_field", field: "dates" } }],
-      actions: (state.latestIntake?.suggestedDateRanges ?? []).map((range) => ({ id: `${nextOperationId}:${range.id}`, type: "set_dates" as const, startDate: range.startDate, endDate: range.endDate, label: range.label })),
-      focus: { operationId: nextOperationId, target: { type: "trip_field", field: "dates" }, phase: "understanding" },
-    };
-    if (nextRequest.travellers.length === 0) return {
-      message: "Who will be travelling?",
-      events: [{ id: `${nextOperationId}:travellers`, type: "fact_missing", status: "active", label: "Traveller count needed", target: { type: "trip_field", field: "travellers" } }],
-      actions: [
+    const essentials = [
+      { missing: !nextRequest.origin, field: "origin" as const, label: "Starting city" },
+      { missing: !nextRequest.destination, field: "destination" as const, label: "Destination or recommendations" },
+      { missing: !nextRequest.startDate || !nextRequest.endDate, field: "dates" as const, label: "Travel dates" },
+      { missing: nextRequest.travellers.length === 0, field: "travellers" as const, label: "Traveller details" },
+    ];
+    const missing = essentials.filter((item) => item.missing);
+    if (missing.length === 0) return undefined;
+    const actions: GuidedAction[] = [];
+    if (!nextRequest.destination) actions.push({ id: `${nextOperationId}:open`, type: "set_open_destination", label: "Help me choose" });
+    if (!nextRequest.startDate || !nextRequest.endDate) actions.push(
+      ...(state.latestIntake?.suggestedDateRanges ?? []).map((range) => ({ id: `${nextOperationId}:${range.id}`, type: "set_dates" as const, startDate: range.startDate, endDate: range.endDate, label: range.label })),
+    );
+    if (nextRequest.travellers.length === 0) actions.push(
         { id: `${nextOperationId}:solo`, type: "set_travellers", adults: 1, children: 0, seniors: 0, label: "Just me" },
         { id: `${nextOperationId}:two`, type: "set_travellers", adults: 2, children: 0, seniors: 0, label: "2 adults" },
         { id: `${nextOperationId}:family`, type: "set_travellers", adults: 2, children: 1, seniors: 0, label: "2 adults + 1 child" },
-      ],
-      focus: { operationId: nextOperationId, target: { type: "trip_field", field: "travellers" }, phase: "understanding" },
+    );
+    const firstMissing = missing[0]!;
+    return {
+      message: `Complete ${missing.map((item) => item.label.toLocaleLowerCase("en")).join(", ")} to start planning. The checklist and highlighted Trip Brief fields update as you add them.`,
+      events: essentials.map((item): InteractionEvent => ({
+        id: `${nextOperationId}:essential:${item.field}`,
+        type: item.missing ? "fact_missing" : "fact_recognized",
+        status: item.missing ? (item.field === firstMissing.field ? "active" : "pending") : "completed",
+        label: `${item.label} ${item.missing ? "needed" : "added"}`,
+        target: { type: "trip_field", field: item.field },
+      })),
+      actions: actions.slice(0, 8),
+      focus: { operationId: nextOperationId, target: { type: "trip_field", field: firstMissing.field }, phase: "understanding" },
     };
-    return undefined;
   }
 
   function planningRecoveryActions(outcome: Exclude<SpecifiedPlanApiResult, { type: "trip_ready" }>): GuidedAction[] {
     if (outcome.type === "clarification") {
       return [{ id: operationId("continue"), type: "submit_plan", label: "Continue with current details" }];
     }
-    return (outcome.factBundle?.allowedFollowUpActions ?? []).slice(0, 4).flatMap((action): GuidedAction[] => {
-      if (action.type === "retry") return [{ id: action.id, type: "retry", label: action.label }];
-      if (action.type === "change_scope") return [{ id: action.id, type: "set_open_destination", label: action.label }];
+    const groundedActions = (outcome.factBundle?.allowedFollowUpActions ?? []).flatMap((action): GuidedAction[] => {
+      if (action.type === "retry") return [];
+      if (action.type === "change_scope") return [{ id: action.id, type: "set_open_destination", label: "Compare other destinations" }];
       if (action.type === "keep_current") return [{ id: action.id, type: "keep_current", label: action.label }];
       if (action.type === "adjust_constraint") {
         const constraintId = action.id.replace(/^action:adjust:/, "");
         const constraint = request.constraints.find((item) => item.id === constraintId);
         if (constraint?.category === "budget" && constraint.value.maxTotal) {
-          return [{ id: action.id, type: "set_budget", amount: constraint.value.maxTotal.amount + 5_000, label: action.label }];
+          return [{ id: action.id, type: "set_budget", amount: constraint.value.maxTotal.amount + 10_000, label: `Increase budget by ${formatMoney(10_000)}` }];
         }
         return [{ id: action.id, type: "remove_constraint", constraintId, label: action.label }];
       }
       return [];
     });
+    const fallbacks = destinationRecoveryActions(request, operationId("plan-recovery"));
+    const candidates = [...groundedActions, ...fallbacks];
+    const unique = new Map<string, GuidedAction>();
+    for (const action of candidates) {
+      const key = action.type === "set_budget" || action.type === "remove_constraint"
+        ? "budget"
+        : action.type === "set_dates"
+          ? action.id.endsWith(":next-week") ? "next-week" : "extend-dates"
+          : action.type;
+      if (!unique.has(key)) unique.set(key, action);
+    }
+    return [...unique.values()].slice(0, 4);
   }
 
   async function handleGuidedAction(action: GuidedAction) {
@@ -1710,9 +1883,15 @@ export default function TravelWorkspace() {
 
   function reportAsyncError(error: unknown, fallback: string) {
     const value = error as { code?: unknown; message?: unknown; retryable?: unknown };
+    const rawMessage = typeof value?.message === "string" ? value.message.trim() : "";
+    const message = /overlap/i.test(rawMessage)
+      ? "That activity overlaps with something already scheduled. Choose another time."
+      : /(?:selection|offer|session):/i.test(rawMessage) || rawMessage.length > 220
+        ? fallback
+        : rawMessage || fallback;
     const workspaceError = {
       code: typeof value?.code === "string" ? value.code : "NETWORK_FAILURE",
-      message: typeof value?.message === "string" ? value.message : fallback,
+      message,
       retryable: value?.retryable !== false,
     };
     dispatch({
@@ -1834,6 +2013,40 @@ export default function TravelWorkspace() {
     } });
   }
 
+  function handleSuggestionResult(result: ModificationResult) {
+    if (result.type === "conflict") {
+      handleModificationResult(result);
+      return;
+    }
+    const options = result.type === "alternatives"
+      ? result.options
+      : [{
+          proposal: result.proposal,
+          preview: result.preview,
+          projection: result.projection,
+          message: result.message,
+        }];
+    const assistantMessage = result.type === "alternatives"
+      ? result.message
+      : "I found one schedule-valid activity near the stay. Select it below if you want to add it.";
+    dispatch({
+      type: "modification_options_received",
+      result,
+      entry: { id: messageId("assistant"), role: "assistant", text: assistantMessage },
+    });
+    const suggestionOperationId = operationId("suggest");
+    dispatch({ type: "interaction_updated", interaction: {
+      message: assistantMessage,
+      events: [{ id: `${suggestionOperationId}:complete`, type: "inventory_search_completed", status: "completed", label: "Found activities that preserve the current schedule" }],
+      actions: options.slice(0, 4).map((option) => ({
+        id: `${suggestionOperationId}:${option.proposal.id}`,
+        type: "apply_proposal" as const,
+        proposalId: option.proposal.id,
+        label: option.message.replace(/\s+on\s+\d{4}-\d{2}-\d{2}\.?$/, ""),
+      })),
+    } });
+  }
+
   async function addActivityToDay(date: string) {
     await browseActivities(date);
   }
@@ -1898,7 +2111,14 @@ export default function TravelWorkspace() {
     setInventoryPicker({ kind: "activity", date, selectionId, currentOfferId, offers: currentActivity ? [currentActivity] : [], loading: true });
     try {
       const body = await cachedInventoryPost<SearchResponse<ActivityOffer>>("/api/inventory/activities/search", { locationId: day.locationId, startDate: date, endDate: date, travellers: trip.request.travellers, interests: trip.request.preferences.interests ?? [], constraints: trip.request.constraints });
-      setInventoryPicker({ kind: "activity", date, selectionId, currentOfferId, offers: [...(currentActivity ? [currentActivity] : []), ...body.results.filter((offer) => offer.id !== currentOfferId)], loading: false });
+      const scheduledActivities = projectionState?.hydratedSelections
+        .filter((item) => item.selectionId !== selectionId && isActivity(item.offer) && item.offer.startsAt.slice(0, 10) === date)
+        .map((item) => item.offer as ActivityOffer) ?? [];
+      const scheduleValidOffers = body.results.filter((offer) =>
+        offer.id !== currentOfferId
+        && scheduledActivities.every((scheduled) => !activitiesOverlap(offer, scheduled)),
+      );
+      setInventoryPicker({ kind: "activity", date, selectionId, currentOfferId, offers: [...(currentActivity ? [currentActivity] : []), ...scheduleValidOffers], loading: false });
     } catch (error: unknown) {
       setInventoryPicker({ kind: "activity", date, selectionId, currentOfferId, offers: currentActivity ? [currentActivity] : [], loading: false, error: error instanceof Error ? error.message : "Activity inventory is unavailable" });
     }
@@ -1988,8 +2208,11 @@ export default function TravelWorkspace() {
     : undefined;
   const focusedSelectionId = activeFocus?.target.type === "selection" ? activeFocus.target.selectionId : undefined;
   const focusedDay = activeFocus?.target.type === "day" ? activeFocus.target.date : highlightedDay;
+  const focusMessage = state.interaction?.events.find((event) => event.status === "active")?.label
+    ?? state.interaction?.message;
   function tripFactClass(field: BriefFact, populated: boolean): string {
-    return ["trip-fact", populated ? "" : "trip-fact-empty", focusedTripField === field ? "ai-focus" : ""].filter(Boolean).join(" ");
+    const essential = field !== "preferences";
+    return ["trip-fact", populated ? "" : "trip-fact-empty", !trip && hasBriefFacts && essential && !populated ? "essential-missing" : "", focusedTripField === field ? "ai-focus" : ""].filter(Boolean).join(" ");
   }
   const preferenceFact = [
     maxBudgetAmount ? formatMoney(maxBudgetAmount) : undefined,
@@ -2014,7 +2237,7 @@ export default function TravelWorkspace() {
             <form className="initial-intake-form" onSubmit={submitConversation}>
               <label htmlFor="initial-trip-message"><SparkIcon /><span className="sr-only">Describe your dream trip</span></label>
               <textarea id="initial-trip-message" value={composerText} placeholder="Describe your dream trip..." onChange={(event) => setComposerText(event.target.value)} />
-              <button type="submit" disabled={busy || composerText.trim().length < 2}>{interpreting ? "Planning…" : "Plan"} <span aria-hidden="true">→</span></button>
+              <Button type="submit" disabled={busy || composerText.trim().length < 2}>{interpreting ? "Planning…" : "Plan"} <span aria-hidden="true">→</span></Button>
             </form>
             {interpreting ? <div className="initial-intake-status is-loading" role="status"><i aria-hidden="true" /><div><strong>Understanding your trip</strong><span>Structuring your dates, travellers, budget, and preferences.</span></div></div> : null}
             <p className="quick-start-prompt">Or try one of our quick starts</p>
@@ -2028,9 +2251,9 @@ export default function TravelWorkspace() {
           </section>
           <div className="conversation-actions" aria-label="Suggested actions">
             {state.interaction?.actions.map((action) => (
-              <button type="button" className="guided-action-chip" disabled={busy} key={action.id} onClick={() => void handleGuidedAction(action)}>
+              <Chip type="button" className="guided-action-chip" disabled={busy} key={action.id} onClick={() => void handleGuidedAction(action)}>
                 {action.label}
-              </button>
+              </Chip>
             ))}
           </div>
 
@@ -2050,9 +2273,9 @@ export default function TravelWorkspace() {
                   }
                 }}
               />
-              <button type="submit" aria-label="Send message" disabled={busy || composerText.trim().length < 2}>
+              <IconButton type="submit" aria-label="Send message" disabled={busy || composerText.trim().length < 2}>
                 <Image src="/figma/arrow-up.svg" alt="" width={24} height={24} />
-              </button>
+              </IconButton>
             </div>
             <small>{interpreting ? "Understanding your request…" : <>AI-assisted travel service. Check important <span>info</span>.</>}</small>
           </form></>}
@@ -2062,10 +2285,10 @@ export default function TravelWorkspace() {
           {hasBriefFacts ? <section className={`trip-brief-bar${editingFact ? ` fact-editing-${editingFact}` : ""}`} aria-label="Current Trip Brief">
             <button type="button" className={tripFactClass("origin", Boolean(request.origin))} onClick={() => setEditingFact(editingFact === "origin" ? undefined : "origin")}><span>From city</span><strong>{originFact}</strong></button>
             <button type="button" className={tripFactClass("destination", Boolean(request.destination))} onClick={() => setEditingFact(editingFact === "destination" ? undefined : "destination")}><span>To city / country</span><strong>{destinationFact}</strong></button>
-            <button type="button" className={tripFactClass("dates", Boolean(request.startDate || request.endDate))} onClick={() => setEditingFact(editingFact === "dates" ? undefined : "dates")}><span>Travel dates</span><strong>{dateFact}</strong></button>
+            <button type="button" className={tripFactClass("dates", Boolean(request.startDate && request.endDate))} onClick={() => setEditingFact(editingFact === "dates" ? undefined : "dates")}><span>Travel dates</span><strong>{dateFact}</strong></button>
             <button type="button" className={tripFactClass("guests", request.travellers.length > 0)} onClick={() => setEditingFact(editingFact === "guests" ? undefined : "guests")}><span>Guests</span><strong>{guestsFact}</strong></button>
             <button type="button" className={tripFactClass("preferences", hasPreferences)} onClick={() => setEditingFact(editingFact === "preferences" ? undefined : "preferences")}><span>Preferences</span><strong>{preferenceFact}</strong></button>
-            <button type="button" className="trip-update-button" disabled={busy || Boolean(briefProblem)} onClick={() => void submitPlan()}>Update</button>
+            <Button className="trip-update-button" disabled={busy || Boolean(briefProblem)} onClick={() => void submitPlan()}>Update</Button>
             {editingFact ? <form ref={factEditorRef} className="trip-form fact-editor" onSubmit={(event) => { event.preventDefault(); }}>
               {editingFact === "origin" ? <LocationField id="edit-origin" label="From city" placeholder="Search city or airport" selectedId={request.origin} selectedLabel={originLabel} onSelectedLabelChange={setOriginLabel} onSelect={(location) => updateRequest({ origin: location?.id })} /> : null}
               {editingFact === "destination" ? <><LocationField id="edit-destination" label="To city / country" placeholder="Search destination" selectedId={request.destination?.kind === "specified" ? request.destination.locationId : undefined} selectedLabel={openDestination ? "Open to recommendations" : destinationLabel} disabled={openDestination} onSelectedLabelChange={setDestinationLabel} onSelect={(location) => updateRequest({ destination: location ? { kind: "specified", locationId: location.id } : undefined })} /><button className={openDestination ? "open-destination-button active" : "open-destination-button"} type="button" onClick={() => { setDestinationLabel(""); updateRequest({ destination: openDestination ? undefined : { kind: "open" } }); }}>Not sure where? Help me choose</button></> : null}
@@ -2084,6 +2307,13 @@ export default function TravelWorkspace() {
               busy={busy}
               onSelect={(option) => void selectDestination(option)}
             />
+          ) : state.destinationDiscovery?.type === "conflict" ? (
+            <DiscoveryRecovery
+              result={state.destinationDiscovery}
+              actions={state.interaction?.actions ?? []}
+              busy={busy}
+              onAction={(action) => void handleGuidedAction(action)}
+            />
           ) : trip && projectionState ? (
             <>
               {inventoryPicker ? (
@@ -2095,6 +2325,7 @@ export default function TravelWorkspace() {
                 busy={busy}
                 highlightedDay={focusedDay}
                 highlightedSelectionId={focusedSelectionId}
+                focusMessage={focusMessage}
                 onToggleLock={(selectionId, locked) =>
                   void changeLock(selectionId, locked)
                 }
@@ -2109,7 +2340,7 @@ export default function TravelWorkspace() {
           ) : initialExperience ? (
             <QuickStartGrid busy={busy} onSelect={(item) => void startQuickTrip(item)} />
           ) : (
-            <EmptyWorkspace />
+            <BriefSetupWorkspace request={request} onEdit={setEditingFact} />
           )}
           </section>
         </div>

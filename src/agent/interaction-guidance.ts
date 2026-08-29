@@ -24,62 +24,43 @@ function event(
   };
 }
 
-function fieldLabel(field: NaturalIntakeResponse["appliedFields"][number]): string {
-  return ({
-    origin: "Starting city",
-    destination: "Destination",
-    dates: "Travel dates",
-    travellers: "Traveller details",
-    pace: "Trip pace",
-    interests: "Interests",
-    constraints: "Budget and constraints",
-  })[field];
-}
-
 export function intakePresentation(
   result: NaturalIntakeResponse,
   operationId: string,
   originSuggestions: Array<{ id: string; label: string }> = [],
 ): InteractionPresentation {
-  const events: InteractionEvent[] = result.appliedFields.map((field, index) =>
-    event(
-      operationId,
-      index,
-      "fact_recognized",
-      `${fieldLabel(field)} understood`,
-      "completed",
-      field === "travellers"
-        ? "travellers"
-        : field === "constraints"
-          ? "budget"
-          : field === "pace" || field === "interests"
-            ? "preferences"
-            : field,
-    ),
-  );
+  const essentials = [
+    { requirement: "origin" as const, field: "origin" as const, label: "Starting city" },
+    { requirement: "destination_intent" as const, field: "destination" as const, label: "Destination or recommendations" },
+    { requirement: "dates" as const, field: "dates" as const, label: "Travel dates" },
+    { requirement: "travellers" as const, field: "travellers" as const, label: "Traveller details" },
+  ];
+  const missingSet = new Set(result.missingRequired);
+  const firstMissing = result.missingRequired[0];
+  const events: InteractionEvent[] = essentials.map((item, index) => event(
+    operationId,
+    index,
+    missingSet.has(item.requirement) ? "fact_missing" : "fact_recognized",
+    missingSet.has(item.requirement) ? `${item.label} needed` : `${item.label} added`,
+    missingSet.has(item.requirement) ? (item.requirement === firstMissing ? "active" : "pending") : "completed",
+    item.field,
+  ));
   const actions: GuidedAction[] = [];
-  const nextMissing = result.missingRequired[0];
   let message = result.message;
 
-  if (nextMissing === "origin") {
-    events.push(event(operationId, events.length, "fact_missing", "Starting city needed", "active", "origin"));
-    message = result.request.destination?.kind === "specified"
-      ? "That destination works. Where would you like to begin your journey?"
-      : "Where would you like to begin your journey?";
-    actions.push(...originSuggestions.slice(0, 4).map((location) => ({
+  if (missingSet.has("origin")) {
+    actions.push(...originSuggestions.slice(0, 2).map((location) => ({
       id: `${operationId}:origin:${location.id}`,
       type: "set_location" as const,
       field: "origin" as const,
       locationId: location.id,
       label: location.label,
     })));
-  } else if (nextMissing === "destination_intent") {
-    events.push(event(operationId, events.length, "fact_missing", "Destination preference needed", "active", "destination"));
-    message = "Do you have a destination in mind, or should I compare places that fit this trip?";
+  }
+  if (missingSet.has("destination_intent")) {
     actions.push({ id: `${operationId}:destination:open`, type: "set_open_destination", label: "Help me choose" });
-  } else if (nextMissing === "dates") {
-    events.push(event(operationId, events.length, "fact_missing", "Travel dates needed", "active", "dates"));
-    message = "When would you like to travel? Here are a few supported date ranges to continue.";
+  }
+  if (missingSet.has("dates")) {
     actions.push(...result.suggestedDateRanges.map((range) => ({
       id: `${operationId}:dates:${range.id}`,
       type: "set_dates" as const,
@@ -87,14 +68,17 @@ export function intakePresentation(
       endDate: range.endDate,
       label: range.label,
     })));
-  } else if (nextMissing === "travellers") {
-    events.push(event(operationId, events.length, "fact_missing", "Traveller count needed", "active", "travellers"));
-    message = "Who will be travelling?";
+  }
+  if (missingSet.has("travellers")) {
     actions.push(
       { id: `${operationId}:travellers:solo`, type: "set_travellers", adults: 1, children: 0, seniors: 0, label: "Just me" },
       { id: `${operationId}:travellers:two`, type: "set_travellers", adults: 2, children: 0, seniors: 0, label: "2 adults" },
       { id: `${operationId}:travellers:family`, type: "set_travellers", adults: 2, children: 1, seniors: 0, label: "2 adults + 1 child" },
     );
+  }
+  if (result.missingRequired.length > 0) {
+    const missingLabels = essentials.filter((item) => missingSet.has(item.requirement)).map((item) => item.label.toLocaleLowerCase("en"));
+    message = `I added the details I could verify. To start planning, complete ${missingLabels.join(", ")}. The checklist and highlighted Trip Brief fields will update as you add them.`;
   } else if (result.issues.length > 0) {
     const issue = result.issues[0]!;
     message = `${issue.message} You can update that detail and I’ll continue from the rest of your brief.`;
@@ -106,7 +90,7 @@ export function intakePresentation(
   return {
     message,
     events,
-    actions,
+    actions: actions.slice(0, 8),
     focus: active?.target ? { operationId, target: active.target, phase: "understanding" } : undefined,
   };
 }

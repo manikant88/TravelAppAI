@@ -63,6 +63,7 @@ export type WorkspaceAction =
   | { type: "interaction_updated"; interaction: InteractionPresentation }
   | { type: "interaction_cleared" }
   | { type: "conversation_started"; entry: ConversationEntry }
+  | { type: "conversation_reply_received"; entry: ConversationEntry }
   | { type: "intake_started"; entry: ConversationEntry }
   | { type: "intake_received"; result: NaturalIntakeResponse; entry: ConversationEntry }
   | { type: "intake_failed"; error: WorkspaceError; entry: ConversationEntry }
@@ -86,7 +87,7 @@ export type WorkspaceAction =
     }
   | { type: "planning_failed"; error: WorkspaceError; entry: ConversationEntry }
   | { type: "modification_started"; entry: ConversationEntry }
-  | { type: "modification_options_received"; entry: ConversationEntry }
+  | { type: "modification_options_received"; result?: Extract<ModificationResult, { type: "proposal" | "alternatives" }>; entry: ConversationEntry }
   | { type: "modification_conflict"; result: Extract<ModificationResult, { type: "conflict" }>; entry: ConversationEntry }
   | { type: "explanation_started"; entry: ConversationEntry }
   | { type: "explanation_received"; result: ExplanationResult; entry: ConversationEntry }
@@ -136,6 +137,13 @@ export function workspaceReducer(
         error: undefined,
         latestExplanation: undefined,
         interaction: undefined,
+        conversation: [...state.conversation, action.entry],
+      };
+    case "conversation_reply_received":
+      return {
+        ...state,
+        asyncStatus: "idle",
+        error: undefined,
         conversation: [...state.conversation, action.entry],
       };
     case "intake_started":
@@ -246,14 +254,27 @@ export function workspaceReducer(
         modificationConflict: undefined,
         conversation: [...state.conversation, action.entry],
       };
-    case "modification_options_received":
+    case "modification_options_received": {
+      const options = action.result?.type === "alternatives"
+        ? action.result.options
+        : action.result ? [{
+            proposal: action.result.proposal,
+            preview: action.result.preview,
+            projection: action.result.projection,
+            message: action.result.message,
+          }] : [];
       return {
         ...state,
         asyncStatus: "idle",
         error: undefined,
         modificationConflict: undefined,
+        proposals: {
+          ...state.proposals,
+          ...Object.fromEntries(options.map((option) => [option.proposal.id, option])),
+        },
         conversation: [...state.conversation, action.entry],
       };
+    }
     case "modification_conflict":
       return {
         ...state,

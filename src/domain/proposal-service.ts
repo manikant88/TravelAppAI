@@ -43,7 +43,12 @@ function mapError(error: unknown): ProposalServiceError {
   if (error instanceof ProposalServiceError) return error;
   if (error instanceof ProposalError) {
     const status = error.code === "STALE_PROPOSAL" ? 409 : 422;
-    return new ProposalServiceError(error.code, error.message, status);
+    const message = /(?:selection|offer|session):/i.test(error.message)
+      ? error.code === "INVALID_RESULT"
+        ? "That option conflicts with the current itinerary. Choose another time or card."
+        : "That change could not be applied to the current itinerary."
+      : error.message;
+    return new ProposalServiceError(error.code, message, status);
   }
   return new ProposalServiceError(
     "INVENTORY_FAILURE",

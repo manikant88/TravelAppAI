@@ -116,6 +116,35 @@ function activityDate(candidate: CandidateFactBundle): string | undefined {
   return textFact(candidate, "start")?.slice(0, 10);
 }
 
+const TRAVEL_ACTIVITY_BUFFER_MS = 90 * 60 * 1000;
+
+function fitsDestinationTravelWindow(
+  candidate: CandidateFactBundle,
+  travel: CandidateFactBundle[],
+  request: PlannableTripRequest,
+): boolean {
+  const startsAt = textFact(candidate, "start");
+  const endsAt = textFact(candidate, "end");
+  if (!startsAt || !endsAt) return false;
+  const start = Date.parse(startsAt);
+  const end = Date.parse(endsAt);
+  if (startsAt.slice(0, 10) === request.startDate) {
+    const arrivals = travel
+      .map((selection) => textFact(selection, "arrival"))
+      .filter((value): value is string => Boolean(value) && value!.slice(0, 10) === request.startDate)
+      .map(Date.parse);
+    if (arrivals.length > 0 && start < Math.max(...arrivals) + TRAVEL_ACTIVITY_BUFFER_MS) return false;
+  }
+  if (endsAt.slice(0, 10) === request.endDate) {
+    const departures = travel
+      .map((selection) => textFact(selection, "departure"))
+      .filter((value): value is string => Boolean(value) && value!.slice(0, 10) === request.endDate)
+      .map(Date.parse);
+    if (departures.length > 0 && end > Math.min(...departures) - TRAVEL_ACTIVITY_BUFFER_MS) return false;
+  }
+  return true;
+}
+
 function activityPreferenceScore(
   candidate: CandidateFactBundle,
   interests: string[],
@@ -181,7 +210,11 @@ function deterministicAction(input: PlannerDecisionInput) {
   for (const candidate of activityCandidates) {
     const date = activityDate(candidate);
     if (!date || (selectedByDate.get(date) ?? 0) >= activityLimitPerDay) continue;
-    if (overlapsSelectedTravel(candidate, selectedTravel) || overlaps(candidate, selectedActivities)) continue;
+    if (
+      overlapsSelectedTravel(candidate, selectedTravel) ||
+      !fitsDestinationTravelWindow(candidate, selectedTravel, input.request) ||
+      overlaps(candidate, selectedActivities)
+    ) continue;
     selectedActivities.push(candidate);
     selectedByDate.set(date, (selectedByDate.get(date) ?? 0) + 1);
     choices.push(candidateChoice(candidate, decisionIndex, allowedDimensions));

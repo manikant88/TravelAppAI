@@ -5,6 +5,13 @@ import type {
   ScopedModificationIntent,
 } from "@/agent/modification-contracts";
 
+export class SelectionTargetError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SelectionTargetError";
+  }
+}
+
 function totalPrice(facts: GroundedFact[]): number {
   const value = facts.find((fact) => fact.dimension === "total_price")?.value;
   return typeof value === "number" ? value : Number.POSITIVE_INFINITY;
@@ -23,6 +30,67 @@ function dateForDay(trip: Parameters<ModificationPlannerModel["interpretModifica
   date.setUTCDate(date.getUTCDate() + dayNumber - 1);
   const value = date.toISOString().slice(0, 10);
   return value <= trip.request.endDate ? value : undefined;
+}
+
+function selectionMatchesDate(selection: ModificationSelectionSummary, date: string): boolean {
+  if (!selection.startDate) return false;
+  if (selection.kind === "stay" && selection.endDate) {
+    return selection.startDate <= date && date < selection.endDate;
+  }
+  return selection.startDate === date;
+}
+
+function selectTarget(
+  input: Parameters<ModificationPlannerModel["interpretModification"]>[0],
+  kind: ModificationSelectionSummary["kind"] | undefined,
+): ModificationSelectionSummary {
+  const message = input.message.toLocaleLowerCase("en");
+  const explicitlyNamed = input.selections.filter((selection) =>
+    message.includes(selection.label.toLocaleLowerCase("en")),
+  );
+  if (explicitlyNamed.length === 1) return explicitlyNamed[0]!;
+
+  let candidates = kind
+    ? input.selections.filter((selection) => selection.kind === kind)
+    : [...input.selections];
+  const dayMatch = message.match(/\bday\s*(\d{1,2})\b/i);
+  if (dayMatch) {
+    const targetDate = dateForDay(input.trip, Number(dayMatch[1]));
+    if (!targetDate) throw new SelectionTargetError("That day is outside the current trip. Please choose a day shown in the itinerary.");
+    candidates = candidates.filter((selection) => selectionMatchesDate(selection, targetDate));
+  }
+
+  const dateMatch = message.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  if (dateMatch) {
+    candidates = candidates.filter((selection) => selectionMatchesDate(selection, dateMatch[1]!));
+  }
+
+  const mobilityMatch = message.match(/\b(low|medium|high)\s+mobility\b/i);
+  if (mobilityMatch) {
+    candidates = candidates.filter((selection) => selection.mobility === mobilityMatch[1]!.toLocaleLowerCase("en"));
+  }
+
+  const requestedRole = /\b(?:return|inbound)\b/i.test(message)
+    ? "return"
+    : /\b(?:outbound|departure|departing)\b/i.test(message)
+      ? "outbound"
+      : /\b(?:transfer|connection|connecting)\b/i.test(message)
+        ? "connecting"
+        : undefined;
+  if (requestedRole) candidates = candidates.filter((selection) => selection.role === requestedRole);
+
+  const termMatches = candidates.filter((selection) =>
+    selection.searchTerms?.some((term) => term.length >= 3 && new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(message)),
+  );
+  if (termMatches.length > 0 && termMatches.length < candidates.length) candidates = termMatches;
+
+  if (candidates.length !== 1) {
+    const noun = kind ?? "itinerary item";
+    throw new SelectionTargetError(candidates.length === 0
+      ? `I couldn't find a selected ${noun} matching all of those details. Please check the day, date, route, mobility, or card name.`
+      : `More than one ${noun} matches that request. Please include its day, date, route, mobility, or exact card name.`);
+  }
+  return candidates[0]!;
 }
 
 function activityAdditionIntent(
@@ -79,13 +147,7 @@ function deterministicIntent(input: Parameters<ModificationPlannerModel["interpr
   if (activityAddition) return activityAddition;
 
   const kind = targetKind(input.message);
-  const explicitlyNamed = input.selections.find((selection) =>
-    input.message.toLocaleLowerCase("en").includes(selection.label.toLocaleLowerCase("en")),
-  );
-  const target = explicitlyNamed ?? (kind
-    ? input.selections.find((selection) => selection.kind === kind)
-    : undefined);
-  if (!target) throw new Error("The requested selection is ambiguous");
+  const target = selectTarget(input, kind);
 
   const action = /\b(?:remove|delete|drop)\b/i.test(input.message) && target.kind === "activity"
     ? "remove" as const

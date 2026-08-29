@@ -221,10 +221,10 @@ describe("natural-language trip intake", () => {
     expect(result.missingRequired).not.toContain("origin");
     expect(result.missingRequired).toContain("dates");
     expect(result.suggestedDateRanges[0]).toEqual({
-      id: "dates:tomorrow",
-      label: "Tomorrow · 5 days",
-      startDate: "2026-08-29",
-      endDate: "2026-09-02",
+      id: "dates:recommended",
+      label: "Recommended · 30 Aug – 3 Sept",
+      startDate: "2026-08-30",
+      endDate: "2026-09-03",
     });
   });
 

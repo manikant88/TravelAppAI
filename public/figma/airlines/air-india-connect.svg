@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Air India Connect</title>
+  <rect width="64" height="64" rx="10" fill="#fff7f5"/>
+  <path d="M13 42 28 14h8L25 42h-12Zm16 0 13-24h8L38 42h-9Z" fill="#d71920"/>
+  <path d="M25 35h20l4 7H22l3-7Z" fill="#f4a024"/>
+</svg>

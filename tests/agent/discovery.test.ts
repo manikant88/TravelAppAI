@@ -70,6 +70,7 @@ function discoveryResult(ids = ["city:goa", "region:thailand-andaman"]): Destina
       allowedFollowUpActions: [],
     },
     profiles: available.map((item) => item.profile),
+    matchingDestinationCount: available.length,
     inventoryVersion: "travel-seed-v1",
   };
 }
@@ -138,5 +139,18 @@ describe("open-ended destination discovery", () => {
     expect(result.type).toBe("destination_options");
     if (result.type !== "destination_options") return;
     expect(result.block.emphasis?.recommendedId).toBe("city:goa");
+  });
+
+  it("reports the full match count while keeping model evidence bounded", async () => {
+    const discovery = discoveryResult();
+    discovery.matchingDestinationCount = 13;
+    const result = await runDestinationDiscovery(request, {
+      repository,
+      discover: vi.fn().mockResolvedValue(discovery),
+    });
+    expect(result).toMatchObject({
+      type: "destination_options",
+      matchingDestinationCount: 13,
+    });
   });
 });

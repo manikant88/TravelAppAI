@@ -229,6 +229,11 @@ describe("end-to-end generic multi-stop PLAN", () => {
     expect(result.trip.selectedTravel).toHaveLength(3);
     expect(result.trip.selectedActivities).toHaveLength(2);
     expect(result.projection.validation).toEqual({ valid: true, issues: [] });
-    expect(result.projection.itinerary.find((day) => day.date === "2026-10-12")?.locationId).toBe("city:krabi");
+    const krabiArrivalDay = result.projection.itinerary.find((day) => day.date === "2026-10-12");
+    expect(krabiArrivalDay?.locationId).toBe("city:krabi");
+    expect(krabiArrivalDay?.events[0]).toMatchObject({
+      type: "travel",
+      selectionId: result.trip.selectedTravel.find((selection) => selection.offerKind === "transfer")?.id,
+    });
   });
 });

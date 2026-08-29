@@ -460,10 +460,28 @@ export function buildItinerary(
         travellerIds: trip.request.travellers.map((traveller) => traveller.id),
       });
     }
-    day.events.sort(
-      (left, right) =>
-        (left.startAt ?? "9999").localeCompare(right.startAt ?? "9999", "en") ||
-        left.id.localeCompare(right.id, "en"),
+    const isUntimedTransfer = (event: ItineraryEvent) => event.type === "travel" && !event.startAt;
+    const isLastDay = day.dayNumber === days.length;
+    const eventRank = (event: ItineraryEvent): number => {
+      if (day.dayNumber === 1) {
+        if (event.type === "travel" && event.startAt) return 0;
+        if (isUntimedTransfer(event)) return 1;
+        return { stay: 2, activity: 3, free_time: 4, travel: 5 }[event.type];
+      }
+      if (isLastDay) {
+        if (event.type === "activity") return 0;
+        if (isUntimedTransfer(event)) return 1;
+        if (event.type === "travel") return 2;
+        return event.type === "stay" ? 3 : 4;
+      }
+      if (isUntimedTransfer(event)) return 0;
+      if (event.type === "stay") return 1;
+      return event.type === "activity" ? 2 : event.type === "travel" ? 3 : 4;
+    };
+    day.events.sort((left, right) =>
+      eventRank(left) - eventRank(right) ||
+      (left.startAt ?? "9999").localeCompare(right.startAt ?? "9999", "en") ||
+      left.id.localeCompare(right.id, "en"),
     );
   });
   return days;
@@ -765,8 +783,8 @@ function timedIntervals(trip: TripState, hydrated: HydratedSelection[]) {
   return hydrated.flatMap(({ selectionId, offer }) => {
     const selection = selections.get(selectionId);
     if (!selection) return [];
-    if (isTransportOffer(offer)) return [{ selection, startAt: offer.departureAt, endAt: offer.arrivalAt, minutes: offer.durationMinutes }];
-    if (isActivityOffer(offer)) return [{ selection, startAt: offer.startsAt, endAt: offer.endsAt, minutes: Math.round((Date.parse(offer.endsAt) - Date.parse(offer.startsAt)) / 60_000) }];
+    if (isTransportOffer(offer)) return [{ selection, label: `${offer.operator} ${offer.mode}`, startAt: offer.departureAt, endAt: offer.arrivalAt, minutes: offer.durationMinutes }];
+    if (isActivityOffer(offer)) return [{ selection, label: offer.activityFacts.name, startAt: offer.startsAt, endAt: offer.endsAt, minutes: Math.round((Date.parse(offer.endsAt) - Date.parse(offer.startsAt)) / 60_000) }];
     return [];
   });
 }
@@ -778,6 +796,33 @@ function validateSchedule(
 ): ValidationIssue[] {
   const intervals = timedIntervals(trip, hydrated);
   const issues: ValidationIssue[] = [];
+  const transports = hydrated.flatMap(({ selectionId, offer }) =>
+    isTransportOffer(offer) ? [{ selectionId, offer }] : [],
+  );
+  const outboundArrival = transports
+    .filter(({ offer }) => offer.arrivalAt.slice(0, 10) === trip.request.startDate)
+    .sort((left, right) => right.offer.arrivalAt.localeCompare(left.offer.arrivalAt, "en"))[0];
+  const returnDeparture = transports
+    .filter(({ offer }) => offer.departureAt.slice(0, 10) === trip.request.endDate)
+    .sort((left, right) => left.offer.departureAt.localeCompare(right.offer.departureAt, "en"))[0];
+  const travelBufferMs = 90 * 60 * 1000;
+  hydrated.forEach(({ selectionId, offer }) => {
+    if (!isActivityOffer(offer)) return;
+    if (
+      outboundArrival &&
+      offer.startsAt.slice(0, 10) === trip.request.startDate &&
+      Date.parse(offer.startsAt) < Date.parse(outboundArrival.offer.arrivalAt) + travelBufferMs
+    ) {
+      issues.push(issue("SCHEDULE_CONFLICT", "error", `arrival-window-${selectionId}`, `${offer.activityFacts.name} starts before there is enough time to arrive and check in.`, [outboundArrival.selectionId, selectionId]));
+    }
+    if (
+      returnDeparture &&
+      offer.endsAt.slice(0, 10) === trip.request.endDate &&
+      Date.parse(offer.endsAt) > Date.parse(returnDeparture.offer.departureAt) - travelBufferMs
+    ) {
+      issues.push(issue("SCHEDULE_CONFLICT", "error", `departure-window-${selectionId}`, `${offer.activityFacts.name} ends too close to the return departure.`, [selectionId, returnDeparture.selectionId]));
+    }
+  });
   for (let leftIndex = 0; leftIndex < intervals.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < intervals.length; rightIndex += 1) {
       const left = intervals[leftIndex];
@@ -787,7 +832,7 @@ function validateSchedule(
         Date.parse(left.startAt) < Date.parse(right.endAt) &&
         Date.parse(right.startAt) < Date.parse(left.endAt)
       ) {
-        issues.push(issue("SCHEDULE_CONFLICT", "error", `${left.selection.id}-${right.selection.id}`, `Selections ${left.selection.id} and ${right.selection.id} overlap`, [left.selection.id, right.selection.id]));
+        issues.push(issue("SCHEDULE_CONFLICT", "error", `${left.selection.id}-${right.selection.id}`, `${left.label} overlaps with ${right.label}. Choose a different time.`, [left.selection.id, right.selection.id]));
       }
     }
   }

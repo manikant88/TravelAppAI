@@ -300,6 +300,9 @@ describe("deterministic trip projection", () => {
         expect.objectContaining({ code: "MOBILITY_CONFLICT", severity: "error" }),
       ]),
     );
+    const scheduleIssue = projection.validation.issues.find((issue) => issue.code === "SCHEDULE_CONFLICT");
+    expect(scheduleIssue?.message).toContain("overlaps with");
+    expect(scheduleIssue?.message).not.toContain("selection:");
     offers.delete(overlap.id);
   });
 

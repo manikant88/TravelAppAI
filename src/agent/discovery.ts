@@ -46,6 +46,8 @@ export interface DestinationOption {
   region: "india" | "international";
   tags: string[];
   imageAssetKey?: string;
+  imageUrl?: string;
+  imageAltText?: string;
 }
 
 export type DestinationDiscoveryApiResult =
@@ -54,6 +56,9 @@ export type DestinationDiscoveryApiResult =
       block: OptionComparisonBlock;
       factBundle: FactBundle;
       options: DestinationOption[];
+      matchingDestinationCount?: number;
+      shortlistedDestinationCount?: number;
+      recommendationExplanation?: string;
       message: string;
     }
   | {
@@ -93,6 +98,8 @@ function asOption(profile: DestinationMarketProfile): DestinationOption {
     region: profile.region,
     tags: profile.tags,
     imageAssetKey: profile.imageAssetKey,
+    imageUrl: profile.imageUrl,
+    imageAltText: profile.imageAltText,
   };
 }
 
@@ -143,8 +150,11 @@ function validateRecommendation(
 function deterministicRecommendation(discovery: DestinationDiscoveryResult): DestinationRecommendation {
   const candidates = [...discovery.observation.candidates]
     .sort((left, right) => {
+      const matches = (candidate: typeof left) => Number(candidate.facts.find((fact) => fact.dimension === "theme_matches")?.value ?? 0);
       const price = (candidate: typeof left) => Number(candidate.facts.find((fact) => fact.dimension === "price_floor")?.value ?? Number.POSITIVE_INFINITY);
-      return price(left) - price(right) || left.candidateId.localeCompare(right.candidateId, "en");
+      const travel = (candidate: typeof left) => Number(candidate.facts.find((fact) => fact.dimension === "travel_minutes")?.value ?? Number.POSITIVE_INFINITY);
+      const activities = (candidate: typeof left) => Number(candidate.facts.find((fact) => fact.dimension === "activity_options")?.value ?? 0);
+      return matches(right) - matches(left) || travel(left) - travel(right) || price(left) - price(right) || activities(right) - activities(left) || left.candidateId.localeCompare(right.candidateId, "en");
     })
     .slice(0, 4);
   const dimensions = discovery.factBundle.allowedComparisonDimensions.slice(0, 2) as DestinationRecommendation["comparisonDimensions"];
@@ -154,6 +164,22 @@ function deterministicRecommendation(discovery: DestinationDiscoveryResult): Des
     supportingFactIds: candidates.flatMap((candidate) => candidate.facts.slice(0, 2).map((fact) => fact.id)).slice(0, 8),
     comparisonDimensions: dimensions.length > 0 ? dimensions : ["price"],
   });
+}
+
+function recommendationExplanation(
+  recommendation: DestinationRecommendation,
+  discovery: DestinationDiscoveryResult,
+  profiles: Map<string, DestinationMarketProfile>,
+): string {
+  const candidate = discovery.observation.candidates.find((item) => item.candidateId === recommendation.recommendedMarketId);
+  const name = profiles.get(recommendation.recommendedMarketId)?.name ?? "This destination";
+  const value = (dimension: string) => candidate?.facts.find((fact) => fact.dimension === dimension)?.value;
+  const matches = Number(value("theme_matches") ?? 0);
+  const price = Number(value("price_floor") ?? 0);
+  const travel = Number(value("travel_minutes") ?? 0);
+  const activities = Number(value("activity_options") ?? 0);
+  const fit = matches > 0 ? `${matches} requested theme match${matches === 1 ? "" : "es"}` : "the strongest combination of travel time and price";
+  return `I recommend ${name} for ${fit}. Its conservative trip floor is ₹${price.toLocaleString("en-IN")}, observed return travel is ${Math.floor(travel / 60)}h ${travel % 60}m, and ${activities} activity option${activities === 1 ? " is" : "s are"} available for these dates.`;
 }
 
 export async function runDestinationDiscovery(
@@ -176,7 +202,10 @@ export async function runDestinationDiscovery(
   let discovery: DestinationDiscoveryResult;
   try {
     discovery = await (dependencies.discover ?? discoverDestinations)(request, repository);
-  } catch {
+  } catch (error: unknown) {
+    console.error("Destination inventory discovery failed", {
+      reason: error instanceof Error ? error.message : String(error),
+    });
     throw new DestinationDiscoveryError(
       "INVENTORY_FAILURE",
       "Destination inventory is temporarily unavailable",
@@ -185,6 +214,7 @@ export async function runDestinationDiscovery(
     );
   }
   const candidateCount = discovery.observation.candidates.length;
+  const matchingDestinationCount = discovery.matchingDestinationCount;
   if (candidateCount < 2) {
     return {
       type: "conflict",
@@ -216,6 +246,10 @@ export async function runDestinationDiscovery(
     recommendation = deterministicRecommendation(discovery);
   }
   const profiles = new Map(discovery.profiles.map((profile) => [profile.id, profile]));
+  const orderedIds = [
+    ...recommendation.candidateMarketIds,
+    ...discovery.observation.candidates.map((candidate) => candidate.candidateId),
+  ].filter((id, index, ids) => ids.indexOf(id) === index);
 
   return {
     type: "destination_options",
@@ -230,7 +264,10 @@ export async function runDestinationDiscovery(
       },
     }),
     factBundle: discovery.factBundle,
-    options: recommendation.candidateMarketIds.map((id) => asOption(profiles.get(id)!)),
-    message: "I found several fully supported destinations. Choose one to continue into detailed trip planning.",
+    options: orderedIds.map((id) => asOption(profiles.get(id)!)),
+    matchingDestinationCount,
+    shortlistedDestinationCount: recommendation.candidateMarketIds.length,
+    recommendationExplanation: recommendationExplanation(recommendation, discovery, profiles),
+    message: `I found ${matchingDestinationCount} destinations that satisfy the hard trip constraints and shortlisted the strongest matches.`,
   };
 }

@@ -72,6 +72,8 @@ export interface DestinationMarketProfile {
   displayOrder: number;
   tags: string[];
   imageAssetKey?: string;
+  imageUrl?: string;
+  imageAltText?: string;
 }
 
 export interface DestinationDiscoveryRepository {
@@ -598,6 +600,8 @@ function createNeonInventoryRepository(database: Database): InventoryRepository 
           displayOrder: destinationMarkets.displayOrder,
           tags: locations.tags,
           imageAssetKey: locations.imageAssetKey,
+          imageUrl: imageAssets.url,
+          imageAltText: imageAssets.altText,
         })
         .from(destinationMarkets)
         .innerJoin(
@@ -607,11 +611,14 @@ function createNeonInventoryRepository(database: Database): InventoryRepository 
             eq(locations.active, true),
           ),
         )
+        .leftJoin(imageAssets, eq(locations.imageAssetKey, imageAssets.key))
         .orderBy(asc(destinationMarkets.displayOrder), asc(destinationMarkets.locationId));
 
       return rows.map((row) => ({
         ...row,
         imageAssetKey: row.imageAssetKey ?? undefined,
+        imageUrl: row.imageUrl ?? undefined,
+        imageAltText: row.imageAltText ?? undefined,
       }));
     },
 

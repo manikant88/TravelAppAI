@@ -6,6 +6,8 @@ This file is the technical source of truth for the Cleartrip AI Trip Workspace. 
 
 Read `PROJECT_CONTEXT.md` first.
 
+> **Current implementation handoff:** read `AI_HANDOFF.md` before using this long-form specification. Its dated decisions supersede older workflow-state and user-visible proposal-approval language where the two conflict. Typed proposals remain valid internal mutation transactions.
+
 ---
 
 # 1. Architectural rules

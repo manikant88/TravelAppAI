@@ -304,22 +304,23 @@ function explicitDayCount(message: string): number | undefined {
 
 function suggestedDateRanges(message: string, today: string, supportedFrom: string, supportedUntil: string) {
   const match = message.match(/\b(\d{1,2})\s*days?\b/i);
-  if (!match) return [];
-  const durationDays = Number(match[1]);
+  const durationDays = match ? Number(match[1]) : 3;
   if (durationDays < 2 || durationDays > 21) return [];
   const base = new Date(`${today}T12:00:00Z`);
   const candidates = [
-    { id: "dates:tomorrow", label: `Tomorrow · ${durationDays} days`, offset: 1 },
-    { id: "dates:next-week", label: `Next week · ${durationDays} days`, offset: 7 },
-    { id: "dates:following-week", label: `Following week · ${durationDays} days`, offset: 14 },
+    { id: "dates:recommended", prefix: "Recommended", offset: 2 },
+    { id: "dates:next-week", prefix: "Next week", offset: 7 },
+    { id: "dates:following-week", prefix: "Following week", offset: 14 },
   ];
-  return candidates.flatMap(({ id, label, offset }) => {
+  const display = (date: Date) => new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", timeZone: "UTC" }).format(date);
+  return candidates.flatMap(({ id, prefix, offset }) => {
     const start = new Date(base);
     start.setUTCDate(start.getUTCDate() + offset);
     const end = new Date(start);
     end.setUTCDate(end.getUTCDate() + durationDays - 1);
     const startDate = isoDate(start);
     const endDate = isoDate(end);
+    const label = `${prefix} · ${display(start)} – ${display(end)}`;
     return startDate >= supportedFrom && endDate <= supportedUntil ? [{ id, label, startDate, endDate }] : [];
   });
 }

@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       await runDestinationDiscovery(body, {
         model: modelName && apiKey
-          ? createOpenAIDestinationDiscoveryModel({ model: modelName, apiKey })
+          ? createOpenAIDestinationDiscoveryModel({ model: modelName, apiKey, timeoutMs: 2_500 })
           : undefined,
       }),
     );

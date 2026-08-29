@@ -188,6 +188,7 @@ export function createSnapshotInventoryRepository(
   const marketProfiles: DestinationMarketProfile[] = seed.markets.flatMap((market) => {
     const location = locationById.get(market.locationId);
     if (!location || !active(location.active)) return [];
+    const image = location.imageAssetKey ? imageByKey.get(location.imageAssetKey) : undefined;
     return [{
       id: market.locationId,
       name: location.name,
@@ -196,6 +197,8 @@ export function createSnapshotInventoryRepository(
       displayOrder: market.displayOrder,
       tags: [...(location.tags ?? [])],
       imageAssetKey: location.imageAssetKey ?? undefined,
+      imageUrl: image?.url,
+      imageAltText: image?.altText,
     }];
   }).sort((left, right) => left.displayOrder - right.displayOrder || left.id.localeCompare(right.id, "en"));
 

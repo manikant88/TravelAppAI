@@ -77,4 +77,58 @@ describe("deterministic modification interpretation", () => {
     });
     expect(result.preferredThemes).toEqual(expect.arrayContaining(["adventure", "food"]));
   });
+
+  it("removes the activity matching both day and mobility qualifiers", async () => {
+    const result = await createDeterministicModificationModel().interpretModification({
+      message: "Remove the high mobility activity from day 2.",
+      trip,
+      selections: [
+        { selectionId: "activity:day-1", kind: "activity", locked: false, label: "Goa heritage story", offerId: "offer:day-1", startDate: "2026-12-15", mobility: "low" },
+        { selectionId: "activity:day-2", kind: "activity", locked: false, label: "Goa outdoor adventure", offerId: "offer:day-2", startDate: "2026-12-16", mobility: "high" },
+      ],
+      supportedThemes: ["heritage", "outdoors"],
+    });
+
+    expect(result).toMatchObject({ action: "remove", targetSelectionId: "activity:day-2" });
+  });
+
+  it("targets travel by route role rather than selection order", async () => {
+    const result = await createDeterministicModificationModel().interpretModification({
+      message: "Replace the return flight with a later option.",
+      trip,
+      selections: [
+        { selectionId: "travel:outbound", kind: "travel", locked: false, label: "Air India flight", offerId: "offer:out", startDate: "2026-12-15", role: "outbound" },
+        { selectionId: "travel:return", kind: "travel", locked: false, label: "IndiGo flight", offerId: "offer:return", startDate: "2026-12-18", role: "return" },
+      ],
+      supportedThemes: [],
+    });
+
+    expect(result).toMatchObject({ action: "replace", targetSelectionId: "travel:return" });
+  });
+
+  it("targets the stay covering the supplied trip day", async () => {
+    const result = await createDeterministicModificationModel().interpretModification({
+      message: "Replace the stay on day 3 with a quieter hotel.",
+      trip,
+      selections: [
+        { selectionId: "stay:first", kind: "stay", locked: false, label: "Goa Beach Hotel", offerId: "offer:first", startDate: "2026-12-15", endDate: "2026-12-17" },
+        { selectionId: "stay:second", kind: "stay", locked: false, label: "Goa Quiet Retreat", offerId: "offer:second", startDate: "2026-12-17", endDate: "2026-12-19" },
+      ],
+      supportedThemes: [],
+    });
+
+    expect(result).toMatchObject({ action: "replace", targetSelectionId: "stay:second" });
+  });
+
+  it("rejects an underspecified target when multiple cards match", async () => {
+    await expect(createDeterministicModificationModel().interpretModification({
+      message: "Remove an activity.",
+      trip,
+      selections: [
+        { selectionId: "activity:day-1", kind: "activity", locked: false, label: "Goa heritage story", offerId: "offer:day-1", startDate: "2026-12-15", mobility: "low" },
+        { selectionId: "activity:day-2", kind: "activity", locked: false, label: "Goa outdoor adventure", offerId: "offer:day-2", startDate: "2026-12-16", mobility: "high" },
+      ],
+      supportedThemes: [],
+    })).rejects.toThrow("More than one activity matches");
+  });
 });

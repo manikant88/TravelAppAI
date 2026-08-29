@@ -49,7 +49,10 @@ import {
   searchTransport,
 } from "@/inventory/service";
 import type { ActivityOffer, CoverageResult } from "@/inventory/contracts";
-import { createDeterministicModificationModel } from "@/agent/deterministic-modification";
+import {
+  createDeterministicModificationModel,
+  SelectionTargetError,
+} from "@/agent/deterministic-modification";
 
 const modifyRequestSchema = z
   .object({
@@ -97,6 +100,74 @@ function selectionLabel(selection: Selection, offer: ResolvedOffer): string {
   if ("serviceId" in offer) return `${offer.operator} ${offer.mode}`;
   if ("transferId" in offer) return `${offer.mode} transfer`;
   return selection.id;
+}
+
+function selectionSummary(
+  selection: Selection,
+  offer: ResolvedOffer,
+  trip: TripState,
+): ModificationSelectionSummary {
+  const common = {
+    selectionId: selection.id,
+    kind: selection.kind,
+    locked: selection.locked,
+    label: selectionLabel(selection, offer),
+    offerId: selection.offerId,
+  };
+  if ("sessionId" in offer) {
+    return {
+      ...common,
+      startDate: offer.startsAt.slice(0, 10),
+      endDate: offer.endsAt.slice(0, 10),
+      mobility: offer.activityFacts.mobility,
+      searchTerms: [
+        offer.locationId.split(":").at(-1) ?? offer.locationId,
+        ...offer.activityFacts.tags,
+      ],
+    };
+  }
+  if ("roomOfferId" in offer) {
+    return {
+      ...common,
+      startDate: offer.checkIn,
+      endDate: offer.checkOut,
+      searchTerms: [
+        offer.locationId.split(":").at(-1) ?? offer.locationId,
+        offer.roomFacts.roomLabel,
+        ...offer.propertyFacts.tags,
+        ...offer.propertyFacts.amenities,
+      ],
+    };
+  }
+  if ("serviceId" in offer) {
+    const role = offer.from === trip.request.origin
+      ? "outbound" as const
+      : offer.to === trip.request.origin
+        ? "return" as const
+        : "connecting" as const;
+    return {
+      ...common,
+      startDate: offer.departureAt.slice(0, 10),
+      endDate: offer.arrivalAt.slice(0, 10),
+      role,
+      searchTerms: [
+        offer.from.split(":").at(-1) ?? offer.from,
+        offer.to.split(":").at(-1) ?? offer.to,
+        offer.operator,
+        offer.mode,
+      ],
+    };
+  }
+  return {
+    ...common,
+    role: "connecting",
+    searchTerms: [
+      offer.from.split(":").at(-1) ?? offer.from,
+      offer.to.split(":").at(-1) ?? offer.to,
+      offer.mode,
+      "transfer",
+    ],
+  };
 }
 
 function allowedDimensions(offer: ResolvedOffer): string[] {
@@ -815,6 +886,39 @@ async function runActivityAddition(
         message: `I selected ${names.join(" and ")} for day ${Math.round((Date.parse(`${intent.targetDate}T12:00:00Z`) - Date.parse(`${trip.request.startDate}T12:00:00Z`)) / 86_400_000) + 1}. Both fit the requested themes and the validated schedule.`,
       };
     }
+    const fact = conflictFact(
+      trip.id,
+      "activity_coverage",
+      `Non-overlapping activity combinations on ${intent.targetDate}`,
+      "none_available",
+    );
+    const actionId = `action:keep-current:${intent.targetDate}`;
+    return {
+      type: "conflict",
+      code: "NO_VALID_ALTERNATIVE",
+      proposals: [],
+      block: constraintConflictBlockSchema.parse({
+        type: "constraint_conflict",
+        constraintIds: [],
+        alternatives: [{ id: `compromise:keep:${intent.targetDate}`, actionId }],
+        emphasis: {
+          recommendedId: `compromise:keep:${intent.targetDate}`,
+          summary: `I couldn’t find ${requestedCount} activities that fit together without a time conflict.`,
+          supportingFactIds: [fact.id],
+          suggestedFollowUpActionIds: [actionId],
+        },
+      }),
+      factBundle: factBundleSchema.parse({
+        facts: [fact],
+        allowedComparisonDimensions: ["activity_coverage"],
+        allowedFollowUpActions: [{
+          id: actionId,
+          label: "Keep the current schedule",
+          type: "keep_current",
+        }],
+      }),
+      message: `I couldn’t find ${requestedCount} non-overlapping activities for that day. Try fewer activities or choose another day.`,
+    };
   }
 
   const candidates = (
@@ -996,13 +1100,9 @@ export async function runModification(
     const offers = new Map(
       projection.hydratedSelections.map((item) => [item.selectionId, item.offer]),
     );
-    const selections: ModificationSelectionSummary[] = allSelections(trip).map((selection) => ({
-      selectionId: selection.id,
-      kind: selection.kind,
-      locked: selection.locked,
-      label: selectionLabel(selection, offers.get(selection.id)!),
-      offerId: selection.offerId,
-    }));
+    const selections: ModificationSelectionSummary[] = allSelections(trip).map((selection) =>
+      selectionSummary(selection, offers.get(selection.id)!, trip),
+    );
 
     const deterministicModel = createDeterministicModificationModel();
     let rawIntent: ScopedModificationIntent;
@@ -1031,7 +1131,10 @@ export async function runModification(
         // Explicit selection/category/budget changes are code-owned. Only an
         // ambiguous message is offered to the model for semantic resolution.
         rawIntent = await deterministicModel.interpretModification(modelInput);
-      } catch {
+      } catch (error: unknown) {
+        if (error instanceof SelectionTargetError) {
+          throw new ModifyError("INVALID_REQUEST", error.message, 400, false);
+        }
         try {
           if (!dependencies.model) throw new Error("No ambiguity resolver configured");
           rawIntent = await dependencies.model.interpretModification(modelInput);

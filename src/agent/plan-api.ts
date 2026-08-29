@@ -107,6 +107,24 @@ const clarificationQuestions = {
   interests: "Which kinds of experiences matter most for this trip?",
 } as const;
 
+function completedPlanMessage(result: Extract<SpecifiedPlanCoordinatorResult, { status: "completed" }>): string {
+  const transports = result.projection.hydratedSelections.filter((item) => "serviceId" in item.offer);
+  const stays = result.projection.hydratedSelections.filter((item) => "roomOfferId" in item.offer);
+  const activities = result.projection.hydratedSelections.filter((item) => "sessionId" in item.offer);
+  const stayName = stays[0] && "roomOfferId" in stays[0].offer ? stays[0].offer.propertyFacts.name : undefined;
+  const interests = result.trip.request.preferences.interests ?? [];
+  const activityFit = activities.filter((item) => "sessionId" in item.offer && item.offer.activityFacts.tags.some((tag) => interests.includes(tag))).length;
+  const selectionSummary = [
+    `${transports.length} travel selection${transports.length === 1 ? "" : "s"}`,
+    stayName ? stayName : `${stays.length} stay${stays.length === 1 ? "" : "s"}`,
+    `${activities.length} schedule-valid activit${activities.length === 1 ? "y" : "ies"}`,
+  ].join(", ");
+  const fitSummary = interests.length > 0
+    ? `${activityFit} selected activit${activityFit === 1 ? "y matches" : "ies match"} your requested themes`
+    : "the activities fit the available travel windows";
+  return `I assembled ${selectionSummary}. ${fitSummary}; nothing is scheduled before arrival and check-in or too close to departure. The validated trip total is ₹${result.projection.budget.total.amount.toLocaleString("en-IN")}.`;
+}
+
 function mapCoordinatorResult(
   result: SpecifiedPlanCoordinatorResult,
   tripId: string,
@@ -117,9 +135,7 @@ function mapCoordinatorResult(
       type: "trip_ready",
       trip: result.trip,
       projection: result.projection,
-      message: planningMode === "deterministic_fallback"
-        ? "Your trip has been assembled from valid inventory and passed pricing, route, and schedule checks."
-        : "Your trip plan is ready to review.",
+      message: completedPlanMessage(result),
       actionSummary: [
         `Used ${result.trace.finalBudget.searchCallsUsed} grounded inventory searches`,
         `Validated the assembled trip ${result.trace.validationAttempts.length} time${result.trace.validationAttempts.length === 1 ? "" : "s"}`,
@@ -172,9 +188,9 @@ function mapCoordinatorResult(
     }));
     if (fallbackActions.length === 0) {
       fallbackActions.push({
-        id: "action:retry:planning-conflict",
-        label: "Review the brief and search again",
-        type: "retry",
+        id: "action:change-scope:planning-conflict",
+        label: "Compare other destinations",
+        type: "change_scope",
       });
     }
     const factBundle = factBundleSchema.parse({

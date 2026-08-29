@@ -75,6 +75,11 @@ export interface ModificationSelectionSummary {
   locked: boolean;
   label: string;
   offerId: string;
+  startDate?: string;
+  endDate?: string;
+  mobility?: "low" | "medium" | "high";
+  role?: "outbound" | "return" | "connecting";
+  searchTerms?: string[];
 }
 
 export interface ModificationCandidate {

@@ -35,11 +35,21 @@ export interface DestinationDiscoveryResult {
   observation: ObservationBundle;
   factBundle: FactBundle;
   profiles: DestinationMarketProfile[];
+  matchingDestinationCount: number;
   inventoryVersion: string;
 }
 
 function normalized(values: string[]): string[] {
-  return [...new Set(values.map((value) => value.trim().toLocaleLowerCase("en")).filter(Boolean))];
+  const aliases: Record<string, string[]> = {
+    relaxation: ["relaxed", "wellness", "slow"],
+    relaxing: ["relaxed", "wellness", "slow"],
+    relaxed: ["relaxation", "wellness", "slow"],
+    food: ["food", "culinary", "market"],
+    nature: ["nature", "mountains", "hills", "river", "scenic"],
+    adventure: ["adventure", "outdoors"],
+  };
+  const terms = values.map((value) => value.trim().toLocaleLowerCase("en")).filter(Boolean);
+  return [...new Set(terms.flatMap((value) => [value, ...(aliases[value] ?? [])]))];
 }
 
 function constraintsFor<K extends Constraint["category"]>(
@@ -99,8 +109,7 @@ export async function discoverDestinations(
         profileScore(right, interests) - profileScore(left, interests) ||
         left.displayOrder - right.displayOrder ||
         left.id.localeCompare(right.id, "en"),
-    )
-    .slice(0, 6);
+    );
   const nights = calendarDayDifference(request.startDate, request.endDate);
   const travellerCount = request.travellers.length;
   const maximum = conservativeMaximum(request);
@@ -189,7 +198,8 @@ export async function discoverDestinations(
     (item): item is { profile: DestinationMarketProfile; facts: GroundedFact[] } =>
       Boolean(item),
   );
-  const candidates: CandidateFactBundle[] = valid.map(({ profile, facts }) => ({
+  const shortlisted = valid.slice(0, 6);
+  const candidates: CandidateFactBundle[] = shortlisted.map(({ profile, facts }) => ({
     candidateId: profile.id,
     facts,
   }));
@@ -234,7 +244,8 @@ export async function discoverDestinations(
   return {
     observation,
     factBundle,
-    profiles: valid.map((item) => item.profile),
+    profiles: shortlisted.map((item) => item.profile),
+    matchingDestinationCount: valid.length,
     inventoryVersion: catalog.inventoryVersion,
   };
 }

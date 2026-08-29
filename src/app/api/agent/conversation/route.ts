@@ -8,6 +8,7 @@ import {
   createOpenAICommunicationModel,
   createOpenAIModificationModel,
   createOpenAINaturalIntakeModel,
+  createOpenAITravelContextModel,
 } from "@/agent/model";
 import { tripRequestSchema } from "@/domain/request";
 import { tripStateSchema } from "@/domain/trip";
@@ -15,6 +16,7 @@ import { createDeterministicModificationModel } from "@/agent/deterministic-modi
 import { createInventoryRepository } from "@/inventory/repository";
 import { intakePresentation } from "@/agent/interaction-guidance";
 import { applyCommunication, composeCommunication } from "@/agent/communication";
+import { classifyCommittedConversation, contextualizedMessage } from "@/agent/conversation-routing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,6 +37,10 @@ const committedConversationSchema = z
     actionHint: z.enum(["modify_trip", "explain_trip"]).optional(),
     selectionId: z.string().trim().min(1).optional(),
     targetDate: z.string().date().optional(),
+    conversationHistory: z.array(z.object({
+      role: z.enum(["user", "assistant"]),
+      text: z.string().trim().min(1).max(800),
+    }).strict()).max(8).optional(),
   })
   .strict();
 
@@ -42,6 +48,25 @@ const conversationRequestSchema = z.discriminatedUnion("phase", [
   draftConversationSchema,
   committedConversationSchema,
 ]);
+
+function suggestedActivityDay(trip: z.infer<typeof tripStateSchema>, message: string): number {
+  const explicit = Number(message.match(/\bday\s*(\d+)\b/i)?.[1]);
+  const days = Math.round((Date.parse(`${trip.request.endDate}T12:00:00Z`) - Date.parse(`${trip.request.startDate}T12:00:00Z`)) / 86_400_000) + 1;
+  if (Number.isInteger(explicit) && explicit >= 1 && explicit <= days) return explicit;
+  const counts = new Map<number, number>();
+  for (const activity of trip.selectedActivities) {
+    const day = Math.round((Date.parse(`${activity.date}T12:00:00Z`) - Date.parse(`${trip.request.startDate}T12:00:00Z`)) / 86_400_000) + 1;
+    counts.set(day, (counts.get(day) ?? 0) + 1);
+  }
+  const candidates = Array.from({ length: days }, (_, index) => index + 1)
+    .filter((day) => days <= 2 || (day > 1 && day < days));
+  return candidates.sort((left, right) => (counts.get(left) ?? 0) - (counts.get(right) ?? 0) || left - right)[0] ?? 1;
+}
+
+function contextLabel(locationId: string): string {
+  const value = locationId.split(":").at(-1) ?? locationId;
+  return value.replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => undefined);
@@ -89,7 +114,7 @@ export async function POST(request: NextRequest) {
           events: presentation.events,
           availableActions: presentation.actions,
         },
-        model && apiKey
+        model && apiKey && result.missingRequired.length === 0
           ? createOpenAICommunicationModel({ model, apiKey, timeoutMs: 2_500 })
           : undefined,
       );
@@ -100,16 +125,60 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const deterministicIntent = /\b(?:why|explain|how much|what|when|where|reason|breakdown)\b/i.test(parsed.data.message) &&
-      !/\b(?:change|replace|remove|add|cheaper|lock|unlock|update|make)\b/i.test(parsed.data.message)
-      ? "explain_trip" as const
-      : "modify_trip" as const;
-    const intent = parsed.data.actionHint ?? deterministicIntent;
+    const effectiveMessage = contextualizedMessage(parsed.data.message, parsed.data.conversationHistory);
+    const intent = parsed.data.actionHint ?? classifyCommittedConversation(effectiveMessage, parsed.data.trip);
+
+    if (intent === "activity_suggestion") {
+      const day = suggestedActivityDay(parsed.data.trip, effectiveMessage);
+      const themes = /\b(?:food|eat|restaurant|cafe|market)\b/i.test(effectiveMessage) ? " food market" : "";
+      const result = await runModification(
+        {
+          message: `Add 1 activity on day ${day}${themes}. Suggest grounded options and preserve the current itinerary.`,
+          trip: parsed.data.trip,
+        },
+        { model: createDeterministicModificationModel() },
+      );
+      return NextResponse.json({ kind: "suggestion", result });
+    }
+
+    if (/^(?:hi|hello|hey|thanks|thank you|help|what can you do)[!.?\s]*$/i.test(effectiveMessage)) {
+      return NextResponse.json({
+        kind: "reply",
+        message: "I can explain any current choice, compare the trip total, or suggest schedule-valid activities near your stay. Ask about a day or an itinerary card whenever you like.",
+      });
+    }
+
+    if (intent === "travel_context") {
+      const fallback = /\b(?:weather|forecast|temperature|rain)\b/i.test(effectiveMessage)
+        ? "I can’t check live weather in this prototype. Please check a current forecast closer to travel; I can still help adjust the itinerary around the conditions you expect."
+        : "I can help with itinerary facts and grounded options, but I can’t verify that extra place information right now.";
+      if (!model || !apiKey) return NextResponse.json({ kind: "reply", message: fallback });
+      try {
+        const answer = await createOpenAITravelContextModel({ model, apiKey, timeoutMs: 2_500 }).answer({
+          question: effectiveMessage,
+          origin: contextLabel(parsed.data.trip.request.origin),
+          destination: contextLabel(parsed.data.trip.route.marketId),
+          routeStops: parsed.data.trip.route.stops.map((stop) => contextLabel(stop.locationId)),
+          startDate: parsed.data.trip.request.startDate,
+          endDate: parsed.data.trip.request.endDate,
+        });
+        return NextResponse.json({ kind: "reply", message: answer });
+      } catch {
+        return NextResponse.json({ kind: "reply", message: fallback });
+      }
+    }
+
+    if (intent === "unsupported") {
+      return NextResponse.json({
+        kind: "reply",
+        message: "I’m sorry, I can’t help with that request right now. I can help with this trip’s route, travel, stays, activities, schedule, and cost.",
+      });
+    }
 
     if (intent === "explain_trip") {
       const result = await runExplanation(
         {
-          question: parsed.data.message,
+          question: effectiveMessage,
           trip: parsed.data.trip,
           selectionId: parsed.data.selectionId,
         },
@@ -124,7 +193,7 @@ export async function POST(request: NextRequest) {
 
     const result = await runModification(
       {
-        message: parsed.data.message,
+        message: effectiveMessage,
         trip: parsed.data.trip,
         targetDate: parsed.data.targetDate,
       },

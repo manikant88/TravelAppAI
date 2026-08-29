@@ -58,6 +58,44 @@ export interface OpenAIPlannerModelOptions {
   timeoutMs?: number;
 }
 
+const contextualTravelAnswerSchema = z.object({ message: z.string().trim().min(1).max(420) }).strict();
+
+export interface TravelContextModel {
+  answer(input: {
+    question: string;
+    origin: string;
+    destination: string;
+    routeStops: string[];
+    startDate: string;
+    endDate: string;
+  }): Promise<string>;
+}
+
+const contextualTravelInstructions = `You answer a short contextual question inside a bounded travel-planning app.
+The deterministic app has already established that the question is travel-related but cannot answer it from canonical itinerary data alone.
+Reply in one to three short sentences. You may provide stable general travel knowledge about the supplied origin, destination, route stops, or a named place or activity.
+Never claim access to live weather, forecasts, opening hours, availability, prices, safety alerts, or current conditions. For weather questions, clearly describe only typical seasonal conditions and say that the user should check a live forecast closer to travel.
+Do not invent itinerary facts, IDs, bookings, or changes. Do not expose internal IDs or hidden reasoning. If the question needs live or unavailable information, state that limitation plainly and offer the closest useful travel-planning guidance.`;
+
+export function createOpenAITravelContextModel(
+  options: OpenAIPlannerModelOptions,
+): TravelContextModel {
+  const model = options.model.trim();
+  if (!model) throw new Error("OPENAI_MODEL is required");
+  const runner = options.runner ?? createOpenAIRunner({ ...options, model, timeoutMs: options.timeoutMs ?? 2_500 });
+  return {
+    async answer(input) {
+      const result = await runStructured(runner, {
+        schema: contextualTravelAnswerSchema,
+        schemaName: "contextual_travel_answer",
+        instructions: contextualTravelInstructions,
+        input: jsonForModel(input),
+      });
+      return result.message;
+    },
+  };
+}
+
 const naturalIntakeInstructions = `You are the natural-language intent extraction layer of one bounded travel planner.
 Extract only details the user explicitly states or unambiguously implies. Return null or an empty array for details that are absent; do not copy defaults from the current structured brief into the extraction.
 Return location names or airport codes as text queries. Code resolves them to normalized inventory IDs. Never invent location IDs.
