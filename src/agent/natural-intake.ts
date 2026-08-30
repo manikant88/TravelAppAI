@@ -346,7 +346,7 @@ function deterministicMessage(
     ].filter(Boolean).join(" ");
     return `I updated the details I could verify. ${nextStep}`;
   }
-  return "I converted your message into a complete grounded trip brief. I’m building the validated itinerary now.";
+  return "Thanks — I’ve got the details I need. Give me a moment while I compare the available travel, stays, and activities and shape them into a trip that fits.";
 }
 
 export async function runNaturalIntake(

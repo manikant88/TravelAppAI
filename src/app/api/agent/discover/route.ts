@@ -3,7 +3,10 @@ import {
   DestinationDiscoveryError,
   runDestinationDiscovery,
 } from "@/agent/discovery";
-import { createOpenAIDestinationDiscoveryModel } from "@/agent/model";
+import {
+  createOpenAIDestinationDiscoveryModel,
+} from "@/agent/model";
+import { generateAssistantMessage } from "@/agent/assistant-message.server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,12 +16,25 @@ export async function POST(request: NextRequest) {
   const modelName = process.env.OPENAI_MODEL?.trim();
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   try {
+    const result = await runDestinationDiscovery(body, {
+      model: modelName && apiKey
+        ? createOpenAIDestinationDiscoveryModel({ model: modelName, apiKey, timeoutMs: 2_500 })
+        : undefined,
+    });
+    const recommendationExplanation = result.type === "destination_options"
+      ? result.recommendationExplanation
+      : undefined;
+    const fallbackMessage = recommendationExplanation
+      ? `${result.message} ${recommendationExplanation}`
+      : result.message;
+    const message = await generateAssistantMessage(fallbackMessage, {
+        intent: result.type === "destination_options" ? "plan_trip" : "recover",
+        facts: [result.message, ...(recommendationExplanation ? [recommendationExplanation] : [])],
+        events: [],
+        availableActions: [],
+      });
     return NextResponse.json(
-      await runDestinationDiscovery(body, {
-        model: modelName && apiKey
-          ? createOpenAIDestinationDiscoveryModel({ model: modelName, apiKey, timeoutMs: 2_500 })
-          : undefined,
-      }),
+      { ...result, message, recommendationExplanation: undefined },
     );
   } catch (error: unknown) {
     if (error instanceof DestinationDiscoveryError) {

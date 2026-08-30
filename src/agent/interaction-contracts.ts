@@ -115,7 +115,7 @@ export const communicationContextSchema = z.object({
   intent: z.enum(["plan_trip", "modify_trip", "explain", "clarify", "recover"]),
   userMessage: z.string().max(1_200).optional(),
   fallbackMessage: z.string().trim().min(1).max(600),
-  facts: z.array(z.string().trim().min(1).max(240)).max(16),
+  facts: z.array(z.string().trim().min(1).max(600)).max(16),
   events: z.array(interactionEventSchema).max(16),
   availableActions: z.array(guidedActionSchema).max(8),
 }).strict();

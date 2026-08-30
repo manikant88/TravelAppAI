@@ -1,7 +1,7 @@
 "use client";
 
 import NextImage from "next/image";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
@@ -15,7 +15,7 @@ interface ThreeGlobeProps {
   onSelect: (market: HomeMarket) => void;
 }
 
-const INDIA_CENTER_ROTATION = -Math.PI / 2 - 80 * Math.PI / 180;
+const INDIA_CENTER_ROTATION = -Math.PI / 2 - 70 * Math.PI / 180;
 // The CC0 raster's painted geography begins slightly east of its nominal
 // equirectangular seam. Register all geographic markers to that map once,
 // rather than applying per-destination visual nudges.
@@ -41,7 +41,7 @@ export default function ThreeGlobe({ markets, activeMarket, onHover, onLeave, on
 
     const globe = new THREE.Group();
     globe.rotation.y = INDIA_CENTER_ROTATION;
-    globe.rotation.x = -0.08;
+    globe.rotation.x = -0.20;
     scene.add(globe);
 
     const globeMaterial = new THREE.MeshBasicMaterial({ color: 0xc5def1 });
@@ -75,6 +75,10 @@ export default function ThreeGlobe({ markets, activeMarket, onHover, onLeave, on
     controls.rotateSpeed = 0.72;
     controls.minPolarAngle = 0;
     controls.maxPolarAngle = Math.PI;
+    const handleControlStart = () => shell.classList.add("is-dragging");
+    const handleControlEnd = () => shell.classList.remove("is-dragging");
+    controls.addEventListener("start", handleControlStart);
+    controls.addEventListener("end", handleControlEnd);
 
     let disposed = false;
     let texture: THREE.CanvasTexture | undefined;
@@ -142,6 +146,8 @@ export default function ThreeGlobe({ markets, activeMarket, onHover, onLeave, on
       disposed = true;
       window.cancelAnimationFrame(animationFrame);
       resizeObserver.disconnect();
+      controls.removeEventListener("start", handleControlStart);
+      controls.removeEventListener("end", handleControlEnd);
       controls.dispose();
       texture?.dispose();
       sphere.geometry.dispose();
@@ -156,7 +162,7 @@ export default function ThreeGlobe({ markets, activeMarket, onHover, onLeave, on
     <div ref={shellRef} className="three-globe-shell">
       <canvas ref={canvasRef} className="three-globe-canvas" aria-label="Interactive globe showing supported travel destinations" />
       <div className="globe-market-layer">
-        {markets.map((market) => (
+        {markets.map((market, index) => (
           <div
             key={market.id}
             ref={(node) => {
@@ -164,6 +170,7 @@ export default function ThreeGlobe({ markets, activeMarket, onHover, onLeave, on
               else labelRefs.current.delete(market.id);
             }}
             className={activeMarket?.id === market.id ? "globe-market-anchor is-active" : "globe-market-anchor"}
+            style={{ "--market-delay": `${index * 22}ms` } as CSSProperties}
             onPointerEnter={() => onHover(market)}
             onPointerLeave={onLeave}
           >
@@ -173,6 +180,7 @@ export default function ThreeGlobe({ markets, activeMarket, onHover, onLeave, on
               onFocus={() => onHover(market)}
               onBlur={onLeave}
               onClick={() => onSelect(market)}
+              aria-label={`Use the ${market.name} trip idea`}
             >
               <i aria-hidden="true" />
               <span>{market.name}</span>
@@ -184,6 +192,7 @@ export default function ThreeGlobe({ markets, activeMarket, onHover, onLeave, on
                   <small>{market.country}</small>
                   <strong>{market.name}</strong>
                   <span>{market.tags.join(" · ")}</span>
+                  <span className="market-hover-card-action">Use this trip idea <b aria-hidden="true">→</b></span>
                 </span>
               </span>
             ) : null}
@@ -222,7 +231,7 @@ async function createMapTexture(): Promise<THREE.CanvasTexture> {
     const luminance = (pixels.data[index]! + pixels.data[index + 1]! + pixels.data[index + 2]!) / 3;
     const isLand = pixels.data[index + 3]! > 20 && luminance < 238;
     // Match Myra's quiet globe treatment: pale blue water and white land.
-    const color = isLand ? [247, 250, 253] : [197, 222, 241];
+    const color = isLand ? [240, 245, 249] : [197, 222, 241];
     pixels.data[index] = color[0];
     pixels.data[index + 1] = color[1];
     pixels.data[index + 2] = color[2];

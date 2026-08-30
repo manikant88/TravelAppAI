@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import ThreeGlobe from "@/ui/three-globe";
 import { Button } from "@/ui/components/primitives";
@@ -23,9 +23,14 @@ export default function HomeGlobe({ markets }: { markets: HomeMarket[] }) {
   const router = useRouter();
   const [active, setActive] = useState<HomeMarket>();
   const [prompt, setPrompt] = useState("");
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   function choose(market: HomeMarket) {
     setPrompt(market.prompt);
+    window.requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      composerRef.current?.setSelectionRange(market.prompt.length, market.prompt.length);
+    });
   }
 
   function submit() {
@@ -52,13 +57,16 @@ export default function HomeGlobe({ markets }: { markets: HomeMarket[] }) {
       <div className="globe-stage" aria-label="Supported destinations around the world">
         <ThreeGlobe markets={markets} activeMarket={active} onHover={setActive} onLeave={() => setActive(undefined)} onSelect={choose} />
       </div>
-      <form className="globe-composer" onSubmit={(event) => { event.preventDefault(); submit(); }}>
+      <form className={prompt.trim() ? "globe-composer is-populated" : "globe-composer"} onSubmit={(event) => { event.preventDefault(); submit(); }}>
         <div className="globe-composer-field">
-          <label className="sr-only" htmlFor="home-trip-prompt">Describe your dream trip</label>
+          <label className="globe-composer-label" htmlFor="home-trip-prompt">Ask your AI trip planner</label>
           <Image className="globe-composer-sparkle" src="/figma/home/sparkle.svg" alt="" width={22} height={22} aria-hidden="true" />
-          <textarea id="home-trip-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe your dream trip..." />
+          <textarea ref={composerRef} id="home-trip-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Try: Plan a relaxed four-day coastal escape for two, with great food, minimal travel, and a comfortable stay…" />
+          <Button type="submit" disabled={prompt.trim().length < 3}>Build my trip <span aria-hidden="true">→</span></Button>
         </div>
-        <Button type="submit" disabled={prompt.trim().length < 3}>Plan a trip</Button>
+        <p className="globe-composer-hint" aria-live="polite">
+          {prompt.trim() ? "Your idea is ready to refine before planning." : "Hover a destination for inspiration, or start with your own idea."}
+        </p>
       </form>
     </main>
   );

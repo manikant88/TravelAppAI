@@ -175,6 +175,7 @@ function stayFacts(offer: StayOffer): GroundedFact[] {
 function activityFacts(offer: ActivityOffer, travellerCount: number): GroundedFact[] {
   const durationMinutes = Math.round((Date.parse(offer.endsAt) - Date.parse(offer.startsAt)) / 60_000);
   return [
+    fact(offer.id, "activity", "activity_id", "Activity identity", offer.activityId),
     fact(offer.id, "activity", "activity_name", "Activity name", offer.activityFacts.name),
     fact(offer.id, "activity", "unit_price", "Price per participant (INR)", offer.price.amount),
     fact(offer.id, "activity", "price_unit", "Price unit", offer.price.unit),

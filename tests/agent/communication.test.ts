@@ -56,4 +56,22 @@ describe("interaction communication", () => {
       label: "Start in Delhi",
     });
   });
+
+  it("allows a complete grounded planning summary through the rewrite pass", async () => {
+    const fallbackMessage = "I assembled two travel selections, the selected stay, and two schedule-valid activities into a connected itinerary. Both selected activities match the requested themes; nothing is scheduled before arrival, before check-in, or too close to departure. The validated trip total remains within the supplied budget.";
+    expect(fallbackMessage.length).toBeGreaterThan(240);
+    let modelCalled = false;
+    const result = await composeCommunication(
+      { ...context, fallbackMessage, facts: [fallbackMessage] },
+      {
+        async compose() {
+          modelCalled = true;
+          return { message: "Your trip is ready — the travel, stay, and activities now fit together comfortably within the supplied budget.", actionLabels: [] };
+        },
+      },
+    );
+
+    expect(modelCalled).toBe(true);
+    expect(result.message).toContain("Your trip is ready");
+  });
 });

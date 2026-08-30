@@ -1382,8 +1382,22 @@ POST /api/agent/intake
 POST /api/agent/plan
 POST /api/agent/modify
 POST /api/agent/explain
+POST /api/agent/conversation
+POST /api/agent/communicate
 GET /api/health/inventory
 ```
+
+Final assistant-facing prose is composed through one server-only communication
+boundary. Planning, discovery, modification, and explanation code provide the
+grounded facts and deterministic fallback; the communication model may improve
+tone and clarity but may not introduce or alter facts. Invalid or unavailable
+model output falls back to the supplied deterministic message and never turns a
+valid planning result into an API failure.
+
+The workspace client uses focused service modules for conversation, planning,
+discovery, proposal application, and shared HTTP error handling. UI components
+coordinate state and presentation; they do not duplicate agent request
+construction or own a second source of trip truth.
 
 `GET /api/health/inventory` performs one minimal `inventory_meta` read and is never cached. The client calls it once when the workspace loads so a suspended Neon compute begins waking before the user searches or plans. The header shows the real readiness result and exposes manual retry when unavailable.
 

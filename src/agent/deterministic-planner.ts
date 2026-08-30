@@ -205,6 +205,7 @@ function deterministicAction(input: PlannerDecisionInput) {
   }
   const activityLimitPerDay = input.request.preferences.pace === "packed" ? 2 : 1;
   const selectedActivities: CandidateFactBundle[] = [];
+  const selectedActivityIds = new Set<string>();
   const selectedByDate = new Map<string, number>();
   const activityCandidates = input.observations
     .filter((item) => item.toolName === "search_activities")
@@ -221,13 +222,16 @@ function deterministicAction(input: PlannerDecisionInput) {
     );
   for (const candidate of activityCandidates) {
     const date = activityDate(candidate);
+    const activityId = textFact(candidate, "activity_id") ?? textFact(candidate, "activity_name");
     if (!date || (selectedByDate.get(date) ?? 0) >= activityLimitPerDay) continue;
+    if (activityId && selectedActivityIds.has(activityId)) continue;
     if (
       overlapsSelectedTravel(candidate, selectedTravel) ||
       !fitsDestinationTravelWindow(candidate, selectedTravel, input.request) ||
       overlaps(candidate, selectedActivities)
     ) continue;
     selectedActivities.push(candidate);
+    if (activityId) selectedActivityIds.add(activityId);
     selectedByDate.set(date, (selectedByDate.get(date) ?? 0) + 1);
     choices.push(candidateChoice(candidate, decisionIndex, allowedDimensions));
     decisionIndex += 1;

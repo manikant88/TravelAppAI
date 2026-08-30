@@ -25,7 +25,17 @@ export async function composeCommunication(
   input: CommunicationContext,
   model?: CommunicationModel,
 ): Promise<CommunicationOutput> {
-  const context = communicationContextSchema.parse(input);
+  const parsed = communicationContextSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      message: input.fallbackMessage,
+      actionLabels: input.availableActions.map((action) => ({
+        actionId: action.id,
+        label: action.label,
+      })),
+    };
+  }
+  const context = parsed.data;
   const fallback = deterministicCommunication(context);
   if (!model) return fallback;
 

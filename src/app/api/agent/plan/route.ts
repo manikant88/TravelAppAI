@@ -4,6 +4,7 @@ import {
   runSpecifiedPlanApi,
   SpecifiedPlanApiError,
 } from "@/agent/plan-api";
+import { generateAssistantMessage } from "@/agent/assistant-message.server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,7 +21,13 @@ export async function POST(request: NextRequest) {
       model: deterministicModel,
       modelMode: "deterministic_fallback",
     });
-    return NextResponse.json(result);
+    const message = await generateAssistantMessage(result.message, {
+        intent: result.type === "trip_ready" ? "plan_trip" : "recover",
+        facts: [result.message],
+        events: [],
+        availableActions: [],
+      });
+    return NextResponse.json({ ...result, message });
   } catch (error: unknown) {
     if (error instanceof SpecifiedPlanApiError) {
       return NextResponse.json(

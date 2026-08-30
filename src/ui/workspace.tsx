@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useReducer,
   useRef,
   useState,
@@ -52,6 +53,16 @@ import {
   type InteractionPresentation,
 } from "@/agent/interaction-contracts";
 import { completePlanningEvents, planningEvents } from "@/agent/interaction-guidance";
+import {
+  continueTripConversation,
+  interpretTripBrief,
+  rewriteAssistantMessage,
+} from "@/ui/services/conversation-client";
+import {
+  requestDestinationDiscovery,
+  requestSpecifiedPlan,
+} from "@/ui/services/planning-client";
+import { applyTripProposal } from "@/ui/services/modification-client";
 
 type InventoryReadiness = "checking" | "ready" | "unavailable";
 type BriefFact = "origin" | "destination" | "dates" | "guests" | "preferences";
@@ -1129,6 +1140,15 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
   const initialPlanningDeadlineRef = useRef<Promise<void> | undefined>(undefined);
   const initialPromptConsumedRef = useRef(false);
 
+  async function addAssistantEntry(
+    fallbackMessage: string,
+    intent: "plan_trip" | "modify_trip" | "explain" | "clarify" | "recover",
+    facts: string[] = [fallbackMessage],
+  ) {
+    const text = await rewriteAssistantMessage(fallbackMessage, intent, facts);
+    dispatch({ type: "conversation_entry_added", entry: { id: messageId("assistant"), role: "assistant", text } });
+  }
+
   function beginInitialPlanningAnimation(): Promise<void> {
     if (trip) return Promise.resolve();
     if (!initialPlanningDeadlineRef.current) {
@@ -1309,23 +1329,7 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     setComposerText("");
 
     try {
-      const response = await fetch("/api/agent/conversation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phase: "draft", message, currentRequest: preparedRequest() }),
-      });
-      const body: unknown = await response.json().catch(() => undefined);
-      if (!response.ok) {
-        const error = body as { code?: unknown; message?: unknown; retryable?: unknown };
-        throw {
-          code: typeof error?.code === "string" ? error.code : "REQUEST_FAILED",
-          message:
-            typeof error?.message === "string"
-              ? error.message
-              : "The trip brief could not be interpreted.",
-          retryable: error?.retryable === true,
-        };
-      }
+      const body = await interpretTripBrief(message, preparedRequest());
       const envelope = body as { kind?: unknown; result?: unknown; interaction?: unknown };
       const result = envelope.result;
       if ((body as { kind?: unknown })?.kind !== "intake" || !isNaturalIntakeResponse(result)) {
@@ -1388,12 +1392,6 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     }
   }
 
-  useEffect(() => {
-    if (!autoSubmitInitialPrompt || !initialPrompt.trim() || initialPromptConsumedRef.current) return;
-    initialPromptConsumedRef.current = true;
-    void submitNaturalIntake(undefined, initialPrompt);
-  }, [autoSubmitInitialPrompt, initialPrompt]);
-
   async function startQuickTrip(item: QuickStart) {
     if (busy) return;
     setOriginLabel(item.originLabel);
@@ -1433,7 +1431,11 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
       const nextEndDate = addDays(trip.request.endDate, 1);
       const nextRequest: TripRequest = { ...trip.request, endDate: nextEndDate };
       dispatch({ type: "replace_request", request: nextRequest });
-      dispatch({ type: "conversation_entry_added", entry: { id: messageId("assistant"), role: "assistant", text: `I’ll extend the trip through ${formatDate(nextEndDate)} and rebuild the connected itinerary.` } });
+      await addAssistantEntry(
+        `I’ll extend the trip through ${formatDate(nextEndDate)} and rebuild the connected itinerary.`,
+        "modify_trip",
+        [`The trip end date is now ${formatDate(nextEndDate)}`, "The connected itinerary will be rebuilt"],
+      );
       await executeSpecifiedPlan(nextRequest, undefined, false);
       return;
     }
@@ -1450,7 +1452,8 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
         date: day.date,
         label: `Explore activities on Day ${day.dayNumber}`,
       }));
-      const guidance = `Sure — which day would you like to add activities to? I found ${days.length} days in this trip.`;
+      const fallbackGuidance = `Sure — which day would you like to add activities to? I found ${days.length} days in this trip.`;
+      const guidance = await rewriteAssistantMessage(fallbackGuidance, "clarify", [`This trip has ${days.length} days`, "The user wants to add activities but did not specify a day"]);
       dispatch({ type: "conversation_reply_received", entry: { id: messageId("assistant"), role: "assistant", text: guidance } });
       dispatch({ type: "interaction_updated", interaction: {
         message: guidance,
@@ -1483,25 +1486,11 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
       focus: turnTarget ? { operationId: turnOperationId, target: turnTarget, phase: "understanding" } : undefined,
     } });
     try {
-      const response = await fetch("/api/agent/conversation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          phase: "committed",
-          message,
-          trip: trip,
-          conversationHistory: state.conversation.slice(-8).map(({ role, text }) => ({ role, text })),
-        }),
+      const body = await continueTripConversation({
+        message,
+        trip,
+        conversationHistory: state.conversation.slice(-8).map(({ role, text }) => ({ role, text })),
       });
-      const body: unknown = await response.json().catch(() => undefined);
-      if (!response.ok) {
-        const error = body as { code?: unknown; message?: unknown; retryable?: unknown };
-        throw {
-          code: typeof error?.code === "string" ? error.code : "CONVERSATION_FAILED",
-          message: typeof error?.message === "string" ? error.message : "The assistant could not complete that request.",
-          retryable: error?.retryable === true,
-        };
-      }
 
       await responseDeadline;
 
@@ -1540,7 +1529,7 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
       }
       throw new Error("Invalid conversation response");
     } catch (error: unknown) {
-      reportAsyncError(error, "The assistant is temporarily unavailable. Your current trip is unchanged.");
+      await reportAsyncError(error, "The assistant is temporarily unavailable. Your current trip is unchanged.");
     }
   }
 
@@ -1586,27 +1575,11 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     tripIdRef.current ??= `trip:${globalThis.crypto.randomUUID()}`;
 
     try {
-      const response = await fetch("/api/agent/plan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tripId: tripIdRef.current,
-          request,
-          optionalClarificationUsed: state.optionalClarificationUsed,
-        }),
+      const body = await requestSpecifiedPlan({
+        tripId: tripIdRef.current,
+        request,
+        optionalClarificationUsed: state.optionalClarificationUsed,
       });
-      const body: unknown = await response.json().catch(() => undefined);
-      if (!response.ok) {
-        const error = body as { code?: unknown; message?: unknown; retryable?: unknown };
-        throw {
-          code: typeof error?.code === "string" ? error.code : "REQUEST_FAILED",
-          message:
-            typeof error?.message === "string"
-              ? error.message
-              : "The planner could not complete this request.",
-          retryable: error?.retryable === true,
-        };
-      }
       if (!isPlanResult(body)) throw new Error("Invalid PLAN response");
       await minimumVisibility;
       setShowPlanningAnimation(false);
@@ -1706,23 +1679,7 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
       },
     });
     try {
-      const response = await fetch("/api/agent/discover", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request),
-      });
-      const body: unknown = await response.json().catch(() => undefined);
-      if (!response.ok) {
-        const error = body as { code?: unknown; message?: unknown; retryable?: unknown };
-        throw {
-          code: typeof error?.code === "string" ? error.code : "DISCOVERY_FAILED",
-          message:
-            typeof error?.message === "string"
-              ? error.message
-              : "Destination comparison could not complete.",
-          retryable: error?.retryable === true,
-        };
-      }
+      const body = await requestDestinationDiscovery(request);
       if (!isDestinationDiscoveryResult(body)) throw new Error("Invalid discovery response");
       await minimumVisibility;
       setShowPlanningAnimation(false);
@@ -1738,7 +1695,7 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
       dispatch({
         type: "discovery_received",
         result: body,
-        entry: { id: messageId("assistant"), role: "assistant", text: body.type === "destination_options" && body.recommendationExplanation ? `${body.message} ${body.recommendationExplanation}` : body.message },
+        entry: { id: messageId("assistant"), role: "assistant", text: body.message },
       });
       if (body.type === "conflict") {
         const recoveryActions = destinationRecoveryActions(request, activeOperationId);
@@ -1752,12 +1709,22 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
       await minimumVisibility;
       setShowPlanningAnimation(false);
       if (!trip) initialPlanningDeadlineRef.current = undefined;
-      reportAsyncError(
+      await reportAsyncError(
         error,
         "Destination discovery is temporarily unavailable. Your Trip Brief is unchanged.",
       );
     }
   }
+
+  const submitInitialPrompt = useEffectEvent((prompt: string) => {
+    void submitNaturalIntake(undefined, prompt);
+  });
+
+  useEffect(() => {
+    if (!autoSubmitInitialPrompt || !initialPrompt.trim() || initialPromptConsumedRef.current) return;
+    initialPromptConsumedRef.current = true;
+    submitInitialPrompt(initialPrompt);
+  }, [autoSubmitInitialPrompt, initialPrompt]);
 
   async function submitPlan(event?: FormEvent) {
     event?.preventDefault();
@@ -1919,7 +1886,7 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     const guidance = nextBriefGuidance(nextRequest);
     if (guidance) {
       dispatch({ type: "interaction_updated", interaction: guidance });
-      dispatch({ type: "conversation_entry_added", entry: { id: messageId("assistant"), role: "assistant", text: guidance.message } });
+      await addAssistantEntry(guidance.message, "clarify");
       return;
     }
     if (nextRequest.destination?.kind === "open") await executeDestinationDiscovery(nextRequest, action.label, false);
@@ -1940,7 +1907,7 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     );
   }
 
-  function reportAsyncError(error: unknown, fallback: string) {
+  async function reportAsyncError(error: unknown, fallback: string) {
     const value = error as { code?: unknown; message?: unknown; retryable?: unknown };
     const rawMessage = typeof value?.message === "string" ? value.message.trim() : "";
     const message = /overlap/i.test(rawMessage)
@@ -1948,9 +1915,10 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
       : /(?:selection|offer|session):/i.test(rawMessage) || rawMessage.length > 220
         ? fallback
         : rawMessage || fallback;
+    const conversationalMessage = await rewriteAssistantMessage(message, "recover");
     const workspaceError = {
       code: typeof value?.code === "string" ? value.code : "NETWORK_FAILURE",
-      message,
+      message: conversationalMessage,
       retryable: value?.retryable !== false,
     };
     dispatch({
@@ -2090,9 +2058,7 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
           projection: result.projection,
           message: result.message,
         }];
-    const assistantMessage = result.type === "alternatives"
-      ? result.message
-      : "I found one schedule-valid activity near the stay. Select it below if you want to add it.";
+    const assistantMessage = result.message;
     dispatch({
       type: "modification_options_received",
       result,
@@ -2123,15 +2089,14 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     if (!trip || (busy && !allowWhilePlanning)) return;
     dispatch({ type: "proposal_apply_started" });
     try {
-      const response = await fetch("/api/trip/proposals/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trip, proposal }) });
-      const body: unknown = await response.json().catch(() => undefined);
-      if (!response.ok) throw body;
+      const body = await applyTripProposal(trip, proposal);
       const result = body as { trip?: unknown; projection?: unknown };
       if (!result.trip || !result.projection) throw new Error("Invalid proposal application");
       setInventoryPicker(undefined);
-      dispatch({ type: "proposal_applied", trip: result.trip as TripState, projection: result.projection as TripProjection, entry: { id: messageId("assistant"), role: "assistant", text: message } });
+      const conversationalMessage = await rewriteAssistantMessage(message, "modify_trip");
+      dispatch({ type: "proposal_applied", trip: result.trip as TripState, projection: result.projection as TripProjection, entry: { id: messageId("assistant"), role: "assistant", text: conversationalMessage } });
     } catch (error: unknown) {
-      reportAsyncError(error, "This inventory choice could not be selected. Your trip is unchanged.");
+      await reportAsyncError(error, "This inventory choice could not be selected. Your trip is unchanged.");
     }
   }
 
@@ -2399,8 +2364,8 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
                 onBrowseTravel={(selectionId) => void browseTravel(selectionId)}
                 onBrowseStay={(selectionId) => void browseStay(selectionId)}
                 onBrowseActivity={(date, selectionId) => void browseActivities(date, selectionId)}
-                onBook={() => dispatch({ type: "conversation_entry_added", entry: { id: messageId("assistant"), role: "assistant", text: "Booking is intentionally disabled in this prototype. The itinerary and grounded price breakdown are ready for a real booking handoff." } })}
-                onRequestCallback={() => dispatch({ type: "conversation_entry_added", entry: { id: messageId("assistant"), role: "assistant", text: "Callback scheduling is shown as the next service handoff. This prototype does not collect or transmit contact details." } })}
+                onBook={() => void addAssistantEntry("Booking is intentionally disabled in this prototype. The itinerary and grounded price breakdown are ready for a real booking handoff.", "explain")}
+                onRequestCallback={() => void addAssistantEntry("Callback scheduling is shown as the next service handoff. This prototype does not collect or transmit contact details.", "explain")}
               />
             </>
           ) : initialExperience ? (

@@ -5,7 +5,6 @@ import { runModification, ModifyError } from "@/agent/modify";
 import { runExplanation, ExplainError } from "@/agent/explain";
 import {
   createOpenAIExplanationModel,
-  createOpenAICommunicationModel,
   createOpenAIModificationModel,
   createOpenAINaturalIntakeModel,
   createOpenAITravelContextModel,
@@ -15,7 +14,11 @@ import { tripStateSchema } from "@/domain/trip";
 import { createDeterministicModificationModel } from "@/agent/deterministic-modification";
 import { createInventoryRepository } from "@/inventory/repository";
 import { intakePresentation } from "@/agent/interaction-guidance";
-import { applyCommunication, composeCommunication } from "@/agent/communication";
+import { applyCommunication } from "@/agent/communication";
+import {
+  generateAssistantCommunication,
+  generateAssistantMessage,
+} from "@/agent/assistant-message.server";
 import { classifyCommittedConversation, contextualizedMessage } from "@/agent/conversation-routing";
 
 export const runtime = "nodejs";
@@ -84,6 +87,18 @@ export async function POST(request: NextRequest) {
 
   const model = process.env.OPENAI_MODEL?.trim();
   const apiKey = process.env.OPENAI_API_KEY?.trim();
+  async function conversationalMessage(
+    fallbackMessage: string,
+    intent: "plan_trip" | "modify_trip" | "explain" | "clarify" | "recover",
+    facts: string[] = [fallbackMessage],
+  ) {
+    return generateAssistantMessage(fallbackMessage, {
+      intent,
+      facts,
+      events: [],
+      availableActions: [],
+    });
+  }
   try {
     if (parsed.data.phase === "draft") {
       const result = await runNaturalIntake(
@@ -105,19 +120,14 @@ export async function POST(request: NextRequest) {
         .map((location) => ({ id: location.id, label: location.name! }));
       const operationId = `intake:${Date.now()}`;
       const presentation = intakePresentation(result, operationId, originSuggestions);
-      const communication = await composeCommunication(
-        {
+      const communication = await generateAssistantCommunication({
           intent: "clarify",
           userMessage: parsed.data.message,
           fallbackMessage: presentation.message,
           facts: result.appliedFields.map((field) => `${field} was extracted from the user's message`),
           events: presentation.events,
           availableActions: presentation.actions,
-        },
-        model && apiKey && result.missingRequired.length === 0
-          ? createOpenAICommunicationModel({ model, apiKey, timeoutMs: 2_500 })
-          : undefined,
-      );
+        });
       return NextResponse.json({
         kind: "intake",
         result,
@@ -138,13 +148,17 @@ export async function POST(request: NextRequest) {
         },
         { model: createDeterministicModificationModel() },
       );
-      return NextResponse.json({ kind: "suggestion", result });
+      return NextResponse.json({
+        kind: "suggestion",
+        result: { ...result, message: await conversationalMessage(result.message, "modify_trip") },
+      });
     }
 
     if (/^(?:hi|hello|hey|thanks|thank you|help|what can you do)[!.?\s]*$/i.test(effectiveMessage)) {
+      const fallback = "I can explain any current choice, compare the trip total, or suggest schedule-valid activities near your stay. Ask about a day or an itinerary card whenever you like.";
       return NextResponse.json({
         kind: "reply",
-        message: "I can explain any current choice, compare the trip total, or suggest schedule-valid activities near your stay. Ask about a day or an itinerary card whenever you like.",
+        message: await conversationalMessage(fallback, "explain"),
       });
     }
 
@@ -169,9 +183,10 @@ export async function POST(request: NextRequest) {
     }
 
     if (intent === "unsupported") {
+      const fallback = "I’m sorry, I can’t help with that request right now. I can help with this trip’s route, travel, stays, activities, schedule, and cost.";
       return NextResponse.json({
         kind: "reply",
-        message: "I’m sorry, I can’t help with that request right now. I can help with this trip’s route, travel, stays, activities, schedule, and cost.",
+        message: await conversationalMessage(fallback, "recover"),
       });
     }
 
@@ -203,7 +218,10 @@ export async function POST(request: NextRequest) {
           : createDeterministicModificationModel(),
       },
     );
-    return NextResponse.json({ kind: "modification", result });
+    return NextResponse.json({
+      kind: "modification",
+      result: { ...result, message: await conversationalMessage(result.message, "modify_trip") },
+    });
   } catch (error: unknown) {
     if (
       error instanceof NaturalIntakeError ||

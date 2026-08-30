@@ -37,7 +37,7 @@ export function PlanningAnimation({ phase, request }: { phase: PlanningPhase; re
       <div className="planning-lottie" aria-hidden="true">
         {animationData ? <DotLottieReact data={animationData} autoplay loop /> : null}
       </div>
-      <div className="planning-animation-copy"><span>{title}</span><strong>{detail}</strong><small>Searching from {origin}. Grounded inventory is checked before anything becomes your trip.</small></div>
+      <div className="planning-animation-copy" key={phase}><span>{title}</span><strong>{detail}</strong><small>Searching from {origin}. Grounded inventory is checked before anything becomes your trip.</small></div>
     </div>
   );
 }
