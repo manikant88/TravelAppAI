@@ -93,6 +93,18 @@ export const guidedActionSchema = z.union([
   }).strict(),
   z.object({
     id: idSchema,
+    type: z.literal("select_activity_day"),
+    date: z.string().date(),
+    label: z.string().trim().min(1).max(80),
+  }).strict(),
+  z.object({
+    id: idSchema,
+    type: z.literal("select_modification_target"),
+    target: z.enum(["travel", "stay", "activity"]),
+    label: z.string().trim().min(1).max(80),
+  }).strict(),
+  z.object({
+    id: idSchema,
     type: z.enum(["retry", "submit_plan", "keep_current"]),
     label: z.string().trim().min(1).max(80),
   }).strict(),

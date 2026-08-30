@@ -420,12 +420,13 @@ function BriefSetupWorkspace({ request, onEdit }: { request: TripRequest; onEdit
     { field: "guests" as const, label: "Traveller details", complete: request.travellers.length > 0 },
   ];
   const remaining = essentials.filter((item) => !item.complete).length;
+  const readyButUnplanned = remaining === 0;
   return (
     <div className="brief-setup-workspace" role="status" aria-live="polite">
-      <div className="brief-setup-icon" aria-hidden="true">{remaining}</div>
+      <div className="brief-setup-icon" aria-hidden="true">{readyButUnplanned ? "!" : remaining}</div>
       <p className="eyebrow">Trip essentials</p>
-      <h2>{remaining > 0 ? `Complete ${remaining} detail${remaining === 1 ? "" : "s"} to start planning` : "Your Trip Brief is ready"}</h2>
-      <p>The highlighted fields in the Trip Brief are required. Add them in any order; this checklist updates immediately.</p>
+      <h2>{remaining > 0 ? `Complete ${remaining} detail${remaining === 1 ? "" : "s"} to start planning` : "I couldn't build this trip yet"}</h2>
+      <p>{readyButUnplanned ? "Your trip details are complete, but the available inventory could not form a connected itinerary for these dates and constraints. Try a suggested adjustment in the conversation or change the dates, budget, or destination." : "The highlighted fields in the Trip Brief are required. Add them in any order; this checklist updates immediately."}</p>
       <div className="brief-setup-list">
         {essentials.map((item) => (
           <button type="button" className={item.complete ? "is-complete" : "is-missing"} key={item.field} onClick={() => onEdit(item.field)}>
@@ -1415,6 +1416,41 @@ export default function TravelWorkspace() {
       entry: { id: messageId("user"), role: "user", text: message },
     });
     setComposerText("");
+
+    // Handle whole-trip date changes deterministically before selection-level
+    // modification routing. These requests change the planning scope rather
+    // than targeting a particular itinerary card.
+    const extendMatch = message.match(/\b(?:add|extend|include)\s+(?:one|1|an?)\s+(?:more\s+)?day\b/i);
+    if (extendMatch && trip.request.endDate) {
+      const nextEndDate = addDays(trip.request.endDate, 1);
+      const nextRequest: TripRequest = { ...trip.request, endDate: nextEndDate };
+      dispatch({ type: "replace_request", request: nextRequest });
+      dispatch({ type: "conversation_entry_added", entry: { id: messageId("assistant"), role: "assistant", text: `I’ll extend the trip through ${formatDate(nextEndDate)} and rebuild the connected itinerary.` } });
+      await executeSpecifiedPlan(nextRequest, undefined, false);
+      return;
+    }
+
+    // If the user asks for activities without naming a day, guide them with
+    // the actual days in this itinerary instead of returning an opaque target
+    // disambiguation error.
+    if (/\b(?:add|include|schedule|plan)\b.*\bactivit(?:y|ies)\b/i.test(message) && !/\bday\s*\d+\b/i.test(message)) {
+      const guideId = operationId("activity-guide");
+      const days = projectionState?.itinerary ?? [];
+      const actions: GuidedAction[] = days.slice(0, 6).map((day) => ({
+        id: `${guideId}:${day.date}`,
+        type: "select_activity_day",
+        date: day.date,
+        label: `Explore activities on Day ${day.dayNumber}`,
+      }));
+      const guidance = `Sure — which day would you like to add activities to? I found ${days.length} days in this trip.`;
+      dispatch({ type: "conversation_reply_received", entry: { id: messageId("assistant"), role: "assistant", text: guidance } });
+      dispatch({ type: "interaction_updated", interaction: {
+        message: guidance,
+        events: [{ id: `${guideId}:event`, type: "fact_recognized", status: "completed", label: "Ready to add activities to a selected day" }],
+        actions,
+      } });
+      return;
+    }
     const turnOperationId = operationId("turn");
     const requestedDay = Number(message.match(/\bday\s+(\d+)\b/i)?.[1]);
     const requestedDate = Number.isInteger(requestedDay) && requestedDay > 0
@@ -1819,7 +1855,22 @@ export default function TravelWorkspace() {
       await submitPlan();
       return;
     }
+    if (!trip && (action.type === "select_activity_day" || action.type === "select_modification_target" || action.type === "apply_proposal" || action.type === "keep_current")) return;
     dispatch({ type: "conversation_entry_added", entry: { id: messageId("user"), role: "user", text: action.label } });
+    if (action.type === "select_activity_day") {
+      await addActivityToDay(action.date);
+      return;
+    }
+    if (action.type === "select_modification_target") {
+      const currentTrip = trip;
+      const selection = action.target === "stay" ? currentTrip?.selectedStays[0] : action.target === "travel" ? currentTrip?.selectedTravel[0] : currentTrip?.selectedActivities[0];
+      if (selection) {
+        if (action.target === "stay") await browseStay(selection.id);
+        else if (action.target === "travel") await browseTravel(selection.id);
+        else if (currentTrip?.selectedActivities[0]) await browseActivities(currentTrip.selectedActivities[0].date);
+      }
+      return;
+    }
     if (action.type === "keep_current") {
       dispatch({ type: "interaction_cleared" });
       return;
@@ -2008,6 +2059,11 @@ export default function TravelWorkspace() {
       events: [{ id: `${conflictOperationId}:constraint`, type: "constraint_detected", status: "completed", label: result.message }],
       actions: [
         ...result.proposals.slice(0, 3).map((option) => ({ id: `${conflictOperationId}:${option.proposal.id}`, type: "apply_proposal" as const, proposalId: option.proposal.id, label: option.message })),
+        ...(result.proposals.length === 0 ? [
+          { id: `${conflictOperationId}:stay`, type: "select_modification_target" as const, target: "stay" as const, label: "Make my stay cheaper" },
+          { id: `${conflictOperationId}:activity`, type: "select_modification_target" as const, target: "activity" as const, label: "Reduce an activity cost" },
+          { id: `${conflictOperationId}:travel`, type: "select_modification_target" as const, target: "travel" as const, label: "Change my travel" },
+        ] : []),
         { id: `${conflictOperationId}:keep`, type: "keep_current" as const, label: "Keep the current trip" },
       ],
     } });

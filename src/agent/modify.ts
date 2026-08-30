@@ -801,9 +801,18 @@ async function runActivityAddition(
       .filter((selection) => !intent.replaceDayActivities || selection.date !== intent.targetDate)
       .map((selection) => selection.offerId),
   );
-  const availableOffers = result.results
-    .filter((offer) => !selectedOfferIds.has(offer.id))
-    .slice(0, 8);
+  const selectedActivityIds = new Set(
+    trip.selectedActivities
+      .filter((selection) => !intent.replaceDayActivities || selection.date !== intent.targetDate)
+      .map((selection) => projection.hydratedSelections.find((item) => item.selectionId === selection.id)?.offer)
+      .filter((offer): offer is Extract<ResolvedOffer, { activityId: string }> => Boolean(offer && "activityId" in offer))
+      .map((offer) => offer.activityId),
+  );
+  const uniqueActivityOffers = result.results.filter((offer) =>
+    !selectedOfferIds.has(offer.id) && !selectedActivityIds.has(offer.activityId),
+  );
+  // Only reuse a recurring activity after every unseen activity is exhausted.
+  const availableOffers = (uniqueActivityOffers.length > 0 ? uniqueActivityOffers : result.results.filter((offer) => !selectedOfferIds.has(offer.id))).slice(0, 8);
 
   if (requestedCount > 1) {
     const bundles: ActivityOffer[][] = [];

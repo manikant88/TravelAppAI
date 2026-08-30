@@ -315,8 +315,19 @@ export async function assembleProposedPlan(
     }),
   );
 
+  // A recurring catalog session produces a different dated offer each day,
+  // but it is still the same activity. Keep each activity identity unique in
+  // the assembled itinerary so extending a trip does not copy the same
+  // experience onto adjacent days. The date-specific offer remains available
+  // for later replacement/addition when the catalog is exhausted.
+  const uniqueResolved = resolved.filter(({ offer }, index, items) =>
+    !("activityId" in offer) || items.findIndex((item) =>
+      "activityId" in item.offer && item.offer.activityId === offer.activityId,
+    ) === index,
+  );
+
   const travellerIds = request.travellers.map((traveller) => traveller.id);
-  const selections = resolved.map(({ binding, offer }) =>
+  const selections = uniqueResolved.map(({ binding, offer }) =>
     createSelection(input.tripId, offer, binding.execution, travellerIds),
   );
   const trip = tripStateSchema.parse({
@@ -344,7 +355,7 @@ export async function assembleProposedPlan(
     version: 0,
   }) as TripState;
 
-  const resolvedById = new Map(resolved.map(({ offer }) => [offer.id, offer]));
+  const resolvedById = new Map(uniqueResolved.map(({ offer }) => [offer.id, offer]));
   const projection = await projectTrip(trip, {
     locationGraph: input.locationGraph,
     async resolveOffer(offerId) {
@@ -357,6 +368,6 @@ export async function assembleProposedPlan(
     status: projection.validation.valid ? "valid" : "invalid",
     trip,
     projection,
-    selectedCandidateIds: [...candidateIds].sort((left, right) => left.localeCompare(right, "en")),
+    selectedCandidateIds: uniqueResolved.map(({ offer }) => offer.id).sort((left, right) => left.localeCompare(right, "en")),
   };
 }

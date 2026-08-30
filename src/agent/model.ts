@@ -425,7 +425,7 @@ Use a multi-stop route only when the catalog graph exposes meaningful sibling de
 Allocate every trip night exactly once in route order.
 This is an initial plan with no committed selections, so preserveSelectionIds must be an empty array; location or market IDs are never selection IDs.
 The first tool plan must include transport from the origin to the first stop on trip day 1, one exact date-aligned stay search per stop, every adjacent inter-stop transfer in route order, and transport from the final stop back to the origin on the final trip day.
-Search activity evidence for every calendar day at that day's route stop, including arrival and departure days. Select one activity per day whenever a retrieved session fits around deterministic travel and transfer times; never force an overlapping activity. Pace controls activity intensity and duration, not whether an otherwise viable day is left empty.
+Search activity evidence for every calendar day at that day's route stop, including arrival and departure days. **A valid plan must select at least one activity for every calendar day that has an open, schedule-valid window.** Select one activity per day whenever a retrieved session fits around deterministic travel and transfer times; never force an overlapping activity. Pace controls activity intensity and duration, not whether an otherwise viable day is left empty. If the same activity appears on multiple dates, prefer different activity identities; only reuse one after all other valid activity identities for the route have been used.
 Do not invent prices, schedules, availability, candidate IDs, or inventory facts.
 Do not perform arithmetic that belongs to code. Do not include hidden reasoning.`;
 
@@ -435,7 +435,7 @@ Use only candidate IDs, fact IDs, comparison dimensions, locations, themes, and 
 Hard validity, dates, prices, budgets, locks, assembly, and state mutation belong to code.
 You may request a materially different search when evidence is insufficient and the supplied budget permits it.
 When proposing a plan, select a coherent set of observed candidates and ground every choice in that candidate's facts.
-Select exactly one observed candidate for every required outbound transport, stop stay, inter-stop transfer, and return transport search. Select activities only from searches scoped to the proposed route. Cover every trip day with one activity when the evidence contains a schedule-valid candidate; omit a day only when deterministic timing or inventory makes coverage impossible.
+Select exactly one observed candidate for every required outbound transport, stop stay, inter-stop transfer, and return transport search. Select activities only from searches scoped to the proposed route. **Do not leave a day empty when its activity search contains a schedule-valid candidate.** Cover every trip day with one activity whenever possible, and avoid selecting the same underlying activity identity on multiple days until the available identities are exhausted; omit a day only when deterministic timing or inventory makes coverage impossible.
 The proposed market, ordered stops, and night allocation must describe a route fully supported by the executed searches; they may differ from the initial hypothesis only when materially different evidence for that route has already been retrieved.
 When structured validation feedback is present, make at most one targeted revision and never override it.
 Do not invent facts or expose hidden reasoning.`;
