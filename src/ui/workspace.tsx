@@ -42,7 +42,12 @@ import {
   workspaceReducer,
 } from "@/state";
 import type { TripProposal } from "@/domain/proposals";
+import { hasPlanningRouteChanged } from "@/domain/request";
 import { cachedInventoryPost } from "@/ui/inventory-cache";
+import {
+  activeItineraryDayAtLine,
+  itineraryScrollTop,
+} from "@/ui/itinerary-scroll";
 import { PlanningAnimation } from "@/ui/planning-animation";
 import { Badge, Button, Card, Chip, IconButton } from "@/ui/components/primitives";
 import { PriceSummary } from "@/ui/patterns/price-summary";
@@ -207,6 +212,14 @@ function SkeletonImage({
 
 function dayAnchor(date: string): string {
   return `itinerary-day-${date}`;
+}
+
+function itineraryStickyOffset(dayNavigation: HTMLElement | null): number {
+  const styles = window.getComputedStyle(document.documentElement);
+  const briefHeight = Number.parseFloat(styles.getPropertyValue("--brief")) || 78;
+  const scrollGap = Number.parseFloat(styles.getPropertyValue("--day-scroll-gap")) || 16;
+  const navigationHeight = dayNavigation?.getBoundingClientRect().height || 53;
+  return briefHeight + navigationHeight + scrollGap;
 }
 
 function travellerSummary(travellers: Traveller[]): string {
@@ -424,12 +437,46 @@ function PlanningState({ elapsed, mode, request }: { elapsed: number; mode: "dis
   );
 }
 
-function BriefSetupWorkspace({ request, onEdit }: { request: TripRequest; onEdit(field: BriefFact): void }) {
+function BriefSetupWorkspace({
+  request,
+  recommendations,
+  busy,
+  onEdit,
+  onRecommendation,
+}: {
+  request: TripRequest;
+  recommendations: GuidedAction[];
+  busy: boolean;
+  onEdit(field: BriefFact): void;
+  onRecommendation(action: GuidedAction): void;
+}) {
   const essentials = [
-    { field: "origin" as const, label: "Starting city", complete: Boolean(request.origin) },
-    { field: "destination" as const, label: "Destination or recommendations", complete: Boolean(request.destination) },
-    { field: "dates" as const, label: "Travel dates", complete: Boolean(request.startDate && request.endDate) },
-    { field: "guests" as const, label: "Traveller details", complete: request.travellers.length > 0 },
+    {
+      field: "origin" as const,
+      label: "Starting city",
+      complete: Boolean(request.origin),
+      actions: recommendations.filter((action) => action.type === "set_location" && action.field === "origin"),
+    },
+    {
+      field: "destination" as const,
+      label: "Destination or recommendations",
+      complete: Boolean(request.destination),
+      actions: recommendations.filter((action) =>
+        action.type === "set_open_destination" || (action.type === "set_location" && action.field === "destination"),
+      ),
+    },
+    {
+      field: "dates" as const,
+      label: "Travel dates",
+      complete: Boolean(request.startDate && request.endDate),
+      actions: recommendations.filter((action) => action.type === "set_dates"),
+    },
+    {
+      field: "guests" as const,
+      label: "Traveller details",
+      complete: request.travellers.length > 0,
+      actions: recommendations.filter((action) => action.type === "set_travellers"),
+    },
   ];
   const remaining = essentials.filter((item) => !item.complete).length;
   const readyButUnplanned = remaining === 0;
@@ -440,13 +487,30 @@ function BriefSetupWorkspace({ request, onEdit }: { request: TripRequest; onEdit
       <h2>{remaining > 0 ? `Complete ${remaining} detail${remaining === 1 ? "" : "s"} to start planning` : "I couldn't build this trip yet"}</h2>
       <p>{readyButUnplanned ? "Your trip details are complete, but the available inventory could not form a connected itinerary for these dates and constraints. Try a suggested adjustment in the conversation or change the dates, budget, or destination." : "The highlighted fields in the Trip Brief are required. Add them in any order; this checklist updates immediately."}</p>
       <div className="brief-setup-list">
-        {essentials.map((item) => (
-          <button type="button" className={item.complete ? "is-complete" : "is-missing"} key={item.field} onClick={() => onEdit(item.field)}>
-            <i aria-hidden="true">{item.complete ? "✓" : ""}</i>
-            <span>{item.label}</span>
-            <strong>{item.complete ? "Added" : "Add now"}</strong>
-          </button>
-        ))}
+        {essentials.map((item) => {
+          const suggestedActions = item.complete ? [] : item.actions.slice(0, 3);
+          return (
+            <div className={`brief-setup-item ${item.complete ? "is-complete" : "is-missing"}`} key={item.field}>
+              <button type="button" className="brief-setup-row" onClick={() => onEdit(item.field)}>
+                <i aria-hidden="true">{item.complete ? "✓" : ""}</i>
+                <span>{item.label}</span>
+                <strong>{item.complete ? "Added" : "Add manually"}</strong>
+              </button>
+              {suggestedActions.length > 0 ? (
+                <div className="brief-setup-recommendations" aria-label={`Recommended ${item.label.toLocaleLowerCase("en")}`}>
+                  <small>Recommended</small>
+                  <div>
+                    {suggestedActions.map((action) => (
+                      <Chip type="button" disabled={busy} key={action.id} onClick={() => onRecommendation(action)}>
+                        {action.label}
+                      </Chip>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -641,7 +705,10 @@ function formatDestinationFact(dimension: string, value: string | number | boole
     return `${value} interest match${value === 1 ? "" : "es"}`;
   }
   if (dimension === "activity_options" && typeof value === "number") {
-    return `${value} dated activities`;
+    return `${value} distinct activities`;
+  }
+  if (dimension === "activity_days" && typeof value === "number") {
+    return `${value} schedule-valid activity days`;
   }
   return String(value);
 }
@@ -1060,28 +1127,108 @@ function TripReview({
   focusMessage?: string;
 }) {
   const [activeDay, setActiveDay] = useState(projection.itinerary[0]?.date ?? "");
+  const reviewRef = useRef<HTMLDivElement>(null);
+  const dayNavigationRef = useRef<HTMLElement>(null);
+  const programmaticDayRef = useRef<string | undefined>(undefined);
+  const scrollFrameRef = useRef<number | undefined>(undefined);
+  const scrollReleaseTimerRef = useRef<number | undefined>(undefined);
   const travellerCount = trip.request.travellers.length;
   const perPersonCost = (amount: number) => formatMoney(Math.round(amount / travellerCount));
+  const displayedActiveDay = projection.itinerary.some((day) => day.date === activeDay)
+    ? activeDay
+    : projection.itinerary[0]?.date ?? "";
 
   useEffect(() => {
-    const days = Array.from(document.querySelectorAll<HTMLElement>(".timeline-day[id]"));
+    const days = Array.from(reviewRef.current?.querySelectorAll<HTMLElement>(".timeline-day[id]") ?? []);
     if (days.length === 0) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        const id = visible[0]?.target.id;
-        if (id) setActiveDay(id.replace(/^itinerary-day-/, ""));
-      },
-      { rootMargin: "-150px 0px -55% 0px", threshold: [0, 0.25, 0.6] },
-    );
-    days.forEach((day) => observer.observe(day));
-    return () => observer.disconnect();
+
+    const updateActiveDay = () => {
+      scrollFrameRef.current = undefined;
+      if (programmaticDayRef.current) return;
+
+      const nextDay = activeItineraryDayAtLine(
+        days.map((day) => ({
+          date: day.id.replace(/^itinerary-day-/, ""),
+          top: day.getBoundingClientRect().top,
+        })),
+        itineraryStickyOffset(dayNavigationRef.current),
+      );
+      if (nextDay) setActiveDay((current) => current === nextDay ? current : nextDay);
+    };
+
+    const scheduleActiveDayUpdate = () => {
+      if (programmaticDayRef.current) {
+        window.clearTimeout(scrollReleaseTimerRef.current);
+        scrollReleaseTimerRef.current = window.setTimeout(() => {
+          programmaticDayRef.current = undefined;
+          updateActiveDay();
+        }, 140);
+        return;
+      }
+      if (scrollFrameRef.current !== undefined) return;
+      scrollFrameRef.current = window.requestAnimationFrame(updateActiveDay);
+    };
+
+    scheduleActiveDayUpdate();
+    window.addEventListener("scroll", scheduleActiveDayUpdate, { passive: true });
+    window.addEventListener("resize", scheduleActiveDayUpdate);
+    return () => {
+      window.removeEventListener("scroll", scheduleActiveDayUpdate);
+      window.removeEventListener("resize", scheduleActiveDayUpdate);
+      if (scrollFrameRef.current !== undefined) window.cancelAnimationFrame(scrollFrameRef.current);
+      window.clearTimeout(scrollReleaseTimerRef.current);
+      scrollFrameRef.current = undefined;
+      scrollReleaseTimerRef.current = undefined;
+    };
   }, [projection.itinerary]);
 
+  useEffect(() => {
+    const navigation = dayNavigationRef.current;
+    const selectedDay = navigation?.querySelector<HTMLElement>('[aria-current="step"]');
+    if (!navigation || !selectedDay) return;
+
+    const navigationBounds = navigation.getBoundingClientRect();
+    const selectedBounds = selectedDay.getBoundingClientRect();
+    const edgeGap = 16;
+    let scrollDelta = 0;
+    if (selectedBounds.left < navigationBounds.left + edgeGap) {
+      scrollDelta = selectedBounds.left - navigationBounds.left - edgeGap;
+    } else if (selectedBounds.right > navigationBounds.right - edgeGap) {
+      scrollDelta = selectedBounds.right - navigationBounds.right + edgeGap;
+    }
+    if (scrollDelta === 0) return;
+
+    navigation.scrollBy({
+      left: scrollDelta,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    });
+  }, [displayedActiveDay]);
+
+  const jumpToDay = (date: string) => {
+    const target = document.getElementById(dayAnchor(date));
+    if (!target) return;
+
+    programmaticDayRef.current = date;
+    setActiveDay(date);
+    window.clearTimeout(scrollReleaseTimerRef.current);
+    scrollReleaseTimerRef.current = window.setTimeout(() => {
+      programmaticDayRef.current = undefined;
+    }, 900);
+
+    const url = new URL(window.location.href);
+    url.hash = dayAnchor(date);
+    window.history.replaceState(window.history.state, "", url);
+    window.scrollTo({
+      top: itineraryScrollTop(
+        target.getBoundingClientRect().top + window.scrollY,
+        itineraryStickyOffset(dayNavigationRef.current),
+      ),
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    });
+  };
+
   return (
-    <div className="trip-review">
+    <div className="trip-review" ref={reviewRef}>
       <header className="itinerary-overview">
         <div>
           <p>Day by day</p>
@@ -1089,8 +1236,8 @@ function TripReview({
         </div>
         <Badge tone="success" className="trip-generated-badge">◉ Trip generated</Badge>
       </header>
-      <nav className="day-navigation" aria-label="Jump to itinerary day">
-        {projection.itinerary.map((day) => <a className={activeDay === day.date ? "is-active" : undefined} key={day.date} href={`#${dayAnchor(day.date)}`} onClick={() => setActiveDay(day.date)}>Day {day.dayNumber}</a>)}
+      <nav className="day-navigation" aria-label="Jump to itinerary day" ref={dayNavigationRef}>
+        {projection.itinerary.map((day) => <a aria-current={displayedActiveDay === day.date ? "step" : undefined} className={displayedActiveDay === day.date ? "is-active" : undefined} key={day.date} href={`#${dayAnchor(day.date)}`} onClick={(event) => { event.preventDefault(); jumpToDay(day.date); }}>Day {day.dayNumber}</a>)}
       </nav>
       <Itinerary trip={trip} projection={projection} busy={busy} onToggleLock={onToggleLock} onAddActivity={onAddActivity} onBrowseTravel={onBrowseTravel} onBrowseStay={onBrowseStay} onBrowseActivity={onBrowseActivity} highlightedDay={highlightedDay} highlightedSelectionId={highlightedSelectionId} focusMessage={focusMessage} />
       <PriceSummary
@@ -1149,13 +1296,18 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     dispatch({ type: "conversation_entry_added", entry: { id: messageId("assistant"), role: "assistant", text } });
   }
 
-  function beginInitialPlanningAnimation(): Promise<void> {
-    if (trip) return Promise.resolve();
+  function beginPlanningAnimation(force = false): Promise<void> {
+    if (trip && !force) return Promise.resolve();
     if (!initialPlanningDeadlineRef.current) {
       setShowPlanningAnimation(true);
       initialPlanningDeadlineRef.current = minimumPlanningVisibility();
     }
     return initialPlanningDeadlineRef.current;
+  }
+
+  function finishPlanningAnimation() {
+    setShowPlanningAnimation(false);
+    initialPlanningDeadlineRef.current = undefined;
   }
   const [elapsed, setElapsed] = useState(0);
   const [inventoryReadiness, setInventoryReadiness] =
@@ -1320,7 +1472,7 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     event?.preventDefault();
     const message = (overrideMessage ?? composerText).trim();
     if (!message || busy || trip) return;
-    void beginInitialPlanningAnimation();
+    void beginPlanningAnimation();
     setElapsed(0);
     dispatch({
       type: "intake_started",
@@ -1554,7 +1706,9 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     userText?: string,
     appendUserEntry = true,
   ) {
-    const minimumVisibility = beginInitialPlanningAnimation();
+    const routeChanged = Boolean(trip && hasPlanningRouteChanged(trip.request, request));
+    const animationVisible = !trip || routeChanged;
+    const minimumVisibility = beginPlanningAnimation(routeChanged);
     setElapsed(0);
     dispatch({
       type: "planning_started",
@@ -1582,8 +1736,6 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
       });
       if (!isPlanResult(body)) throw new Error("Invalid PLAN response");
       await minimumVisibility;
-      setShowPlanningAnimation(false);
-      if (!trip) initialPlanningDeadlineRef.current = undefined;
       dispatch({
         type: "interaction_updated",
         interaction: {
@@ -1599,11 +1751,17 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
             baseTripVersion: trip.version,
             operations: [{ type: "replace_trip_plan", nextTrip: body.trip }],
           };
-          await applyDirectProposal(
+          const applied = await applyDirectProposal(
             proposal,
-            "Updated the itinerary from your trip details. Locked selections were preserved.",
+            routeChanged
+              ? "Built a new validated itinerary for the updated route."
+              : "Updated the itinerary from your trip details. Locked selections were preserved.",
             true,
           );
+          if (!applied && routeChanged) {
+            dispatch({ type: "replace_request", request: trip.request });
+          }
+          if (animationVisible) finishPlanningAnimation();
           return;
         }
         dispatch({
@@ -1611,6 +1769,7 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
           result: body,
           entry: { id: messageId("assistant"), role: "assistant", text: body.message },
         });
+        if (animationVisible) finishPlanningAnimation();
       } else {
         dispatch({
           type: "outcome_received",
@@ -1622,11 +1781,12 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
           events: [{ id: `${activeOperationId}:constraint`, type: "constraint_detected", status: "completed", label: body.message }],
           actions: planningRecoveryActions(body),
         } });
+        if (animationVisible) finishPlanningAnimation();
       }
     } catch (error: unknown) {
       await minimumVisibility;
-      setShowPlanningAnimation(false);
-      if (!trip) initialPlanningDeadlineRef.current = undefined;
+      if (animationVisible) finishPlanningAnimation();
+      if (routeChanged && trip) dispatch({ type: "replace_request", request: trip.request });
       const value = error as { code?: unknown; message?: unknown; retryable?: unknown };
       const workspaceError = {
         code: typeof value?.code === "string" ? value.code : "NETWORK_FAILURE",
@@ -1658,7 +1818,9 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     userText?: string,
     appendUserEntry = true,
   ) {
-    const minimumVisibility = beginInitialPlanningAnimation();
+    const routeChanged = Boolean(trip && hasPlanningRouteChanged(trip.request, request));
+    const animationVisible = !trip || routeChanged;
+    const minimumVisibility = beginPlanningAnimation(routeChanged);
     setElapsed(0);
     dispatch({
       type: "discovery_started",
@@ -1682,8 +1844,6 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
       const body = await requestDestinationDiscovery(request);
       if (!isDestinationDiscoveryResult(body)) throw new Error("Invalid discovery response");
       await minimumVisibility;
-      setShowPlanningAnimation(false);
-      if (!trip) initialPlanningDeadlineRef.current = undefined;
       dispatch({
         type: "interaction_updated",
         interaction: {
@@ -1697,6 +1857,7 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
         result: body,
         entry: { id: messageId("assistant"), role: "assistant", text: body.message },
       });
+      if (animationVisible) finishPlanningAnimation();
       if (body.type === "conflict") {
         const recoveryActions = destinationRecoveryActions(request, activeOperationId);
         dispatch({ type: "interaction_updated", interaction: {
@@ -1707,8 +1868,8 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
       }
     } catch (error: unknown) {
       await minimumVisibility;
-      setShowPlanningAnimation(false);
-      if (!trip) initialPlanningDeadlineRef.current = undefined;
+      if (animationVisible) finishPlanningAnimation();
+      if (routeChanged && trip) dispatch({ type: "replace_request", request: trip.request });
       await reportAsyncError(
         error,
         "Destination discovery is temporarily unavailable. Your Trip Brief is unchanged.",
@@ -1798,7 +1959,21 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     }
     const groundedActions = (outcome.factBundle?.allowedFollowUpActions ?? []).flatMap((action): GuidedAction[] => {
       if (action.type === "retry") return [];
-      if (action.type === "change_scope") return [{ id: action.id, type: "set_open_destination", label: "Compare other destinations" }];
+      if (action.type === "change_scope") {
+        if (action.id.endsWith(":pace:relaxed")) {
+          return [{ id: action.id, type: "set_pace", pace: "relaxed", label: action.label }];
+        }
+        if (action.id.endsWith(":shorter-trip") && request.startDate && request.endDate) {
+          return [{
+            id: action.id,
+            type: "set_dates",
+            startDate: request.startDate,
+            endDate: addDays(request.endDate, -1),
+            label: action.label,
+          }];
+        }
+        return [{ id: action.id, type: "set_open_destination", label: action.label }];
+      }
       if (action.type === "keep_current") return [{ id: action.id, type: "keep_current", label: action.label }];
       if (action.type === "adjust_constraint") {
         const constraintId = action.id.replace(/^action:adjust:/, "");
@@ -1810,7 +1985,12 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
       }
       return [];
     });
-    const fallbacks = destinationRecoveryActions(request, operationId("plan-recovery"));
+    const hasActivityCoverageConflict = outcome.factBundle?.facts.some(
+      (fact) => fact.dimension === "validation" && fact.value === "ITINERARY_INCOMPLETE",
+    );
+    const fallbacks = hasActivityCoverageConflict
+      ? []
+      : destinationRecoveryActions(request, operationId("plan-recovery"));
     const candidates = [...groundedActions, ...fallbacks];
     const unique = new Map<string, GuidedAction>();
     for (const action of candidates) {
@@ -1879,6 +2059,8 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     } else if (action.type === "set_budget") {
       nextRequest.constraints = nextRequest.constraints.filter((constraint) => constraint.category !== "budget");
       nextRequest.constraints.push({ id: "constraint:budget:all", category: "budget", priority: "hard", value: { maxTotal: { amount: action.amount, currency: "INR" } } });
+    } else if (action.type === "set_pace") {
+      nextRequest.preferences = { ...nextRequest.preferences, pace: action.pace };
     } else if (action.type === "remove_constraint") {
       nextRequest.constraints = nextRequest.constraints.filter((constraint) => constraint.id !== action.constraintId);
     }
@@ -2085,8 +2267,8 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     proposal: TripProposal,
     message: string,
     allowWhilePlanning = false,
-  ) {
-    if (!trip || (busy && !allowWhilePlanning)) return;
+  ): Promise<boolean> {
+    if (!trip || (busy && !allowWhilePlanning)) return false;
     dispatch({ type: "proposal_apply_started" });
     try {
       const body = await applyTripProposal(trip, proposal);
@@ -2095,8 +2277,10 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
       setInventoryPicker(undefined);
       const conversationalMessage = await rewriteAssistantMessage(message, "modify_trip");
       dispatch({ type: "proposal_applied", trip: result.trip as TripState, projection: result.projection as TripProjection, entry: { id: messageId("assistant"), role: "assistant", text: conversationalMessage } });
+      return true;
     } catch (error: unknown) {
       await reportAsyncError(error, "This inventory choice could not be selected. Your trip is unchanged.");
+      return false;
     }
   }
 
@@ -2371,7 +2555,13 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
           ) : initialExperience ? (
             <QuickStartGrid busy={busy} onSelect={(item) => void startQuickTrip(item)} />
           ) : (
-            <BriefSetupWorkspace request={request} onEdit={setEditingFact} />
+            <BriefSetupWorkspace
+              request={request}
+              recommendations={state.interaction?.actions ?? []}
+              busy={busy}
+              onEdit={setEditingFact}
+              onRecommendation={(action) => void handleGuidedAction(action)}
+            />
           )}
           </section>
         </div>

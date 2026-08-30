@@ -178,6 +178,25 @@ describe("dated activity inventory", () => {
     expect(response.results).toHaveLength(4);
   });
 
+  it("reserves bounded candidates for distinct experiences on distinct interior days", async () => {
+    const response = await searchActivities(
+      {
+        ...request(),
+        startDate: "2026-10-10",
+        endDate: "2026-10-15",
+        interests: ["culture", "sunset"],
+      },
+      createRepository(),
+    );
+    const interior = response.results.filter((offer) =>
+      offer.startsAt.slice(0, 10) > "2026-10-10" &&
+      offer.startsAt.slice(0, 10) < "2026-10-15",
+    );
+
+    expect(new Set(interior.map((offer) => offer.startsAt.slice(0, 10))).size).toBeGreaterThanOrEqual(3);
+    expect(new Set(interior.map((offer) => offer.activityId)).size).toBeGreaterThanOrEqual(3);
+  });
+
   it("enforces hard mobility and family suitability outside the model", async () => {
     const response = await searchActivities(
       request([

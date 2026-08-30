@@ -21,6 +21,7 @@ import type {
   TransportOffer,
   TransportSearchRequest,
 } from "@/inventory/contracts";
+import { reduceActivityOffersForPlanning } from "@/inventory/activity-selection";
 import type {
   ActiveLocationNode,
   ActivityCatalogSession,
@@ -871,51 +872,18 @@ function inclusiveDates(startDate: ISODate, endDate: ISODate): ISODate[] {
   return Array.from({ length: days + 1 }, (_, index) => addCalendarDays(startDate, index));
 }
 
-function interestMatchCount(offer: ActivityOffer, interests: Set<string>): number {
-  return offer.activityFacts.tags.reduce(
-    (count, tag) => count + (interests.has(tag.toLocaleLowerCase("en")) ? 1 : 0),
-    0,
-  );
-}
-
 function reduceActivityCandidates(
   offers: ActivityOffer[],
   interests: Set<string>,
   limit = 8,
 ): ActivityOffer[] {
-  const byDate = new Map<string, ActivityOffer[]>();
-  for (const offer of offers) {
-    const date = offer.startsAt.slice(0, 10);
-    const candidates = byDate.get(date) ?? [];
-    candidates.push(offer);
-    byDate.set(date, candidates);
-  }
-
-  const dates = [...byDate.keys()].sort();
-  dates.forEach((date) => {
-    byDate.get(date)?.sort(
-      (left, right) =>
-        interestMatchCount(right, interests) - interestMatchCount(left, interests) ||
-        left.price.amount - right.price.amount ||
-        left.startsAt.localeCompare(right.startsAt, "en") ||
-        left.id.localeCompare(right.id, "en"),
-    );
+  const dates = offers.map((offer) => offer.startsAt.slice(0, 10)).sort();
+  return reduceActivityOffersForPlanning(offers, {
+    startDate: dates[0]!,
+    endDate: dates.at(-1)!,
+    interests: [...interests],
+    limit,
   });
-
-  const reduced: ActivityOffer[] = [];
-  for (let rank = 0; reduced.length < limit; rank += 1) {
-    let added = false;
-    for (const date of dates) {
-      const offer = byDate.get(date)?.[rank];
-      if (offer) {
-        reduced.push(offer);
-        added = true;
-        if (reduced.length === limit) break;
-      }
-    }
-    if (!added) break;
-  }
-  return reduced;
 }
 
 function emptyActivityResponse(

@@ -4,6 +4,7 @@ import {
   applyConstraintPatch,
   checkRequirements,
   constraintSemanticKey,
+  hasPlanningRouteChanged,
   removeConstraint,
   requirePlannableRequest,
   tripRequestSchema,
@@ -15,6 +16,27 @@ function draftRequest(): TripRequest {
 }
 
 describe("canonical trip request", () => {
+  it("distinguishes route-scope changes from other brief updates", () => {
+    const current: TripRequest = {
+      origin: "city:delhi",
+      destination: { kind: "specified", locationId: "city:mumbai" },
+      startDate: "2026-09-01",
+      endDate: "2026-09-04",
+      travellers: [{ id: "traveller:1", type: "adult" }],
+      preferences: {},
+      constraints: [],
+    };
+
+    const datesOnlyUpdate: TripRequest = { ...current, endDate: "2026-09-05" };
+    expect(hasPlanningRouteChanged(current, datesOnlyUpdate)).toBe(false);
+    expect(hasPlanningRouteChanged(current, { ...current, origin: "city:bengaluru" })).toBe(true);
+    expect(hasPlanningRouteChanged(current, {
+      ...current,
+      destination: { kind: "specified", locationId: "city:rishikesh" },
+    })).toBe(true);
+    expect(hasPlanningRouteChanged(current, { ...current, destination: { kind: "open" } })).toBe(true);
+  });
+
   it("returns deterministic required and optional requirement ordering", () => {
     expect(checkRequirements(draftRequest())).toEqual({
       missingRequired: ["origin", "destination_intent", "dates", "travellers"],

@@ -302,16 +302,38 @@ function validationFactBundle(tripId: string, validation: TripValidation, reques
       });
     });
     if (!issue.constraintIds?.length && issue.severity === "error") {
-      const id = `action:change-scope:${issue.code.toLocaleLowerCase("en")}`;
-      const scopeLabels: Record<string, string> = {
-        route_gap: "Choose a route with complete coverage",
-        schedule_conflict: "Relax the daily schedule",
-      };
-      actions.set(id, {
-        id,
-        label: scopeLabels[issue.code.toLocaleLowerCase("en")] ?? "Choose a compatible trip scope",
-        type: "change_scope",
-      });
+      const issueCode = issue.code.toLocaleLowerCase("en");
+      if (issue.code === "ITINERARY_INCOMPLETE") {
+        if (request?.preferences.pace !== "relaxed") {
+          actions.set("action:change-scope:pace:relaxed", {
+            id: "action:change-scope:pace:relaxed",
+            label: "Use a relaxed itinerary pace",
+            type: "change_scope",
+          });
+        } else {
+          actions.set("action:change-scope:shorter-trip", {
+            id: "action:change-scope:shorter-trip",
+            label: "Shorten the trip by one day",
+            type: "change_scope",
+          });
+        }
+        actions.set("action:change-scope:destination", {
+          id: "action:change-scope:destination",
+          label: "Compare destinations with fuller activity coverage",
+          type: "change_scope",
+        });
+      } else {
+        const id = `action:change-scope:${issueCode}`;
+        const scopeLabels: Record<string, string> = {
+          route_gap: "Choose a route with complete coverage",
+          schedule_conflict: "Relax the daily schedule",
+        };
+        actions.set(id, {
+          id,
+          label: scopeLabels[issueCode] ?? "Choose a compatible trip scope",
+          type: "change_scope",
+        });
+      }
     }
     return {
       id: validationFactId(issue.id),

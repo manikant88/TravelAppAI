@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { addCalendarDays, calendarDayDifference, isValidISODate } from "@/domain/dates";
+import { minimumInitialActivityDays } from "@/domain/itinerary-quality";
 import { addMoney, multiplyMoney, subtractMoney } from "@/domain/money";
 import { plannableTripRequestSchema, requirePlannableRequest } from "@/domain/request";
 import type {
@@ -488,18 +489,11 @@ export function buildItinerary(
 }
 
 export function minimumPlannedActivityDays(trip: TripState): number {
-  const interiorDays = Math.max(
-    0,
-    calendarDayDifference(trip.request.startDate, trip.request.endDate) - 1,
+  return minimumInitialActivityDays(
+    trip.request.startDate,
+    trip.request.endDate,
+    trip.request.preferences.pace,
   );
-  if (interiorDays === 0) return 0;
-  const pace = trip.request.preferences.pace ?? "balanced";
-  const target = pace === "relaxed"
-    ? Math.ceil(interiorDays / 3)
-    : pace === "packed"
-      ? interiorDays
-      : Math.ceil(interiorDays / 2);
-  return Math.min(4, target);
 }
 
 function validateItineraryCompleteness(trip: TripState): ValidationIssue[] {

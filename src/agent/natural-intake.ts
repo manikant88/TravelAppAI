@@ -138,14 +138,14 @@ const monthNumbers: Record<string, string> = {
 function parseExplicitDate(value: string, today: string): string | undefined {
   const iso = value.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const long = value.match(/\b(\d{1,2})(?:st|nd|rd|th)?[\s-]+(january|February|march|april|may|june|july|august|september|october|november|december)(?:[\s,]+(20\d{2}))?\b/i);
+  const long = value.match(/\b(\d{1,2})(?:st|nd|rd|th)?(?:[\s-]+of)?[\s-]+(january|february|march|april|may|june|july|august|september|october|november|december)(?:[\s,]+(20\d{2}))?\b/i);
   if (!long) return undefined;
   const year = long[3] ?? today.slice(0, 4);
   return `${year}-${monthNumbers[long[2]!.toLocaleLowerCase("en")]}-${long[1]!.padStart(2, "0")}`;
 }
 
 function explicitDateRange(message: string, today: string): { startDate: string; endDate: string } | undefined {
-  const values = [...message.matchAll(/\b(?:20\d{2}-\d{2}-\d{2}|\d{1,2}(?:st|nd|rd|th)?[\s-]+(?:january|February|march|april|may|june|july|august|september|october|november|december)(?:[\s,]+20\d{2})?)\b/gi)].map((match) => parseExplicitDate(match[0]!, today)).filter((value): value is string => Boolean(value));
+  const values = [...message.matchAll(/\b(?:20\d{2}-\d{2}-\d{2}|\d{1,2}(?:st|nd|rd|th)?(?:[\s-]+of)?[\s-]+(?:january|february|march|april|may|june|july|august|september|october|november|december)(?:[\s,]+20\d{2})?)\b/gi)].map((match) => parseExplicitDate(match[0]!, today)).filter((value): value is string => Boolean(value));
   if (values.length >= 2) return { startDate: values[0]!, endDate: values[1]! };
   const relativeDates = relativeDateRange(message, today);
   const start = values[0] ?? relativeDates?.startDate;

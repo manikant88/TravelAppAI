@@ -11,7 +11,7 @@ import {
   requirePlannableRequest,
 } from "@/domain/request";
 import type { TripProjection } from "@/domain/trip";
-import type { TripState } from "@/domain/model";
+import type { PlannableTripRequest, TripState } from "@/domain/model";
 import {
   factBundleSchema,
   type FactBundle,
@@ -125,9 +125,57 @@ function completedPlanMessage(result: Extract<SpecifiedPlanCoordinatorResult, { 
   return `I assembled ${selectionSummary}. ${fitSummary}; nothing is scheduled before arrival and check-in or too close to departure. The validated trip total is ₹${result.projection.budget.total.amount.toLocaleString("en-IN")}.`;
 }
 
+function groundedConflictMessage(
+  factBundle: FactBundle,
+  request: PlannableTripRequest,
+): string {
+  const validationFacts = factBundle.facts.filter((fact) => fact.dimension === "validation");
+  const validationCodes = new Set(validationFacts.map((fact) => fact.value));
+  if (validationCodes.has("ITINERARY_INCOMPLETE")) {
+    const pace = request.preferences.pace ?? "balanced";
+    return `I found travel and stay options, but not enough distinct, schedule-valid activity days to build a complete ${pace} itinerary. Try a lighter pace, a shorter trip, or a destination with fuller activity coverage.`;
+  }
+  if (validationCodes.has("ROUTE_GAP")) {
+    return "I found some suitable inventory, but it does not connect into a complete outbound, stay, and return journey for these dates. Try another destination or date range with full route coverage.";
+  }
+  if (validationCodes.has("STAY_CONFLICT")) {
+    return "Travel options are available, but I could not find a stay that covers the full trip and satisfies the current requirements. Adjust the stay requirements or compare another destination.";
+  }
+  if (validationCodes.has("SCHEDULE_CONFLICT")) {
+    return "The available options overlap in a way that prevents a valid day-by-day itinerary. Loosen the schedule or compare another compatible trip scope.";
+  }
+  const firstReason = validationFacts[0]?.label;
+  if (firstReason) {
+    return `I found relevant options, but I could not connect them into a valid trip because ${firstReason.charAt(0).toLocaleLowerCase("en")}${firstReason.slice(1)}. Choose one of the suggested adjustments and I’ll re-plan it.`;
+  }
+  return "I couldn’t connect the available travel, stay, and activity options into a valid trip for these details. Choose one of the suggested adjustments and I’ll try again.";
+}
+
+function fallbackActionLabel(id: string): string {
+  if (id.startsWith("action:adjust:")) {
+    const category = ["budget", "travel", "stay", "activity", "schedule"]
+      .find((name) => id.includes(`:${name}:`)) ?? "";
+    const labels: Record<string, string> = {
+      budget: "Increase the budget",
+      travel: "Allow more travel options",
+      stay: "Relax stay requirements",
+      activity: "Relax activity requirements",
+      schedule: "Loosen the daily schedule",
+    };
+    return labels[category] ?? "Relax this requirement";
+  }
+  if (id.endsWith(":pace:relaxed")) return "Use a relaxed itinerary pace";
+  if (id.endsWith(":shorter-trip")) return "Shorten the trip by one day";
+  if (id.endsWith(":destination")) return "Compare destinations with fuller coverage";
+  if (id.endsWith(":route_gap")) return "Choose a route with complete coverage";
+  if (id.endsWith(":schedule_conflict")) return "Relax the daily schedule";
+  return "Choose a compatible trip scope";
+}
+
 function mapCoordinatorResult(
   result: SpecifiedPlanCoordinatorResult,
   tripId: string,
+  request: PlannableTripRequest,
   planningMode: "ai" | "deterministic_fallback" = "ai",
 ): SpecifiedPlanApiResult {
   if (result.status === "completed") {
@@ -167,23 +215,7 @@ function mapCoordinatorResult(
     }));
     const fallbackActions: FactBundle["allowedFollowUpActions"] = result.suggestedRelaxationIds.map((id) => ({
       id,
-      label: id.startsWith("action:adjust:")
-        ? (() => {
-            const category = ["budget", "travel", "stay", "activity", "schedule"].find((name) => id.includes(`:${name}:`)) ?? "";
-            const labels: Record<string, string> = {
-              budget: "Increase the budget",
-              travel: "Allow more travel options",
-              stay: "Relax stay requirements",
-              activity: "Relax activity requirements",
-              schedule: "Loosen the daily schedule",
-            };
-            return labels[category] ?? "Relax this requirement";
-          })()
-        : id.endsWith(":route_gap")
-          ? "Choose a route with complete coverage"
-          : id.endsWith(":schedule_conflict")
-            ? "Relax the daily schedule"
-            : "Choose a compatible trip scope",
+      label: fallbackActionLabel(id),
       type: id.startsWith("action:adjust:") ? "adjust_constraint" as const : "change_scope" as const,
     }));
     if (fallbackActions.length === 0) {
@@ -226,7 +258,7 @@ function mapCoordinatorResult(
       suggestedRelaxationIds: factBundle.allowedFollowUpActions.map((action) => action.id),
       block,
       factBundle,
-      message: "The available inventory cannot satisfy the current request.",
+      message: groundedConflictMessage(factBundle, request),
     };
   }
   const validationFacts: GroundedFact[] = result.projection.validation.issues.map((issue) => ({
@@ -290,7 +322,7 @@ function mapCoordinatorResult(
       },
     }),
     factBundle,
-    message: "The revised strategy still does not produce a valid trip.",
+    message: groundedConflictMessage(factBundle, request),
   };
 }
 
@@ -389,7 +421,7 @@ export async function runSpecifiedPlanApi(
       planningMode = "deterministic_fallback";
       result = await coordinator({ ...coordinatorInput, model: dependencies.fallbackModel! });
     }
-    return mapCoordinatorResult(result, parsed.data.tripId, planningMode);
+    return mapCoordinatorResult(result, parsed.data.tripId, canonicalRequest, planningMode);
   } catch (error: unknown) {
     throw mapCoordinatorError(error);
   }

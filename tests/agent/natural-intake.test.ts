@@ -46,6 +46,7 @@ function repository() {
       inventoryVersion: "travel-seed-v1",
       locationGraph: [
         { id: "city:delhi", name: "Delhi", timezone: "Asia/Kolkata" },
+        { id: "city:mumbai", name: "Mumbai", timezone: "Asia/Kolkata" },
         { id: "country:th", name: "Thailand", timezone: "Asia/Bangkok" },
         {
           id: "city:phuket",
@@ -54,7 +55,7 @@ function repository() {
           timezone: "Asia/Bangkok",
         },
       ],
-      marketIds: ["country:th"],
+      marketIds: ["city:mumbai", "country:th"],
       supportedThemes: ["beaches", "food"],
     })),
     searchLocations: vi.fn(async (query: string) => {
@@ -77,6 +78,17 @@ function repository() {
             type: "city" as const,
             countryCode: "TH",
             aliases: [],
+          },
+        ];
+      }
+      if (query === "mumbai") {
+        return [
+          {
+            id: "city:mumbai",
+            name: "Mumbai",
+            type: "city" as const,
+            countryCode: "IN",
+            aliases: ["bombay"],
           },
         ];
       }
@@ -278,6 +290,26 @@ describe("natural-language trip intake", () => {
     expect(result.request.startDate).toBe("2026-09-02");
     expect(result.request.endDate).toBe("2026-09-05");
     expect(result.missingRequired).not.toContain("dates");
+  });
+
+  it("derives an inclusive date range from an ordinal date with 'of' and a day count", async () => {
+    const result = await runNaturalIntake(
+      {
+        message: "plan me a 4 day trip to mumbai from delhi on 1st of september for 2 adults",
+        currentRequest: emptyRequest,
+      },
+      { repository: repository(), today: () => "2026-08-31" },
+    );
+
+    expect(result.request).toMatchObject({
+      origin: "city:delhi",
+      destination: { kind: "specified", locationId: "city:mumbai" },
+      startDate: "2026-09-01",
+      endDate: "2026-09-04",
+      travellers: [{ type: "adult" }, { type: "adult" }],
+    });
+    expect(result.missingRequired).toEqual([]);
+    expect(result.suggestedDateRanges).toEqual([]);
   });
 
   it("keeps explicit facts and returns deterministic missing requirements when model extraction fails", async () => {

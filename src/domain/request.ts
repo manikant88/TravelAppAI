@@ -282,6 +282,23 @@ export function checkRequirements(request: TripRequest): RequirementCheck {
   return { missingRequired, optionalTopics };
 }
 
+/**
+ * Origin and destination define the route scope of a generated itinerary.
+ * Other brief edits can update an existing plan in place, but a route-scope
+ * change must hide the committed itinerary until its replacement is ready.
+ */
+export function hasPlanningRouteChanged(
+  current: Pick<TripRequest, "origin" | "destination">,
+  next: Pick<TripRequest, "origin" | "destination">,
+): boolean {
+  if (current.origin !== next.origin) return true;
+  if (current.destination?.kind !== next.destination?.kind) return true;
+  if (current.destination?.kind === "specified" && next.destination?.kind === "specified") {
+    return current.destination.locationId !== next.destination.locationId;
+  }
+  return false;
+}
+
 export function canonicalizeTripRequest(request: TripRequest): TripRequest {
   const parsed = tripRequestSchema.parse(request);
   return {

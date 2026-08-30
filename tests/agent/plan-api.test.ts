@@ -227,4 +227,53 @@ describe("specified PLAN API service", () => {
       },
     });
   });
+
+  it("explains itinerary coverage failures and exposes relevant recovery actions", async () => {
+    const coordinator = vi.fn(async () => ({
+      status: "cannot_satisfy" as const,
+      conflictFactIds: ["fact:validation:coverage"],
+      suggestedRelaxationIds: [
+        "action:change-scope:pace:relaxed",
+        "action:change-scope:destination",
+      ],
+      factBundle: {
+        facts: [{
+          id: "fact:validation:coverage",
+          subjectType: "trip" as const,
+          subjectId: "trip:udaipur",
+          dimension: "validation",
+          label: "Trip pace requires activities on at least 2 full trip days",
+          value: "ITINERARY_INCOMPLETE",
+        }],
+        allowedComparisonDimensions: ["validation"],
+        allowedFollowUpActions: [
+          {
+            id: "action:change-scope:pace:relaxed",
+            label: "Use a relaxed itinerary pace",
+            type: "change_scope" as const,
+          },
+          {
+            id: "action:change-scope:destination",
+            label: "Compare destinations with fuller activity coverage",
+            type: "change_scope" as const,
+          },
+        ],
+      },
+      trace: {} as never,
+    }));
+
+    const result = await runSpecifiedPlanApi(
+      { tripId: "trip:udaipur", request },
+      { model: unusedModel, repository: repository(), coordinator },
+    );
+
+    expect(result.type).toBe("conflict");
+    if (result.type !== "conflict") return;
+    expect(result.message).toContain("not enough distinct, schedule-valid activity days");
+    expect(result.message).not.toContain("available inventory cannot satisfy");
+    expect(result.factBundle.allowedFollowUpActions.map((action) => action.id)).toEqual([
+      "action:change-scope:pace:relaxed",
+      "action:change-scope:destination",
+    ]);
+  });
 });

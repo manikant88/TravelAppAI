@@ -21,9 +21,14 @@ export async function POST(request: NextRequest) {
       model: deterministicModel,
       modelMode: "deterministic_fallback",
     });
+    const communicationFacts = result.type === "conflict"
+      ? result.factBundle.facts.slice(0, 12).map((fact) =>
+          `${fact.label}: ${typeof fact.value === "string" ? fact.value : JSON.stringify(fact.value)}`,
+        )
+      : [result.message];
     const message = await generateAssistantMessage(result.message, {
         intent: result.type === "trip_ready" ? "plan_trip" : "recover",
-        facts: [result.message],
+        facts: communicationFacts,
         events: [],
         availableActions: [],
       });

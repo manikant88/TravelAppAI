@@ -81,6 +81,12 @@ export const guidedActionSchema = z.union([
   }).strict(),
   z.object({
     id: idSchema,
+    type: z.literal("set_pace"),
+    pace: z.enum(["relaxed", "balanced", "packed"]),
+    label: z.string().trim().min(1).max(80),
+  }).strict(),
+  z.object({
+    id: idSchema,
     type: z.literal("remove_constraint"),
     constraintId: idSchema,
     label: z.string().trim().min(1).max(80),

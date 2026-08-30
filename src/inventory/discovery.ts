@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { calendarDayDifference } from "@/domain/dates";
+import { minimumInitialActivityDays } from "@/domain/itinerary-quality";
 import type { Constraint, PlannableTripRequest } from "@/domain/model";
+import { distinctActivityDayCount } from "@/inventory/activity-selection";
 import type {
   CandidateFactBundle,
   FactBundle,
@@ -163,6 +165,17 @@ export async function discoverDestinations(
       const returnOffer = returning.results[0];
       const stayOffer = stays.results[0];
       if (!outboundOffer || !returnOffer || !stayOffer) return undefined;
+      const requiredActivityDays = minimumInitialActivityDays(
+        request.startDate,
+        request.endDate,
+        request.preferences.pace,
+      );
+      const activityDays = distinctActivityDayCount(
+        activities.results,
+        request.startDate,
+        request.endDate,
+      );
+      if (activityDays < requiredActivityDays) return undefined;
 
       const travelFloor =
         (outboundOffer.price.amount + returnOffer.price.amount) * travellerCount;
@@ -188,7 +201,19 @@ export async function discoverDestinations(
           "Fastest observed return travel minutes",
           outboundOffer.durationMinutes + returnOffer.durationMinutes,
         ),
-        fact(profile, "activity_options", "Available activity options", activities.resultCount),
+        fact(
+          profile,
+          "activity_options",
+          "Distinct available activities",
+          new Set(activities.results.map((offer) => offer.activityId)).size,
+        ),
+        fact(profile, "activity_days", "Schedule-valid activity days", activityDays),
+        fact(
+          profile,
+          "required_activity_days",
+          "Activity days required for requested pace",
+          requiredActivityDays,
+        ),
       ];
       return { profile, facts };
     }),

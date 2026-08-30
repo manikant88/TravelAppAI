@@ -6,6 +6,7 @@ import { runSpecifiedPlanApi } from "@/agent/plan-api";
 import { runModification } from "@/agent/modify";
 import type { TripRequest } from "@/domain/model";
 import { createSnapshotInventoryRepository } from "@/inventory/snapshot-repository";
+import { marketManifest } from "@/db/seed/market-manifest";
 
 const repository = createSnapshotInventoryRepository();
 
@@ -16,6 +17,68 @@ const adults = (count: number) =>
   }));
 
 describe("snapshot-backed travel flows", () => {
+  it("builds a valid fully specified balanced trip across every supported market", async () => {
+    for (const market of marketManifest) {
+      const result = await runSpecifiedPlanApi(
+        {
+          tripId: `trip:coverage:${market.id}`,
+          request: {
+            origin: "city:delhi",
+            destination: { kind: "specified", locationId: market.id },
+            startDate: "2026-10-18",
+            endDate: "2026-10-23",
+            travellers: adults(4),
+            preferences: { pace: "balanced", interests: market.tags.slice(0, 3) },
+            constraints: [],
+          },
+        },
+        {
+          model: createDeterministicPlannerModel(),
+          modelMode: "deterministic_fallback",
+          repository,
+        },
+      );
+
+      expect(result.type, market.id).toBe("trip_ready");
+      if (result.type === "trip_ready") {
+        expect(result.projection.validation.valid, market.id).toBe(true);
+      }
+    }
+  });
+
+  it("can build every destination presented by discovery with the same request", async () => {
+    const openRequest: TripRequest = {
+      origin: "city:delhi",
+      destination: { kind: "open" },
+      startDate: "2026-10-18",
+      endDate: "2026-10-23",
+      travellers: adults(4),
+      preferences: { pace: "balanced", interests: ["food", "relaxed"] },
+      constraints: [],
+    };
+    const discovery = await runDestinationDiscovery(openRequest, { repository });
+    expect(discovery.type).toBe("destination_options");
+    if (discovery.type !== "destination_options") return;
+
+    for (const option of discovery.options) {
+      const result = await runSpecifiedPlanApi(
+        {
+          tripId: `trip:discovery-contract:${option.id}`,
+          request: {
+            ...openRequest,
+            destination: { kind: "specified", locationId: option.id },
+          },
+        },
+        {
+          model: createDeterministicPlannerModel(),
+          modelMode: "deterministic_fallback",
+          repository,
+        },
+      );
+      expect(result.type, option.id).toBe("trip_ready");
+    }
+  });
+
   it("resolves Thailand to its canonical multi-stop market without a model", async () => {
     const result = await runNaturalIntake(
       {

@@ -12,6 +12,7 @@ import {
   type ToolPlan,
 } from "@/agent/contracts";
 import { addCalendarDays, calendarDayDifference, tripDurationDays, tripNightCount } from "@/domain/dates";
+import { reduceActivityOffersForPlanning } from "@/inventory/activity-selection";
 import type { Constraint, PlannableTripRequest } from "@/domain/model";
 import { requirePlannableRequest } from "@/domain/request";
 import type {
@@ -259,36 +260,6 @@ function combinedActivityQueryId(responses: SearchResponse<ActivityOffer>[]): st
   return `query:agent-activities:${createHash("sha256").update(sourceIds).digest("hex")}`;
 }
 
-function reduceActivitiesByDate(offers: ActivityOffer[], limit = 8): ActivityOffer[] {
-  const byDate = new Map<string, ActivityOffer[]>();
-  offers.forEach((offer) => {
-    const date = offer.startsAt.slice(0, 10);
-    byDate.set(date, [...(byDate.get(date) ?? []), offer]);
-  });
-  const dates = [...byDate.keys()].sort();
-  byDate.forEach((items) =>
-    items.sort(
-      (left, right) =>
-        left.price.amount - right.price.amount ||
-        left.startsAt.localeCompare(right.startsAt, "en") ||
-        left.id.localeCompare(right.id, "en"),
-    ),
-  );
-  const results: ActivityOffer[] = [];
-  for (let rank = 0; results.length < limit; rank += 1) {
-    let added = false;
-    dates.forEach((date) => {
-      const offer = byDate.get(date)?.[rank];
-      if (offer && results.length < limit) {
-        results.push(offer);
-        added = true;
-      }
-    });
-    if (!added) break;
-  }
-  return results;
-}
-
 async function executeCall(
   call: PlannerToolCall,
   context: ToolExecutorContext,
@@ -359,7 +330,14 @@ async function executeCall(
       if (new Set(responses.map((response) => response.inventoryVersion)).size !== 1) {
         throw new Error("Activity search responses use different inventory versions");
       }
-      const offers = reduceActivitiesByDate(responses.flatMap((response) => response.results));
+      const offers = reduceActivityOffersForPlanning(
+        responses.flatMap((response) => response.results),
+        {
+          startDate: context.request.startDate,
+          endDate: context.request.endDate,
+          interests: themes,
+        },
+      );
       const combined: SearchResponse<ActivityOffer> = {
         queryId: combinedActivityQueryId(responses),
         inventoryVersion: responses[0]?.inventoryVersion ?? "unknown",
