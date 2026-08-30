@@ -1282,6 +1282,8 @@ export interface ProposalPreview {
 
 P0 proposals remain in client in-memory session state keyed by ID. The inventory database does not store trips or proposals. Adding persistence would require auth/session ownership and is outside P0.
 
+The `group-voting` demo is an explicit post-P0 exception: it stores one versioned trip snapshot, named invitation slots, participants, candidates, and votes in browser `localStorage` so a same-browser, multi-tab flow can be demonstrated with immediate updates. Per-tab viewer identity is stored separately in `sessionStorage`; `BroadcastChannel` and the `storage` event synchronize open tabs. It is intentionally local-only and must not be represented as cross-device or deployable persistence. Organizer and participant tabs render the same itinerary workspace with role-derived capabilities. Alternatives are eligible candidates rather than prematurely valid proposals: schedule conflicts remain visible during voting, while finalization still passes the combined winning set through the canonical proposal service and applies valid replacements, additions, and locks atomically.
+
 ---
 
 # 22. Grounded explanation

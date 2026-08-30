@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 export interface PriceMetric {
   label: string;
   amount: string;
-  detail: string;
+  detail?: string;
 }
 
 export function PriceSummary({
@@ -19,7 +19,7 @@ export function PriceSummary({
         <div className="trip-total" key={metric.label}>
           <span>{metric.label}</span>
           <strong>{metric.amount}</strong>
-          <small>{metric.detail}</small>
+          {metric.detail ? <small>{metric.detail}</small> : null}
         </div>
       ))}
       <div className="checkout-divider" aria-hidden="true" />

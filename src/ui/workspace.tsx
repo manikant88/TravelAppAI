@@ -52,6 +52,12 @@ import {
   type InteractionPresentation,
 } from "@/agent/interaction-contracts";
 import { completePlanningEvents, planningEvents } from "@/agent/interaction-guidance";
+import type { PublicGroupRoom } from "@/collaboration/model";
+import {
+  renameLocalInvitation,
+  writeLocalGroupRoom,
+  writeLocalViewer,
+} from "@/collaboration/local-room";
 
 type InventoryReadiness = "checking" | "ready" | "unavailable";
 type BriefFact = "origin" | "destination" | "dates" | "guests" | "preferences";
@@ -755,7 +761,7 @@ function airlineLogo(operator: string): string | undefined {
   return undefined;
 }
 
-function TravelCard({ item }: { item: HydratedSelection }) {
+export function TravelCard({ item, grounding }: { item: HydratedSelection; grounding?: string }) {
   const { offer } = item;
   if (isTransport(offer)) {
     const logo = airlineLogo(offer.operator);
@@ -772,7 +778,7 @@ function TravelCard({ item }: { item: HydratedSelection }) {
           <dl className="flight-facts"><div><dt>Operator</dt><dd>{offer.operator}</dd></div>{serviceNumber ? <div><dt>Flight</dt><dd>{serviceNumber}</dd></div> : null}<div><dt>Stops</dt><dd>{offer.stops === 0 ? "Non-stop" : `${offer.stops} stop${offer.stops === 1 ? "" : "s"}`}</dd></div></dl>
           <div className="card-price"><strong>{formatMoney(offer.price.amount)}</strong><span>/ traveller</span></div>
         </div>
-        <div className="card-grounding"><i aria-hidden="true">✓</i><span>{offer.operator} was selected for this dated route: it departs at {formatTime(offer.departureAt)}, arrives at {formatTime(offer.arrivalAt)}, and is {stopDescription}.</span></div>
+        <div className="card-grounding"><i aria-hidden="true">✓</i><span>{grounding ?? `${offer.operator} was selected for this dated route: it departs at ${formatTime(offer.departureAt)}, arrives at ${formatTime(offer.arrivalAt)}, and is ${stopDescription}.`}</span></div>
       </article>
     );
   }
@@ -791,7 +797,7 @@ function TravelCard({ item }: { item: HydratedSelection }) {
   return null;
 }
 
-function StayCard({ item, travellerCount, onModify }: { item: HydratedSelection; travellerCount: number; onModify(): void }) {
+export function StayCard({ item, travellerCount, onModify, grounding }: { item: HydratedSelection; travellerCount: number; onModify?(): void; grounding?: string }) {
   if (!isStay(item.offer)) return null;
   const offer = item.offer;
   const nights = Math.max(1, Math.round((new Date(offer.checkOut).getTime() - new Date(offer.checkIn).getTime()) / 86400000));
@@ -816,15 +822,15 @@ function StayCard({ item, travellerCount, onModify }: { item: HydratedSelection;
           <p>{offer.roomFacts.roomLabel} · {offer.roomFacts.mealPlan === "breakfast" ? "Breakfast included" : "Room only"}</p>
           <div className="card-price"><strong>{formatMoney(offer.price.amount)}</strong><span>/ per night</span></div>
           <ul><li>{offer.rooms} room{offer.rooms === 1 ? "" : "s"} · {travellerCount} traveller{travellerCount === 1 ? "" : "s"}</li><li>{formatDate(offer.checkIn)} – {formatDate(offer.checkOut)}</li><li>{offer.roomFacts.refundable ? "Refundable" : "Non-refundable"}</li></ul>
-          <Button variant="text" size="sm" className="inline-card-action" onClick={onModify}>Modify room</Button>
+          {onModify ? <Button variant="text" size="sm" className="inline-card-action" onClick={onModify}>Modify room</Button> : null}
         </div>
       </div>
-      <div className="card-grounding"><i aria-hidden="true">✓</i><span>This stay covers all {nights} night{nights === 1 ? "" : "s"} for {offer.rooms} room{offer.rooms === 1 ? "" : "s"}. It is rated {offer.propertyFacts.rating.toFixed(1)} from {offer.propertyFacts.reviewCount} reviews and includes {offer.propertyFacts.amenities.slice(0, 2).join(" and ")}.</span></div>
+      <div className="card-grounding"><i aria-hidden="true">✓</i><span>{grounding ?? `This stay covers all ${nights} night${nights === 1 ? "" : "s"} for ${offer.rooms} room${offer.rooms === 1 ? "" : "s"}. It is rated ${offer.propertyFacts.rating.toFixed(1)} from ${offer.propertyFacts.reviewCount} reviews and includes ${offer.propertyFacts.amenities.slice(0, 2).join(" and ")}.`}</span></div>
     </article>
   );
 }
 
-function ActivityCard({ item, onModify }: { item: HydratedSelection; onModify(): void }) {
+export function ActivityCard({ item, onModify, grounding }: { item: HydratedSelection; onModify?(): void; grounding?: string }) {
   if (!isActivity(item.offer)) return null;
   const offer = item.offer;
   const durationMinutes = Math.round((new Date(offer.endsAt).getTime() - new Date(offer.startsAt).getTime()) / 60000);
@@ -833,9 +839,9 @@ function ActivityCard({ item, onModify }: { item: HydratedSelection; onModify():
       <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true">▧</span><strong>Activity · {durationLabel(durationMinutes)} · {displayLocation(offer.locationId)}</strong></header>
       <div className="activity-card-body">
         <SkeletonImage src={activityImage(offer)} alt={offer.activityFacts.imageAltText ?? offer.activityFacts.name} width={320} height={240} />
-        <div><h3>{offer.activityFacts.name}</h3><p>{formatDateTime(offer.startsAt)} – {formatDateTime(offer.endsAt)}</p><div className="card-price"><strong>{formatMoney(offer.price.amount)}</strong><span>/ per person</span></div><ul><li>Duration {durationLabel(durationMinutes)}</li><li>{offer.activityFacts.mobility} mobility</li><li>Capacity {offer.capacity}</li></ul><Button variant="text" size="sm" className="inline-card-action" onClick={onModify}>Modify activity</Button></div>
+        <div><h3>{offer.activityFacts.name}</h3><p>{formatDateTime(offer.startsAt)} – {formatDateTime(offer.endsAt)}</p><div className="card-price"><strong>{formatMoney(offer.price.amount)}</strong><span>/ per person</span></div><ul><li>Duration {durationLabel(durationMinutes)}</li><li>{offer.activityFacts.mobility} mobility</li><li>Capacity {offer.capacity}</li></ul>{onModify ? <Button variant="text" size="sm" className="inline-card-action" onClick={onModify}>Modify activity</Button> : null}</div>
       </div>
-      <div className="card-grounding"><i aria-hidden="true">✓</i><span>This {offer.activityFacts.mobility}-mobility experience fits the available time on this day without overlapping travel. It supports {offer.activityFacts.tags.slice(0, 3).join(", ")} interests.</span></div>
+      <div className="card-grounding"><i aria-hidden="true">✓</i><span>{grounding ?? `This ${offer.activityFacts.mobility}-mobility experience fits the available time on this day without overlapping travel. It supports ${offer.activityFacts.tags.slice(0, 3).join(", ")} interests.`}</span></div>
     </article>
   );
 }
@@ -1030,6 +1036,7 @@ function TripReview({
   onBrowseActivity,
   onBook,
   onRequestCallback,
+  onShare,
   highlightedDay,
   highlightedSelectionId,
   focusMessage,
@@ -1044,6 +1051,7 @@ function TripReview({
   onBrowseActivity(date: string, selectionId?: string): void;
   onBook(): void;
   onRequestCallback(): void;
+  onShare(): void;
   highlightedDay?: string;
   highlightedSelectionId?: string;
   focusMessage?: string;
@@ -1076,7 +1084,10 @@ function TripReview({
           <p>Day by day</p>
           <h1 id="itinerary-heading">Booking summary</h1>
         </div>
-        <Badge tone="success" className="trip-generated-badge">◉ Trip generated</Badge>
+        <div className="trip-review-actions">
+          <Button variant="secondary" size="sm" onClick={onShare}>Share & vote</Button>
+          <Badge tone="success" className="trip-generated-badge">◉ Trip generated</Badge>
+        </div>
       </header>
       <nav className="day-navigation" aria-label="Jump to itinerary day">
         {projection.itinerary.map((day) => <a className={activeDay === day.date ? "is-active" : undefined} key={day.date} href={`#${dayAnchor(day.date)}`} onClick={() => setActiveDay(day.date)}>Day {day.dayNumber}</a>)}
@@ -1124,6 +1135,9 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
   const [highlightedDay, setHighlightedDay] = useState<string>();
   const [showPlanningAnimation, setShowPlanningAnimation] = useState(false);
   const [editingFact, setEditingFact] = useState<BriefFact>();
+  const [sharing, setSharing] = useState(false);
+  const [shareError, setShareError] = useState<string>();
+  const [sharedRoom, setSharedRoom] = useState<{ room: PublicGroupRoom; organizerToken: string; organizerUrl: string }>();
   const factEditorRef = useRef<HTMLFormElement | null>(null);
   const conversationRef = useRef<HTMLElement | null>(null);
   const initialPlanningDeadlineRef = useRef<Promise<void> | undefined>(undefined);
@@ -2224,6 +2238,54 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     await applyDirectProposal(proposal, currentlyLocked ? "Unlocked this selection." : "Locked this selection. Future changes will preserve it.");
   }
 
+  async function shareTripForVoting() {
+    if (!trip || !projectionState || sharing) return;
+    setSharing(true);
+    setShareError(undefined);
+    try {
+      const response = await fetch("/api/group-rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trip, projection: projectionState }),
+      });
+      const body = await response.json().catch(() => ({})) as { room?: PublicGroupRoom; organizerToken?: string; message?: string };
+      if (!response.ok || !body.room?.id || !body.organizerToken) {
+        throw new Error(body.message ?? "The shared voting room could not be created");
+      }
+      writeLocalGroupRoom(body.room);
+      const organizerUrl = `${window.location.origin}/group/${body.room.id}?manage=${encodeURIComponent(body.organizerToken)}`;
+      setSharedRoom({ room: body.room, organizerToken: body.organizerToken, organizerUrl });
+    } catch (error: unknown) {
+      setShareError(error instanceof Error ? error.message : "The shared voting room could not be created");
+    } finally {
+      setSharing(false);
+    }
+  }
+
+  function nameParticipantInvite(inviteId: string, displayName: string) {
+    setSharedRoom((current) => {
+      if (!current) return current;
+      const room = renameLocalInvitation(current.room, inviteId, displayName);
+      writeLocalGroupRoom(room);
+      return { ...current, room };
+    });
+  }
+
+  function openParticipantInvite(inviteId: string) {
+    if (!sharedRoom) return;
+    const url = `${window.location.origin}/group/${sharedRoom.room.id}?invite=${encodeURIComponent(inviteId)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  function openOrganizerRoom() {
+    if (!sharedRoom) return;
+    writeLocalViewer(sharedRoom.room.id, {
+      participantId: sharedRoom.room.organizerParticipantId,
+      role: "organizer",
+    });
+    window.location.assign(sharedRoom.organizerUrl);
+  }
+
   const maxBudget = request.constraints.find(
     (constraint) => constraint.category === "budget",
   );
@@ -2382,6 +2444,12 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
             />
           ) : trip && projectionState ? (
             <>
+              {sharedRoom || sharing || shareError ? <div className="share-room-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !sharing) { setSharedRoom(undefined); setShareError(undefined); } }}><section className="share-room-dialog" role="dialog" aria-modal="true" aria-labelledby="share-room-title">
+                <header><div><small>Group voting demo</small><h2 id="share-room-title">{sharing ? "Creating voting room…" : sharedRoom ? "Trip ready to share" : "Couldn’t create the room"}</h2></div><button type="button" aria-label="Close share dialog" disabled={sharing} onClick={() => { setSharedRoom(undefined); setShareError(undefined); }}>×</button></header>
+                {sharing ? <p>Preparing travel, stay, and activity decisions from this itinerary.</p> : null}
+                {shareError ? <><p className="group-error">{shareError}</p><Button onClick={() => void shareTripForVoting()}>Try again</Button></> : null}
+                {sharedRoom ? <><p>The organizer occupies one traveller slot. Name each remaining guest, then open their participant view in a new tab.</p><div className="share-participant-list"><div className="share-participant-row is-organizer"><div><strong>You</strong><span>Organizer · joined</span></div><Badge tone="success">Ready</Badge></div>{sharedRoom.room.invitations.map((invite, index) => <div className="share-participant-row" key={invite.id}><label><span>Participant {index + 2}</span><input value={invite.displayName ?? ""} maxLength={40} placeholder={`Guest ${index + 2} name`} onChange={(event) => nameParticipantInvite(invite.id, event.target.value)} /></label><Button size="sm" onClick={() => openParticipantInvite(invite.id)}>Open invite</Button></div>)}</div><p className="share-room-note">This demo is shared through this browser’s local storage. Participant tabs update instantly, but the invite will not work on another device.</p><div className="share-room-dialog-actions"><Button onClick={openOrganizerRoom}>Open organizer room</Button></div></> : null}
+              </section></div> : null}
               {inventoryPicker ? (
                 <InventoryOptionPicker picker={inventoryPicker} busy={busy} selectingOfferId={selectingOfferId} onSelect={(offer) => void selectInventoryOffer(offer)} onClose={() => setInventoryPicker(undefined)} />
               ) : null}
@@ -2401,6 +2469,7 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
                 onBrowseActivity={(date, selectionId) => void browseActivities(date, selectionId)}
                 onBook={() => dispatch({ type: "conversation_entry_added", entry: { id: messageId("assistant"), role: "assistant", text: "Booking is intentionally disabled in this prototype. The itinerary and grounded price breakdown are ready for a real booking handoff." } })}
                 onRequestCallback={() => dispatch({ type: "conversation_entry_added", entry: { id: messageId("assistant"), role: "assistant", text: "Callback scheduling is shown as the next service handoff. This prototype does not collect or transmit contact details." } })}
+                onShare={() => void shareTripForVoting()}
               />
             </>
           ) : initialExperience ? (

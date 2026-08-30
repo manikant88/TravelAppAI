@@ -52,7 +52,9 @@ export const tripProposalSchema = z
   .object({
     id: idSchema,
     baseTripVersion: z.number().int().nonnegative(),
-    operations: z.array(tripOperationSchema).min(1).max(12),
+    // A group finalization can replace and lock several independent selections
+    // atomically. Keep the bound finite while allowing a realistic itinerary.
+    operations: z.array(tripOperationSchema).min(1).max(36),
   })
   .strict();
 
