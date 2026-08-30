@@ -117,6 +117,46 @@ describe("snapshot-backed travel flows", () => {
     ]);
   });
 
+  it("assembles a short Sydney trip without scheduling activities before next-day arrival", async () => {
+    const result = await runSpecifiedPlanApi(
+      {
+        tripId: "trip:snapshot-sydney-next-day-arrival",
+        request: {
+          origin: "city:delhi",
+          destination: { kind: "specified", locationId: "city:sydney" },
+          startDate: "2026-10-10",
+          endDate: "2026-10-12",
+          travellers: adults(1),
+          preferences: {
+            pace: "relaxed",
+            interests: ["coast", "architecture", "nature"],
+          },
+          constraints: [],
+        },
+      },
+      {
+        model: createDeterministicPlannerModel(),
+        modelMode: "deterministic_fallback",
+        repository,
+      },
+    );
+
+    expect(result.type).toBe("trip_ready");
+    if (result.type !== "trip_ready") return;
+    expect(result.projection.validation.valid).toBe(true);
+    const outboundArrival = result.projection.itinerary
+      .flatMap((day) => day.events)
+      .find((event) => event.type === "travel" && event.startAt?.slice(0, 10) === "2026-10-10")
+      ?.endAt;
+    expect(outboundArrival).toBeDefined();
+    expect(
+      result.projection.itinerary
+        .flatMap((day) => day.events)
+        .filter((event) => event.type === "activity")
+        .every((event) => event.startAt! > outboundArrival!),
+    ).toBe(true);
+  });
+
   it("only offers total-price reductions for an explicit cheaper-stay request", async () => {
     const planned = await runSpecifiedPlanApi(
       {

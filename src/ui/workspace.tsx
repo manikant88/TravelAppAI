@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import {
   useCallback,
   useEffect,
@@ -765,9 +766,9 @@ function TravelCard({ item }: { item: HydratedSelection }) {
         <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true">✈</span><strong>{offer.mode} · {displayLocation(offer.from)} to {displayLocation(offer.to)} · {durationLabel(offer.durationMinutes)}</strong></header>
         <div className="flight-card-body">
           <div className="airline-mark">{logo ? <Image src={logo} alt={`${offer.operator} logo`} width={48} height={48} /> : <span aria-hidden="true">✈</span>}</div>
-          <div className="flight-stop"><strong>{offer.departureAt.slice(11, 16)}</strong><span>{formatCompactDateTime(offer.departureAt)}</span><small>{displayLocation(offer.from)}</small></div>
+          <div className="flight-stop"><strong>{formatTime(offer.departureAt)}</strong><span>{formatCompactDateTime(offer.departureAt)}</span><small>{displayLocation(offer.from)}</small></div>
           <div className="flight-line"><i /><span>✈</span></div>
-          <div className="flight-stop"><strong>{offer.arrivalAt.slice(11, 16)}</strong><span>{formatCompactDateTime(offer.arrivalAt)}</span><small>{displayLocation(offer.to)}</small></div>
+          <div className="flight-stop"><strong>{formatTime(offer.arrivalAt)}</strong><span>{formatCompactDateTime(offer.arrivalAt)}</span><small>{displayLocation(offer.to)}</small></div>
           <dl className="flight-facts"><div><dt>Operator</dt><dd>{offer.operator}</dd></div>{serviceNumber ? <div><dt>Flight</dt><dd>{serviceNumber}</dd></div> : null}<div><dt>Stops</dt><dd>{offer.stops === 0 ? "Non-stop" : `${offer.stops} stop${offer.stops === 1 ? "" : "s"}`}</dd></div></dl>
           <div className="card-price"><strong>{formatMoney(offer.price.amount)}</strong><span>/ traveller</span></div>
         </div>
@@ -1108,7 +1109,7 @@ function InteractionProgress({ events }: { events: InteractionEvent[] }) {
   );
 }
 
-export default function TravelWorkspace() {
+export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialPrompt = false }: { initialPrompt?: string; autoSubmitInitialPrompt?: boolean }) {
   const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState);
   const request = state.itinerary.request;
   const trip = state.itinerary.trip;
@@ -1116,7 +1117,7 @@ export default function TravelWorkspace() {
   const [originLabel, setOriginLabel] = useState("");
   const [destinationLabel, setDestinationLabel] = useState("");
   const [interestText, setInterestText] = useState("");
-  const [composerText, setComposerText] = useState("");
+  const [composerText, setComposerText] = useState(initialPrompt);
   const [inventoryPicker, setInventoryPicker] = useState<InventoryPicker>();
   const [selectingOfferId, setSelectingOfferId] = useState<string>();
   const [guidedChangeActive, setGuidedChangeActive] = useState(false);
@@ -1126,6 +1127,7 @@ export default function TravelWorkspace() {
   const factEditorRef = useRef<HTMLFormElement | null>(null);
   const conversationRef = useRef<HTMLElement | null>(null);
   const initialPlanningDeadlineRef = useRef<Promise<void> | undefined>(undefined);
+  const initialPromptConsumedRef = useRef(false);
 
   function beginInitialPlanningAnimation(): Promise<void> {
     if (trip) return Promise.resolve();
@@ -1385,6 +1387,12 @@ export default function TravelWorkspace() {
       } });
     }
   }
+
+  useEffect(() => {
+    if (!autoSubmitInitialPrompt || !initialPrompt.trim() || initialPromptConsumedRef.current) return;
+    initialPromptConsumedRef.current = true;
+    void submitNaturalIntake(undefined, initialPrompt);
+  }, [autoSubmitInitialPrompt, initialPrompt]);
 
   async function startQuickTrip(item: QuickStart) {
     if (busy) return;
@@ -2282,7 +2290,9 @@ export default function TravelWorkspace() {
       <div className="workspace-layout">
         <aside className="planner-panel">
           <header className="chat-panel-header">
-            <Image className="mmt-logo" src="/figma/itinerary/mmt-logo.png" alt="MakeMyTrip" width={169} height={40} priority />
+            <Link className="mmt-logo-link" href="/" aria-label="Go to MakeMyTrip trip planner home">
+              <Image className="mmt-logo" src="/figma/itinerary/mmt-logo.png" alt="MakeMyTrip" width={169} height={40} priority />
+            </Link>
             <button type="button" className={`inventory-readiness inventory-${inventoryReadiness}`} aria-live="polite" disabled={inventoryReadiness === "checking"} onClick={() => void warmInventory()} title={`${inventoryBacking} inventory`}><i /><span className="sr-only">{inventoryReadiness === "ready" ? "Inventory ready" : inventoryReadiness === "checking" ? "Connecting inventory" : "Inventory unavailable, retry"}</span></button>
           </header>
           {initialExperience ? <section className="initial-intake">

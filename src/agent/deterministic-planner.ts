@@ -128,20 +128,32 @@ function fitsDestinationTravelWindow(
   if (!startsAt || !endsAt) return false;
   const start = Date.parse(startsAt);
   const end = Date.parse(endsAt);
-  if (startsAt.slice(0, 10) === request.startDate) {
-    const arrivals = travel
-      .map((selection) => textFact(selection, "arrival"))
-      .filter((value): value is string => Boolean(value) && value!.slice(0, 10) === request.startDate)
-      .map(Date.parse);
-    if (arrivals.length > 0 && start < Math.max(...arrivals) + TRAVEL_ACTIVITY_BUFFER_MS) return false;
-  }
-  if (endsAt.slice(0, 10) === request.endDate) {
-    const departures = travel
-      .map((selection) => textFact(selection, "departure"))
-      .filter((value): value is string => Boolean(value) && value!.slice(0, 10) === request.endDate)
-      .map(Date.parse);
-    if (departures.length > 0 && end > Math.min(...departures) - TRAVEL_ACTIVITY_BUFFER_MS) return false;
-  }
+  // Identify the boundary journeys by their departure dates. Long-haul
+  // outbound travel can arrive one or more calendar days after the trip starts
+  // (for example Delhi to Sydney), so comparing the arrival's date with the
+  // requested start date incorrectly leaves pre-arrival activities eligible.
+  const outboundArrivals = travel.flatMap((selection) => {
+    const departure = textFact(selection, "departure");
+    const arrival = textFact(selection, "arrival");
+    return departure?.slice(0, 10) === request.startDate && arrival
+      ? [Date.parse(arrival)]
+      : [];
+  });
+  if (
+    outboundArrivals.length > 0 &&
+    start < Math.max(...outboundArrivals) + TRAVEL_ACTIVITY_BUFFER_MS
+  ) return false;
+
+  const returnDepartures = travel.flatMap((selection) => {
+    const departure = textFact(selection, "departure");
+    return departure?.slice(0, 10) === request.endDate
+      ? [Date.parse(departure)]
+      : [];
+  });
+  if (
+    returnDepartures.length > 0 &&
+    end > Math.min(...returnDepartures) - TRAVEL_ACTIVITY_BUFFER_MS
+  ) return false;
   return true;
 }
 

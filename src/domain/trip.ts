@@ -621,7 +621,11 @@ function validateTravelRoute(
     ({ offer }) =>
       relatedLocations(offer.from, trip.request.origin, graph) &&
       relatedLocations(offer.to, trip.route.marketId, graph) &&
-      offer.arrivalAt.slice(0, 10) === trip.request.startDate,
+      // Date-align the outbound leg by its departure date. International
+      // routes can arrive after midnight locally (e.g. Delhi → Sydney), so
+      // requiring the arrival calendar date to equal the trip start incorrectly
+      // rejects otherwise valid itineraries.
+      offer.departureAt.slice(0, 10) === trip.request.startDate,
   );
   const returning = transports.filter(
     ({ offer }) =>

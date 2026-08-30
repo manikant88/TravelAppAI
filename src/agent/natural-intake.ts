@@ -182,7 +182,7 @@ async function deterministicIntent(
 ): Promise<{ intent: NaturalTripIntent; complete: boolean }> {
   const originQuery = explicitLocationQuery(message, "origin");
   const destinationQuery = explicitLocationQuery(message, "destination");
-  const asksForRecommendations = /\b(?:recommend|suggest|help me choose|open to|anywhere|somewhere|flexible destination|destination flexible)\b/i.test(message);
+  const asksForRecommendations = /\b(?:(?:recommend|suggest)\s+(?:a\s+)?(?:destination|place|somewhere)|help me choose|open to|anywhere|somewhere|flexible destination|destination flexible)\b/i.test(message);
   const dateRange = explicitDateRange(message, today);
   const travellers = explicitTravellers(message);
   const budget = explicitBudget(message);
@@ -198,10 +198,10 @@ async function deterministicIntent(
   const destination = destinationQuery
     ? (await searchLocations({ q: destinationQuery }, repository)).results[0]
     : currentRequest.destination;
-  const destinationIntent: NaturalTripIntent["destination"] = asksForRecommendations
-    ? { kind: "open" as const }
-    : destinationQuery
-      ? { kind: "specified" as const, query: destinationQuery }
+  const destinationIntent: NaturalTripIntent["destination"] = destinationQuery
+    ? { kind: "specified" as const, query: destinationQuery }
+    : asksForRecommendations
+      ? { kind: "open" as const }
       : destination && "kind" in destination && destination.kind === "specified"
         ? { kind: "specified" as const, query: destination.locationId }
         : null;
@@ -303,8 +303,7 @@ function explicitDayCount(message: string): number | undefined {
 }
 
 function suggestedDateRanges(message: string, today: string, supportedFrom: string, supportedUntil: string) {
-  const match = message.match(/\b(\d{1,2})\s*days?\b/i);
-  const durationDays = match ? Number(match[1]) : 3;
+  const durationDays = explicitDayCount(message) ?? 3;
   if (durationDays < 2 || durationDays > 21) return [];
   const base = new Date(`${today}T12:00:00Z`);
   const candidates = [

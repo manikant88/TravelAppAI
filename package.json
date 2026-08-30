@@ -31,12 +31,14 @@
     "openai": "^5.0.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "three": "^0.185.1",
     "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.185.4",
     "dotenv": "^17.0.0",
     "drizzle-kit": "^0.31.0",
     "eslint": "^9.0.0",

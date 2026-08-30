@@ -106,6 +106,22 @@ describe("natural-language trip intake", () => {
     });
   });
 
+  it("keeps a named destination when the user asks for itinerary suggestions", async () => {
+    const result = await runNaturalIntake(
+      {
+        message: "Plan a relaxed trip from Delhi to Phuket for two adults from 10 October 2026 to 15 October 2026. Suggest a balanced itinerary.",
+        currentRequest: emptyRequest,
+      },
+      { repository: repository(), today: () => "2026-08-28" },
+    );
+
+    expect(result.request.destination).toEqual({
+      kind: "specified",
+      locationId: "country:th",
+    });
+    expect(result.resolvedLocations.destination?.label).toBe("Thailand");
+  });
+
   it("resolves inventory locations, maps a child destination to its market, and applies a canonical patch", async () => {
     const result = await runNaturalIntake(
       { message: "A relaxed Phuket trip from Delhi for two adults", currentRequest: emptyRequest },
@@ -223,6 +239,21 @@ describe("natural-language trip intake", () => {
     expect(result.suggestedDateRanges[0]).toEqual({
       id: "dates:recommended",
       label: "Recommended · 30 Aug – 3 Sept",
+      startDate: "2026-08-30",
+      endDate: "2026-09-03",
+    });
+  });
+
+  it("preserves a hyphenated trip duration in suggested date ranges", async () => {
+    const result = await runNaturalIntake(
+      {
+        message: "Plan a family-friendly 5-day holiday to Phuket for two adults",
+        currentRequest: emptyRequest,
+      },
+      { repository: repository(), today: () => "2026-08-28" },
+    );
+
+    expect(result.suggestedDateRanges[0]).toMatchObject({
       startDate: "2026-08-30",
       endDate: "2026-09-03",
     });
