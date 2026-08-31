@@ -179,6 +179,7 @@ function SkeletonImage({
   width,
   height,
   sizes,
+  eager = false,
 }: {
   src?: string;
   alt: string;
@@ -187,6 +188,7 @@ function SkeletonImage({
   width?: number;
   height?: number;
   sizes?: string;
+  eager?: boolean;
 }) {
   const [status, setStatus] = useState<"loading" | "loaded" | "failed">("loading");
   const imageSrc = status === "failed" ? undefined : src;
@@ -201,6 +203,7 @@ function SkeletonImage({
           width={fill ? undefined : width}
           height={fill ? undefined : height}
           sizes={sizes}
+          loading={eager ? "eager" : undefined}
           onLoad={() => setStatus("loaded")}
           onError={() => setStatus("failed")}
         />
@@ -862,7 +865,7 @@ function StayCard({ item, travellerCount, onModify }: { item: HydratedSelection;
       <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true"><AppIcon name="hotel" /></span><strong>Hotel · {nights} night{nights === 1 ? "" : "s"} · {displayLocation(offer.locationId)}</strong></header>
       <div className="hotel-card-body">
         <div className="hotel-gallery">
-          <SkeletonImage src={image} alt={offer.propertyFacts.imageAltText ?? offer.propertyFacts.name} width={320} height={216} />
+          <SkeletonImage src={image} alt={offer.propertyFacts.imageAltText ?? offer.propertyFacts.name} width={320} height={216} eager />
           <div aria-hidden="true">
             {[0, 1, 2, 3].map((index) => (
               <span key={index} style={image ? { backgroundImage: `url(${image})` } : undefined}>
