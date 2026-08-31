@@ -7,6 +7,7 @@ import { useRef, useState } from "react";
 
 import ThreeGlobe from "@/ui/three-globe";
 import { Button } from "@/ui/components/primitives";
+import { AppIcon } from "@/ui/components/app-icon";
 
 export interface HomeMarket {
   id: string;
@@ -62,7 +63,7 @@ export default function HomeGlobe({ markets }: { markets: HomeMarket[] }) {
           <label className="globe-composer-label" htmlFor="home-trip-prompt">Ask your AI trip planner</label>
           <Image className="globe-composer-sparkle" src="/figma/home/sparkle.svg" alt="" width={22} height={22} aria-hidden="true" />
           <textarea ref={composerRef} id="home-trip-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Try: Plan a relaxed four-day coastal escape for two, with great food, minimal travel, and a comfortable stay…" />
-          <Button type="submit" disabled={prompt.trim().length < 3}>Build my trip <span aria-hidden="true">→</span></Button>
+          <Button type="submit" disabled={prompt.trim().length < 3}>Build my trip <AppIcon name="arrow-right" size={16} /></Button>
         </div>
         <p className="globe-composer-hint" aria-live="polite">
           {prompt.trim() ? "Your idea is ready to refine before planning." : "Hover a destination for inspiration, or start with your own idea."}

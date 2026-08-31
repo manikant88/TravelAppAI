@@ -49,6 +49,7 @@ import {
   itineraryScrollTop,
 } from "@/ui/itinerary-scroll";
 import { PlanningAnimation } from "@/ui/planning-animation";
+import { AppIcon } from "@/ui/components/app-icon";
 import { Badge, Button, Card, Chip, IconButton } from "@/ui/components/primitives";
 import { PriceSummary } from "@/ui/patterns/price-summary";
 import {
@@ -350,7 +351,7 @@ function LocationField({
       <label>{label}</label>
       <div className="location-input-wrap">
         <span className="field-icon" aria-hidden="true">
-          <PinIcon />
+          <AppIcon name="map-pin" />
         </span>
         <input
           id={id}
@@ -402,24 +403,6 @@ function LocationField({
         </div>
       ) : null}
     </div>
-  );
-}
-
-function PinIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12 21s6-5.1 6-12a6 6 0 1 0-12 0c0 6.9 6 12 6 12Z" />
-      <circle cx="12" cy="9" r="2.2" />
-    </svg>
-  );
-}
-
-function SparkIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m12 2 1.6 5.2L19 9l-5.4 1.8L12 16l-1.6-5.2L5 9l5.4-1.8L12 2Z" />
-      <path d="m19 15 .8 2.3L22 18l-2.2.7L19 21l-.8-2.3L16 18l2.2-.7L19 15Z" />
-    </svg>
   );
 }
 
@@ -492,7 +475,7 @@ function BriefSetupWorkspace({
           return (
             <div className={`brief-setup-item ${item.complete ? "is-complete" : "is-missing"}`} key={item.field}>
               <button type="button" className="brief-setup-row" onClick={() => onEdit(item.field)}>
-                <i aria-hidden="true">{item.complete ? "✓" : ""}</i>
+                <i aria-hidden="true">{item.complete ? <AppIcon name="check" size={14} /> : null}</i>
                 <span>{item.label}</span>
                 <strong>{item.complete ? "Added" : "Add manually"}</strong>
               </button>
@@ -662,7 +645,7 @@ function QuickStartGrid({ busy, onSelect }: { busy: boolean; onSelect(item: Quic
           <div>
             <h2>{item.title}</h2>
             <p>{item.prompt}</p>
-            <Button variant="text" size="sm" disabled={busy} onClick={() => onSelect(item)}>Try this <span aria-hidden="true">→</span></Button>
+            <Button variant="text" size="sm" disabled={busy} onClick={() => onSelect(item)}>Try this <AppIcon name="arrow-right" size={14} /></Button>
           </div>
         </Card>
       ))}
@@ -750,7 +733,7 @@ function DestinationComparison({
           <h2 id="destination-options-title">Choose where to continue</h2>
           {/* <p>{result.message}</p> */}
         </div>
-        <Badge tone="success">◉ {result.shortlistedDestinationCount ?? result.block.choices.length} shortlisted from {result.matchingDestinationCount ?? result.options.length} matches</Badge>
+        <Badge tone="success"><AppIcon name="check" size={14} /> {result.shortlistedDestinationCount ?? result.block.choices.length} shortlisted from {result.matchingDestinationCount ?? result.options.length} matches</Badge>
       </header>
       <div className="destination-sort-controls" aria-label="Sort destination matches">
         <span>Sort by</span>
@@ -841,28 +824,28 @@ function TravelCard({ item }: { item: HydratedSelection }) {
     const stopDescription = offer.stops === 0 ? "non-stop" : `${offer.stops} stop${offer.stops === 1 ? "" : "s"}`;
     return (
       <article className="itinerary-card itinerary-flight-card">
-        <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true">✈</span><strong>{offer.mode} · {displayLocation(offer.from)} to {displayLocation(offer.to)} · {durationLabel(offer.durationMinutes)}</strong></header>
+        <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true"><AppIcon name="flight" /></span><strong>{offer.mode} · {displayLocation(offer.from)} to {displayLocation(offer.to)} · {durationLabel(offer.durationMinutes)}</strong></header>
         <div className="flight-card-body">
-          <div className="airline-mark">{logo ? <Image src={logo} alt={`${offer.operator} logo`} width={48} height={48} /> : <span aria-hidden="true">✈</span>}</div>
+          <div className="airline-mark">{logo ? <Image src={logo} alt={`${offer.operator} logo`} width={48} height={48} /> : <AppIcon name="flight" size={28} aria-label={`${offer.operator} flight`} />}</div>
           <div className="flight-stop"><strong>{formatTime(offer.departureAt)}</strong><span>{formatCompactDateTime(offer.departureAt)}</span><small>{displayLocation(offer.from)}</small></div>
-          <div className="flight-line"><i /><span>✈</span></div>
+          <div className="flight-line"><i /><span><AppIcon name="flight" size={15} /></span></div>
           <div className="flight-stop"><strong>{formatTime(offer.arrivalAt)}</strong><span>{formatCompactDateTime(offer.arrivalAt)}</span><small>{displayLocation(offer.to)}</small></div>
           <dl className="flight-facts"><div><dt>Operator</dt><dd>{offer.operator}</dd></div>{serviceNumber ? <div><dt>Flight</dt><dd>{serviceNumber}</dd></div> : null}<div><dt>Stops</dt><dd>{offer.stops === 0 ? "Non-stop" : `${offer.stops} stop${offer.stops === 1 ? "" : "s"}`}</dd></div></dl>
           <div className="card-price"><strong>{formatMoney(offer.price.amount)}</strong><span>/ traveller</span></div>
         </div>
-        <div className="card-grounding"><i aria-hidden="true">✓</i><span>{offer.operator} was selected for this dated route: it departs at {formatTime(offer.departureAt)}, arrives at {formatTime(offer.arrivalAt)}, and is {stopDescription}.</span></div>
+        <div className="card-grounding"><i aria-hidden="true"><AppIcon name="check" size={16} /></i><span>{offer.operator} was selected for this dated route: it departs at {formatTime(offer.departureAt)}, arrives at {formatTime(offer.arrivalAt)}, and is {stopDescription}.</span></div>
       </article>
     );
   }
   if (isTransfer(offer)) {
     return (
       <article className="itinerary-card itinerary-transfer-card">
-        <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true">▰</span><strong>Transfer · {displayLocation(offer.from)} to {displayLocation(offer.to)}</strong></header>
+        <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true"><AppIcon name="car" /></span><strong>Transfer · {displayLocation(offer.from)} to {displayLocation(offer.to)}</strong></header>
         <div className="transfer-card-body">
-          <div className="transfer-illustration" aria-hidden="true">🚗</div>
-          <div><h3>{offer.mode === "shared" ? "Shared transfer" : "Private transfer"}</h3><p>A direct connection between the selected arrival point and stay area.</p><span>⌖ {displayLocation(offer.from)} to {displayLocation(offer.to)}</span><small>{durationLabel(offer.durationMinutes)} · capacity {offer.capacity} · {formatMoney(offer.price.amount)} / vehicle</small></div>
+          <div className="transfer-illustration" aria-hidden="true"><AppIcon name="car" size={56} strokeWidth={1.5} /></div>
+          <div><h3>{offer.mode === "shared" ? "Shared transfer" : "Private transfer"}</h3><p>A direct connection between the selected arrival point and stay area.</p><span><AppIcon name="map-pin" size={14} /> {displayLocation(offer.from)} to {displayLocation(offer.to)}</span><small>{durationLabel(offer.durationMinutes)} · capacity {offer.capacity} · {formatMoney(offer.price.amount)} / vehicle</small></div>
         </div>
-        <div className="card-grounding"><i aria-hidden="true">✓</i><span>This {offer.mode} transfer directly connects {displayLocation(offer.from)} to {displayLocation(offer.to)} in {durationLabel(offer.durationMinutes)} and fits the validated route.</span></div>
+        <div className="card-grounding"><i aria-hidden="true"><AppIcon name="check" size={16} /></i><span>This {offer.mode} transfer directly connects {displayLocation(offer.from)} to {displayLocation(offer.to)} in {durationLabel(offer.durationMinutes)} and fits the validated route.</span></div>
       </article>
     );
   }
@@ -876,7 +859,7 @@ function StayCard({ item, travellerCount, onModify }: { item: HydratedSelection;
   const image = stayImage(offer);
   return (
     <article className="itinerary-card itinerary-hotel-card">
-      <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true">▦</span><strong>Hotel · {nights} night{nights === 1 ? "" : "s"} · {displayLocation(offer.locationId)}</strong></header>
+      <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true"><AppIcon name="hotel" /></span><strong>Hotel · {nights} night{nights === 1 ? "" : "s"} · {displayLocation(offer.locationId)}</strong></header>
       <div className="hotel-card-body">
         <div className="hotel-gallery">
           <SkeletonImage src={image} alt={offer.propertyFacts.imageAltText ?? offer.propertyFacts.name} width={320} height={216} />
@@ -897,7 +880,7 @@ function StayCard({ item, travellerCount, onModify }: { item: HydratedSelection;
           <Button variant="text" size="sm" className="inline-card-action" onClick={onModify}>Modify room</Button>
         </div>
       </div>
-      <div className="card-grounding"><i aria-hidden="true">✓</i><span>This stay covers all {nights} night{nights === 1 ? "" : "s"} for {offer.rooms} room{offer.rooms === 1 ? "" : "s"}. It is rated {offer.propertyFacts.rating.toFixed(1)} from {offer.propertyFacts.reviewCount} reviews and includes {offer.propertyFacts.amenities.slice(0, 2).join(" and ")}.</span></div>
+      <div className="card-grounding"><i aria-hidden="true"><AppIcon name="check" size={16} /></i><span>This stay covers all {nights} night{nights === 1 ? "" : "s"} for {offer.rooms} room{offer.rooms === 1 ? "" : "s"}. It is rated {offer.propertyFacts.rating.toFixed(1)} from {offer.propertyFacts.reviewCount} reviews and includes {offer.propertyFacts.amenities.slice(0, 2).join(" and ")}.</span></div>
     </article>
   );
 }
@@ -908,12 +891,12 @@ function ActivityCard({ item, onModify }: { item: HydratedSelection; onModify():
   const durationMinutes = Math.round((new Date(offer.endsAt).getTime() - new Date(offer.startsAt).getTime()) / 60000);
   return (
     <article className="itinerary-card itinerary-activity-card">
-      <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true">▧</span><strong>Activity · {durationLabel(durationMinutes)} · {displayLocation(offer.locationId)}</strong></header>
+      <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true"><AppIcon name="activity" /></span><strong>Activity · {durationLabel(durationMinutes)} · {displayLocation(offer.locationId)}</strong></header>
       <div className="activity-card-body">
         <SkeletonImage src={activityImage(offer)} alt={offer.activityFacts.imageAltText ?? offer.activityFacts.name} width={320} height={240} />
         <div><h3>{offer.activityFacts.name}</h3><p>{formatDateTime(offer.startsAt)} – {formatDateTime(offer.endsAt)}</p><div className="card-price"><strong>{formatMoney(offer.price.amount)}</strong><span>/ per person</span></div><ul><li>Duration {durationLabel(durationMinutes)}</li><li>{offer.activityFacts.mobility} mobility</li><li>Capacity {offer.capacity}</li></ul><Button variant="text" size="sm" className="inline-card-action" onClick={onModify}>Modify activity</Button></div>
       </div>
-      <div className="card-grounding"><i aria-hidden="true">✓</i><span>This {offer.activityFacts.mobility}-mobility experience fits the available time on this day without overlapping travel. It supports {offer.activityFacts.tags.slice(0, 3).join(", ")} interests.</span></div>
+      <div className="card-grounding"><i aria-hidden="true"><AppIcon name="check" size={16} /></i><span>This {offer.activityFacts.mobility}-mobility experience fits the available time on this day without overlapping travel. It supports {offer.activityFacts.tags.slice(0, 3).join(", ")} interests.</span></div>
     </article>
   );
 }
@@ -975,7 +958,7 @@ function InventoryOptionPicker({ picker, busy, selectingOfferId, onSelect, onClo
         <header className="inventory-drawer-header">
           <h2 id="inventory-picker-title">{title}</h2>
           <label><span className="sr-only">Search {noun}</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${noun}`} /></label>
-          <IconButton aria-label="Close drawer" onClick={onClose}>×</IconButton>
+          <IconButton aria-label="Close drawer" onClick={onClose}><AppIcon name="close" /></IconButton>
         </header>
         <div className="inventory-drawer-filter">Showing {visibleOffers.length} valid {noun} <span>· Sorted by best fit</span></div>
         <div className="inventory-drawer-list">
@@ -992,9 +975,9 @@ function InventoryOptionPicker({ picker, busy, selectingOfferId, onSelect, onClo
                 {selected ? <b>Selected</b> : null}
               </div>
               <div className="drawer-option-content">
-                {isTransport(offer) ? <><h3>{offer.operator} · {offer.mode}</h3><p className="drawer-flight-times"><strong>{formatTime(offer.departureAt)}</strong><span>{locationCode(offer.from)}</span><i aria-hidden="true">→</i><strong>{formatTime(offer.arrivalAt)}</strong><span>{locationCode(offer.to)}</span></p><small>{formatCompactDateTime(offer.departureAt)} · {durationLabel(offer.durationMinutes)} · {offer.stops === 0 ? "Non-stop" : `${offer.stops} stop${offer.stops === 1 ? "" : "s"}`}</small></> : null}
-                {isTransfer(offer) ? <><h3>{offer.mode === "shared" ? "Shared transfer" : "Private transfer"}</h3><p>{displayLocation(offer.from)} → {displayLocation(offer.to)}</p><small>{durationLabel(offer.durationMinutes)} · capacity {offer.capacity}</small></> : null}
-                {isStay(offer) ? <><h3>{offer.propertyFacts.name}</h3><p>★ {offer.propertyFacts.rating.toFixed(1)} · {offer.propertyFacts.reviewCount} reviews</p><small>{offer.roomFacts.roomLabel} · {offer.roomFacts.mealPlan === "breakfast" ? "Includes breakfast" : "Room only"} · {offer.roomFacts.refundable ? "Refundable" : "Non-refundable"}</small></> : null}
+                {isTransport(offer) ? <><h3>{offer.operator} · {offer.mode}</h3><p className="drawer-flight-times"><strong>{formatTime(offer.departureAt)}</strong><span>{locationCode(offer.from)}</span><AppIcon name="arrow-right" size={14} /><strong>{formatTime(offer.arrivalAt)}</strong><span>{locationCode(offer.to)}</span></p><small>{formatCompactDateTime(offer.departureAt)} · {durationLabel(offer.durationMinutes)} · {offer.stops === 0 ? "Non-stop" : `${offer.stops} stop${offer.stops === 1 ? "" : "s"}`}</small></> : null}
+                {isTransfer(offer) ? <><h3>{offer.mode === "shared" ? "Shared transfer" : "Private transfer"}</h3><p className="inline-route"><span>{displayLocation(offer.from)}</span><AppIcon name="arrow-right" size={14} /><span>{displayLocation(offer.to)}</span></p><small>{durationLabel(offer.durationMinutes)} · capacity {offer.capacity}</small></> : null}
+                {isStay(offer) ? <><h3>{offer.propertyFacts.name}</h3><p className="inline-rating"><AppIcon name="star" size={14} /> {offer.propertyFacts.rating.toFixed(1)} · {offer.propertyFacts.reviewCount} reviews</p><small>{offer.roomFacts.roomLabel} · {offer.roomFacts.mealPlan === "breakfast" ? "Includes breakfast" : "Room only"} · {offer.roomFacts.refundable ? "Refundable" : "Non-refundable"}</small></> : null}
                 {isActivity(offer) ? <><h3>{offer.activityFacts.name}</h3><p>{formatDateTime(offer.startsAt)} · {offer.activityFacts.mobility} mobility</p><small>{offer.activityFacts.tags.slice(0, 3).join(" · ")}</small></> : null}
               </div>
               <div className="drawer-option-action">
@@ -1056,13 +1039,13 @@ function Itinerary({
                   <span>{formatDate(day.date)}</span>
                 </div>
                 <Button variant="secondary" size="sm" disabled={busy} onClick={() => onAddActivity(day.date)}>
-                  + Add activity
+                  <AppIcon name="plus" size={14} /> Add activity
                 </Button>
               </header>
               <div className="day-events">
                 {day.events.map((event) => {
                   if (event.type === "free_time") {
-                    return <div className="free-time-card" key={event.id}><span aria-hidden="true">◉</span><strong>{event.title}</strong><Button variant="text" size="sm" disabled={busy} onClick={() => onAddActivity(day.date)}>+ Add activity</Button></div>;
+                    return <div className="free-time-card" key={event.id}><span aria-hidden="true"><AppIcon name="dot" size={16} /></span><strong>{event.title}</strong><Button variant="text" size="sm" disabled={busy} onClick={() => onAddActivity(day.date)}><AppIcon name="plus" size={14} /> Add activity</Button></div>;
                   }
                   const item = event.selectionId ? hydrated.get(event.selectionId) : undefined;
                   const selection = event.selectionId ? selections.get(event.selectionId) : undefined;
@@ -1234,7 +1217,7 @@ function TripReview({
           <p>Day by day</p>
           <h1 id="itinerary-heading">Booking summary</h1>
         </div>
-        <Badge tone="success" className="trip-generated-badge">◉ Trip generated</Badge>
+        <Badge tone="success" className="trip-generated-badge"><AppIcon name="check" size={14} /> Trip generated</Badge>
       </header>
       <nav className="day-navigation" aria-label="Jump to itinerary day" ref={dayNavigationRef}>
         {projection.itinerary.map((day) => <a aria-current={displayedActiveDay === day.date ? "step" : undefined} className={displayedActiveDay === day.date ? "is-active" : undefined} key={day.date} href={`#${dayAnchor(day.date)}`} onClick={(event) => { event.preventDefault(); jumpToDay(day.date); }}>Day {day.dayNumber}</a>)}
@@ -1259,7 +1242,7 @@ function InteractionProgress({ events }: { events: InteractionEvent[] }) {
     <div className="interaction-progress" role="status" aria-label="Planning progress">
       {events.map((event) => (
         <div className={`interaction-step is-${event.status}`} key={event.id}>
-          <i aria-hidden="true">{event.status === "completed" ? "✓" : event.status === "failed" ? "!" : ""}</i>
+          <i aria-hidden="true">{event.status === "completed" ? <AppIcon name="check" size={14} /> : event.status === "failed" ? <AppIcon name="alert-circle" size={14} /> : null}</i>
           <span>{event.label}</span>
         </div>
       ))}
@@ -2450,9 +2433,9 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
               <p>Tell us what you&apos;re looking for: dates, budget, destination, vibe, or who&apos;s traveling</p>
             </div>
             <form className="initial-intake-form" onSubmit={submitConversation}>
-              <label htmlFor="initial-trip-message"><SparkIcon /><span className="sr-only">Describe your dream trip</span></label>
+              <label htmlFor="initial-trip-message"><AppIcon name="sparkles" /><span className="sr-only">Describe your dream trip</span></label>
               <textarea id="initial-trip-message" value={composerText} placeholder="Describe your dream trip..." onChange={(event) => setComposerText(event.target.value)} />
-              <Button type="submit" disabled={busy || composerText.trim().length < 2}>{interpreting ? "Planning…" : "Plan"} <span aria-hidden="true">→</span></Button>
+              <Button type="submit" disabled={busy || composerText.trim().length < 2}>{interpreting ? "Planning…" : "Plan"} <AppIcon name="arrow-right" size={15} /></Button>
             </form>
             {interpreting ? <div className="initial-intake-status is-loading" role="status"><i aria-hidden="true" /><div><strong>Understanding your trip</strong><span>Structuring your dates, travellers, budget, and preferences.</span></div></div> : null}
             <p className="quick-start-prompt">Or try one of our quick starts</p>

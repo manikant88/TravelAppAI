@@ -34,7 +34,7 @@
   --day-scroll-gap: 16px;
   --content: 870px;
   --heading: Lato, "Segoe UI", Arial, sans-serif;
-  --body: "Open Sans", "Segoe UI", Arial, sans-serif;
+  --body: Lato, "Segoe UI", Arial, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -64,7 +64,7 @@ h1, h2, h3, p { margin-top: 0; }
 .ui-icon-button:hover:not(:disabled) { box-shadow: 0 10px 22px rgb(0 103 185 / 28%); transform: translateY(-1px); }
 .ui-icon-button:active:not(:disabled) { transform: scale(.94); }
 .ui-card { margin: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card); transition: border-color var(--motion-medium) ease, box-shadow var(--motion-medium) var(--ease-standard), transform var(--motion-medium) var(--ease-standard); }
-.ui-badge { display: inline-flex; min-height: 24px; padding: 4px 10px; align-items: center; border: 1px solid transparent; border-radius: 2px; font-family: var(--heading); font-size: 11px; font-weight: 800; line-height: 1; letter-spacing: .02em; text-transform: uppercase; white-space: nowrap; }
+.ui-badge { display: inline-flex; min-height: 24px; padding: 4px 10px; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: 2px; font-family: var(--heading); font-size: 11px; font-weight: 800; line-height: 1; letter-spacing: .02em; text-transform: uppercase; white-space: nowrap; }
 .ui-badge--success { border-color: #c8e3d0; background: var(--success-bg); color: var(--success); }
 .ui-badge--info { border-color: var(--blue-strong); background: var(--blue-strong); color: #fff; }
 .ui-badge--warning { background: #fff4d5; color: #7b5700; }
@@ -293,7 +293,15 @@ h1, h2, h3, p { margin-top: 0; }
 .itinerary-card { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; box-shadow: var(--shadow-card); transition: border-color var(--motion-medium) ease, box-shadow var(--motion-medium) var(--ease-standard), transform var(--motion-medium) var(--ease-standard); }
 .itinerary-selection:hover > .itinerary-card { border-color: #c6d9e8; box-shadow: 0 12px 32px rgb(15 33 55 / 8%); transform: translateY(-2px); }
 .itinerary-card-header { display: flex; min-height: 44px; padding: 0 170px 0 16px; gap: 8px; align-items: center; border-bottom: 1px solid var(--line); font-family: var(--heading); font-size: 12px; text-transform: uppercase; }
-.card-kind-icon { font-size: 15px; }
+.card-kind-icon { display: inline-flex; align-items: center; color: var(--ink); }
+.card-kind-icon svg { width: 16px; height: 16px; }
+.airline-mark > svg { color: var(--blue-strong); }
+.flight-line span { display: inline-flex; align-items: center; justify-content: center; }
+.transfer-illustration { display: grid; place-items: center; color: var(--blue-strong); }
+.transfer-card-body > div:last-child > span { display: inline-flex; align-items: center; gap: 4px; }
+.card-grounding i { display: inline-flex; align-items: center; justify-content: center; }
+.free-time-card > span { display: inline-flex; color: var(--blue); }
+.market-hover-card-action { display: inline-flex; align-items: center; gap: 5px; }
 .flight-card-body { display: grid; min-height: 88px; padding: 14px 16px; grid-template-columns: 52px 90px 145px 90px minmax(120px, 1fr) auto; gap: 12px; align-items: center; }
 .airline-mark { display: grid; width: 48px; height: 48px; overflow: hidden; place-items: center; border: 1px solid #dfe3e9; border-radius: 8px; background: #fff; color: #171b82; font-size: 22px; }
 .airline-mark img { width: 100%; height: 100%; object-fit: contain; }
@@ -374,7 +382,10 @@ h1, h2, h3, p { margin-top: 0; }
 .drawer-flight-times { display: grid; width: fit-content; grid-template-columns: auto auto 24px auto auto; gap: 5px; align-items: baseline; }
 .drawer-flight-times strong { font-family: var(--heading); font-size: 16px; }
 .drawer-flight-times span { color: var(--muted); font-size: 11px; font-weight: 700; }
-.drawer-flight-times i { color: var(--blue); font-style: normal; text-align: center; }
+.drawer-flight-times svg { align-self: center; color: var(--blue); justify-self: center; }
+.inline-route { display: inline-flex; align-items: center; gap: 5px; }
+.inline-rating { display: inline-flex; align-items: center; gap: 4px; }
+.inline-rating svg { color: #f3a712; fill: currentcolor; }
 .drawer-option-content small, .drawer-option-action small { color: var(--muted); }
 .drawer-option-action { display: grid; align-content: center; justify-items: end; gap: 6px; text-align: right; }
 .inventory-picker-status { margin: 0; padding: 18px; border-radius: 6px; background: #fff; color: var(--muted); }

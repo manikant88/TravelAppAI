@@ -1,6 +1,7 @@
 "use client";
 
 import NextImage from "next/image";
+import { AppIcon } from "@/ui/components/app-icon";
 import { useEffect, useRef, type CSSProperties } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -192,7 +193,7 @@ export default function ThreeGlobe({ markets, activeMarket, onHover, onLeave, on
                   <small>{market.country}</small>
                   <strong>{market.name}</strong>
                   <span>{market.tags.join(" · ")}</span>
-                  <span className="market-hover-card-action">Use this trip idea <b aria-hidden="true">→</b></span>
+                  <span className="market-hover-card-action">Use this trip idea <AppIcon name="arrow-right" size={14} /></span>
                 </span>
               </span>
             ) : null}
