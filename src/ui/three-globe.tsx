@@ -17,6 +17,8 @@ interface ThreeGlobeProps {
 }
 
 const INDIA_CENTER_ROTATION = -Math.PI / 2 - 70 * Math.PI / 180;
+const ENTRANCE_ROTATION_OFFSET = Math.PI * 0.42;
+const ENTRANCE_ROTATION_DURATION_MS = 1_150;
 // The CC0 raster's painted geography begins slightly east of its nominal
 // equirectangular seam. Register all geographic markers to that map once,
 // rather than applying per-destination visual nudges.
@@ -41,7 +43,11 @@ export default function ThreeGlobe({ markets, activeMarket, onHover, onLeave, on
     renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     const globe = new THREE.Group();
-    globe.rotation.y = INDIA_CENTER_ROTATION;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const entranceStartRotation = INDIA_CENTER_ROTATION - ENTRANCE_ROTATION_OFFSET;
+    const entranceStartedAt = performance.now();
+    let entranceComplete = reduceMotion;
+    globe.rotation.y = reduceMotion ? INDIA_CENTER_ROTATION : entranceStartRotation;
     globe.rotation.x = -0.20;
     scene.add(globe);
 
@@ -76,7 +82,11 @@ export default function ThreeGlobe({ markets, activeMarket, onHover, onLeave, on
     controls.rotateSpeed = 0.72;
     controls.minPolarAngle = 0;
     controls.maxPolarAngle = Math.PI;
-    const handleControlStart = () => shell.classList.add("is-dragging");
+    const handleControlStart = () => {
+      entranceComplete = true;
+      globe.rotation.y = INDIA_CENTER_ROTATION;
+      shell.classList.add("is-dragging");
+    };
     const handleControlEnd = () => shell.classList.remove("is-dragging");
     controls.addEventListener("start", handleControlStart);
     controls.addEventListener("end", handleControlEnd);
@@ -117,7 +127,17 @@ export default function ThreeGlobe({ markets, activeMarket, onHover, onLeave, on
     const surfaceNormal = new THREE.Vector3();
     const cameraDirection = new THREE.Vector3();
     let animationFrame = 0;
-    const render = () => {
+    const render = (time: number) => {
+      if (!entranceComplete) {
+        const progress = Math.min(1, (time - entranceStartedAt) / ENTRANCE_ROTATION_DURATION_MS);
+        const easedProgress = 1 - Math.pow(1 - progress, 3);
+        globe.rotation.y = THREE.MathUtils.lerp(entranceStartRotation, INDIA_CENTER_ROTATION, easedProgress);
+        if (progress >= 1) {
+          globe.rotation.y = INDIA_CENTER_ROTATION;
+          entranceComplete = true;
+        }
+      }
+
       controls.update();
       camera.getWorldPosition(cameraPosition);
       globe.getWorldPosition(globePosition);
@@ -141,7 +161,7 @@ export default function ThreeGlobe({ markets, activeMarket, onHover, onLeave, on
       renderer.render(scene, camera);
       animationFrame = window.requestAnimationFrame(render);
     };
-    render();
+    animationFrame = window.requestAnimationFrame(render);
 
     return () => {
       disposed = true;
