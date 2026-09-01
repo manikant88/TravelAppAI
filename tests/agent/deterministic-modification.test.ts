@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { createDeterministicModificationModel } from "@/agent/deterministic-modification";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createDeterministicModificationModel,
+  interpretModificationIntentHybrid,
+  NoDeterministicModificationIntentError,
+  SelectionTargetError,
+} from "@/agent/deterministic-modification";
+import type { ModificationPlannerModel } from "@/agent/modification-contracts";
 import type { TripState } from "@/domain/model";
 
 const trip = {
@@ -57,6 +63,21 @@ describe("deterministic modification interpretation", () => {
     expect(result).toMatchObject({
       action: "upsert_constraint",
       constraint: { category: "budget", priority: "hard", maxTotal: 75_000 },
+      preserveSelectionIds: selections.map((selection) => selection.selectionId),
+    });
+  });
+
+  it("recognizes a conversational trip budget with Indian digit grouping", async () => {
+    const result = await createDeterministicModificationModel().interpretModification({
+      message: "Let's make the trip possible in 1,50,000",
+      trip,
+      selections,
+      supportedThemes: ["food", "beaches"],
+    });
+
+    expect(result).toMatchObject({
+      action: "upsert_constraint",
+      constraint: { category: "budget", priority: "hard", maxTotal: 150_000 },
       preserveSelectionIds: selections.map((selection) => selection.selectionId),
     });
   });
@@ -130,5 +151,83 @@ describe("deterministic modification interpretation", () => {
       ],
       supportedThemes: [],
     })).rejects.toThrow("More than one activity matches");
+  });
+
+  it("leaves unclassified natural language for semantic interpretation", async () => {
+    await expect(createDeterministicModificationModel().interpretModification({
+      message: "Could we bring the overall spending closer to one and a half lakh?",
+      trip,
+      selections,
+      supportedThemes: ["food", "beaches"],
+    })).rejects.toBeInstanceOf(NoDeterministicModificationIntentError);
+  });
+
+  it("uses the semantic model only when deterministic intent is not confident", async () => {
+    const interpretModification = vi.fn(async () => ({
+      action: "upsert_constraint" as const,
+      constraint: {
+        category: "budget" as const,
+        priority: "hard" as const,
+        targetTotal: null,
+        maxTotal: 150_000,
+      },
+      preserveSelectionIds: selections.map((selection) => selection.selectionId),
+      preferredThemes: [],
+      goal: "Keep the trip near ₹1,50,000",
+    }));
+    const semanticModel: ModificationPlannerModel = {
+      interpretModification,
+      recommendModification: vi.fn(),
+    };
+
+    const result = await interpretModificationIntentHybrid({
+      message: "Could we bring the overall spending closer to one and a half lakh?",
+      trip,
+      selections,
+      supportedThemes: ["food", "beaches"],
+    }, semanticModel);
+
+    expect(interpretModification).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      action: "upsert_constraint",
+      constraint: { category: "budget", maxTotal: 150_000 },
+    });
+  });
+
+  it("does not let the semantic model guess an explicitly ambiguous card", async () => {
+    const interpretModification = vi.fn();
+    const semanticModel: ModificationPlannerModel = {
+      interpretModification,
+      recommendModification: vi.fn(),
+    };
+
+    await expect(interpretModificationIntentHybrid({
+      message: "Remove an activity.",
+      trip,
+      selections: [
+        { selectionId: "activity:day-1", kind: "activity", locked: false, label: "Goa heritage story", offerId: "offer:day-1", startDate: "2026-12-15", mobility: "low" },
+        { selectionId: "activity:day-2", kind: "activity", locked: false, label: "Goa outdoor adventure", offerId: "offer:day-2", startDate: "2026-12-16", mobility: "high" },
+      ],
+      supportedThemes: [],
+    }, semanticModel)).rejects.toBeInstanceOf(SelectionTargetError);
+    expect(interpretModification).not.toHaveBeenCalled();
+  });
+
+  it("does not call the semantic model for a high-confidence typed command", async () => {
+    const interpretModification = vi.fn();
+    const semanticModel: ModificationPlannerModel = {
+      interpretModification,
+      recommendModification: vi.fn(),
+    };
+
+    const result = await interpretModificationIntentHybrid({
+      message: "Find a cheaper hotel but preserve my flight and activity.",
+      trip,
+      selections,
+      supportedThemes: ["food", "beaches"],
+    }, semanticModel);
+
+    expect(result).toMatchObject({ action: "replace", targetSelectionId: "selection:stay" });
+    expect(interpretModification).not.toHaveBeenCalled();
   });
 });

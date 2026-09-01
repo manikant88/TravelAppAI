@@ -27,6 +27,9 @@ export async function composeCommunication(
 ): Promise<CommunicationOutput> {
   const parsed = communicationContextSchema.safeParse(input);
   if (!parsed.success) {
+    console.warn("Assistant communication context was invalid", JSON.stringify({
+      issueCount: parsed.error.issues.length,
+    }));
     return {
       message: input.fallbackMessage,
       actionLabels: input.availableActions.map((action) => ({
@@ -42,9 +45,15 @@ export async function composeCommunication(
   try {
     const output = communicationOutputSchema.parse(await model.compose(context));
     const allowedIds = new Set(context.availableActions.map((action) => action.id));
-    if (output.actionLabels.some((item) => !allowedIds.has(item.actionId))) return fallback;
+    if (output.actionLabels.some((item) => !allowedIds.has(item.actionId))) {
+      console.warn("Assistant communication returned an unknown action ID");
+      return fallback;
+    }
     return output;
-  } catch {
+  } catch (error) {
+    console.warn("Assistant communication fell back", JSON.stringify({
+      reason: error instanceof Error ? error.message : String(error),
+    }));
     return fallback;
   }
 }

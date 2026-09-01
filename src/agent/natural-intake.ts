@@ -167,9 +167,13 @@ function explicitBudget(message: string): number | undefined {
 }
 
 function explicitLocationQuery(message: string, kind: "origin" | "destination"): string | undefined {
+  // Supported market labels include compound international names such as
+  // “Thailand — Phuket & Krabi”. Keep their punctuation inside the capture;
+  // the former ASCII-only class dropped the entire destination at the em dash.
+  const location = "[\\p{L}\\d][\\p{L}\\p{M}\\d\\s.'’&()\\-/–—]*?";
   const pattern = kind === "origin"
-    ? /\b(?:from|leaving from|departing from|starting from)\s+([a-z][a-z\s-]*?)(?=\s+(?:to|for|on|starting|between|under|with|and|this|upcoming|next)\b|[,.]|$)/i
-    : /\b(?:to|in|visit(?:ing)?)\s+([a-z][a-z\s-]*?)(?=\s+(?:from|for|on|starting|between|under|with|and|this|upcoming|next)\b|[,.]|$)/i;
+    ? new RegExp(`\\b(?:from|leaving from|departing from|starting from)\\s+(${location})(?=\\s+(?:to|for|on|starting|between|under|with|and|this|upcoming|next)\\b|[,.!?;]|$)`, "iu")
+    : new RegExp(`\\b(?:to|in|visit(?:ing)?)\\s+(${location})(?=\\s+(?:from|for|on|starting|between|under|with|and|this|upcoming|next)\\b|[,.!?;]|$)`, "iu");
   return pattern.exec(message)?.[1]?.trim();
 }
 

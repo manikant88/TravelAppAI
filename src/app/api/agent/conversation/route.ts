@@ -20,6 +20,7 @@ import {
   generateAssistantMessage,
 } from "@/agent/assistant-message.server";
 import { classifyCommittedConversation, contextualizedMessage } from "@/agent/conversation-routing";
+import { getOpenAIModelConfig } from "@/agent/openai-config.server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -85,8 +86,8 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const model = process.env.OPENAI_MODEL?.trim();
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const planningConfig = getOpenAIModelConfig("planning");
+  const contextConfig = getOpenAIModelConfig("context");
   async function conversationalMessage(
     fallbackMessage: string,
     intent: "plan_trip" | "modify_trip" | "explain" | "clarify" | "recover",
@@ -107,8 +108,8 @@ export async function POST(request: NextRequest) {
           currentRequest: parsed.data.currentRequest,
         },
         {
-          model: model && apiKey
-            ? createOpenAINaturalIntakeModel({ model, apiKey })
+          model: planningConfig
+            ? createOpenAINaturalIntakeModel(planningConfig)
             : undefined,
         },
       );
@@ -166,9 +167,9 @@ export async function POST(request: NextRequest) {
       const fallback = /\b(?:weather|forecast|temperature|rain)\b/i.test(effectiveMessage)
         ? "I can’t check live weather in this prototype. Please check a current forecast closer to travel; I can still help adjust the itinerary around the conditions you expect."
         : "I can help with itinerary facts and grounded options, but I can’t verify that extra place information right now.";
-      if (!model || !apiKey) return NextResponse.json({ kind: "reply", message: fallback });
+      if (!contextConfig) return NextResponse.json({ kind: "reply", message: fallback });
       try {
-        const answer = await createOpenAITravelContextModel({ model, apiKey, timeoutMs: 2_500 }).answer({
+        const answer = await createOpenAITravelContextModel(contextConfig).answer({
           question: effectiveMessage,
           origin: contextLabel(parsed.data.trip.request.origin),
           destination: contextLabel(parsed.data.trip.route.marketId),
@@ -198,8 +199,8 @@ export async function POST(request: NextRequest) {
           selectionId: parsed.data.selectionId,
         },
         {
-          model: model && apiKey
-            ? createOpenAIExplanationModel({ model, apiKey })
+          model: planningConfig
+            ? createOpenAIExplanationModel(planningConfig)
             : undefined,
         },
       );
@@ -213,9 +214,9 @@ export async function POST(request: NextRequest) {
         targetDate: parsed.data.targetDate,
       },
       {
-        model: model && apiKey
-          ? createOpenAIModificationModel({ model, apiKey })
-          : createDeterministicModificationModel(),
+        model: planningConfig
+          ? createOpenAIModificationModel(planningConfig)
+          : undefined,
       },
     );
     return NextResponse.json({

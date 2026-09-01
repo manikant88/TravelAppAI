@@ -1,21 +1,20 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { runModification, ModifyError } from "@/agent/modify";
 import { createOpenAIModificationModel } from "@/agent/model";
-import { createDeterministicModificationModel } from "@/agent/deterministic-modification";
+import { getOpenAIModelConfig } from "@/agent/openai-config.server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => undefined);
-  const modelName = process.env.OPENAI_MODEL?.trim();
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const config = getOpenAIModelConfig("planning");
   try {
     return NextResponse.json(
       await runModification(body, {
-        model: modelName && apiKey
-          ? createOpenAIModificationModel({ model: modelName, apiKey })
-          : createDeterministicModificationModel(),
+        model: config
+          ? createOpenAIModificationModel(config)
+          : undefined,
       }),
     );
   } catch (error: unknown) {

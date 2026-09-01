@@ -2,6 +2,11 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z, type ZodType, type ZodTypeDef } from "zod";
 import {
+  createOpenAIClientRequestId,
+  resolveOpenAITimeoutMs,
+  type OpenAIReasoningEffort,
+} from "@/agent/openai-config.server";
+import {
   agentNextActionSchema,
   planningHypothesisSchema,
   type AgentNextAction,
@@ -56,6 +61,7 @@ export interface OpenAIPlannerModelOptions {
   apiKey?: string;
   runner?: StructuredResponseRunner;
   timeoutMs?: number;
+  reasoningEffort?: OpenAIReasoningEffort;
 }
 
 const contextualTravelAnswerSchema = z.object({ message: z.string().trim().min(1).max(420) }).strict();
@@ -82,7 +88,11 @@ export function createOpenAITravelContextModel(
 ): TravelContextModel {
   const model = options.model.trim();
   if (!model) throw new Error("OPENAI_MODEL is required");
-  const runner = options.runner ?? createOpenAIRunner({ ...options, model, timeoutMs: options.timeoutMs ?? 2_500 });
+  const runner = options.runner ?? createOpenAIRunner({
+    ...options,
+    model,
+    timeoutMs: options.timeoutMs ?? resolveOpenAITimeoutMs("context"),
+  });
   return {
     async answer(input) {
       const result = await runStructured(runner, {
@@ -342,10 +352,12 @@ function decisionEvidence(input: PlannerDecisionInput) {
 
 function createOpenAIRunner(options: OpenAIPlannerModelOptions): StructuredResponseRunner {
   const client = new OpenAI({ apiKey: options.apiKey });
-  const timeoutMs = options.timeoutMs ?? Number(process.env.OPENAI_TIMEOUT_MS ?? 15000);
+  const timeoutMs = options.timeoutMs ?? resolveOpenAITimeoutMs("planning");
   return {
     async run<T>(request: StructuredResponseRequest<T>) {
       const startedAt = Date.now();
+      const clientRequestId = createOpenAIClientRequestId(request.schemaName);
+      const signal = AbortSignal.timeout(timeoutMs);
       try {
         const response = await client.responses.parse(
           {
@@ -355,30 +367,52 @@ function createOpenAIRunner(options: OpenAIPlannerModelOptions): StructuredRespo
             text: {
               format: zodTextFormat(request.schema, request.schemaName),
             },
+            reasoning: options.reasoningEffort
+              ? { effort: options.reasoningEffort }
+              : undefined,
             store: false,
           },
-          { signal: AbortSignal.timeout(timeoutMs) },
+          {
+            signal,
+            headers: { "X-Client-Request-Id": clientRequestId },
+          },
         );
         if (response.status !== "completed" || response.output_parsed === null) {
           throw new Error("OpenAI returned no completed structured output");
         }
-        console.info("Travel planner model call completed", {
+        console.info("Travel planner model call completed", JSON.stringify({
           schema: request.schemaName,
           model: options.model,
+          reasoningEffort: options.reasoningEffort ?? null,
           durationMs: Date.now() - startedAt,
-        });
+          clientRequestId,
+          requestId: response._request_id ?? null,
+        }));
         return response.output_parsed;
       } catch (error) {
         const durationMs = Date.now() - startedAt;
-        const timedOut = error instanceof DOMException && error.name === "TimeoutError";
-        console.error("Travel planner model call failed", {
+        const timedOut = signal.aborted || (
+          error instanceof DOMException && error.name === "TimeoutError"
+        );
+        const requestId = error && typeof error === "object" && "request_id" in error
+          ? String(error.request_id)
+          : null;
+        console.error("Travel planner model call failed", JSON.stringify({
           schema: request.schemaName,
           model: options.model,
+          reasoningEffort: options.reasoningEffort ?? null,
+          timeoutMs,
           durationMs,
           timedOut,
+          clientRequestId,
+          requestId,
           reason: error instanceof Error ? error.message : String(error),
-        });
-        if (timedOut) throw new Error(`OpenAI request timed out after ${timeoutMs}ms`);
+        }));
+        if (timedOut) {
+          throw new Error(
+            `OpenAI request timed out after ${timeoutMs}ms (client request ${clientRequestId})`,
+          );
+        }
         throw error;
       }
     },
@@ -396,7 +430,11 @@ export function createOpenAICommunicationModel(
 ): CommunicationModel {
   const model = options.model.trim();
   if (!model) throw new Error("OPENAI_MODEL is required");
-  const runner = options.runner ?? createOpenAIRunner({ ...options, model, timeoutMs: options.timeoutMs ?? 2_500 });
+  const runner = options.runner ?? createOpenAIRunner({
+    ...options,
+    model,
+    timeoutMs: options.timeoutMs ?? resolveOpenAITimeoutMs("communication"),
+  });
   return {
     compose(context: CommunicationContext) {
       return runStructured(runner, {
@@ -539,7 +577,11 @@ export function createOpenAIDestinationDiscoveryModel(
 ): DestinationDiscoveryModel {
   const model = options.model.trim();
   if (!model) throw new Error("OPENAI_MODEL is required");
-  const runner = options.runner ?? createOpenAIRunner({ ...options, model });
+  const runner = options.runner ?? createOpenAIRunner({
+    ...options,
+    model,
+    timeoutMs: options.timeoutMs ?? resolveOpenAITimeoutMs("discovery"),
+  });
   return {
     recommendDestinations(input) {
       return runStructured(runner, {

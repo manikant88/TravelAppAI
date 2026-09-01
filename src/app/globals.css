@@ -310,7 +310,7 @@ h1, h2, h3, p { margin-top: 0; }
 .flight-stop span, .flight-stop small { color: var(--muted); font-size: 11px; }
 .flight-line { position: relative; display: flex; align-items: center; min-width: 0; }
 .flight-line i { width: 100%; height: 1px; background: var(--line); }
-.flight-line span { position: absolute; top: 1%; left: 50%; color: #7d8795; line-height: 1; transform: translate(-50%, -50%); }
+.flight-line span { position: absolute; top: 1%; left: 50%; color: #7d8795; line-height: 1; transform: translate(-50%, -50%) rotate(45deg); }
 .flight-facts { display: grid; margin: 0; gap: 3px; font-size: 11px; }
 .flight-facts div { display: flex; gap: 5px; }
 .flight-facts dt { color: var(--muted); }

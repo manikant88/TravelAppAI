@@ -49,13 +49,19 @@ function repository() {
         { id: "city:mumbai", name: "Mumbai", timezone: "Asia/Kolkata" },
         { id: "country:th", name: "Thailand", timezone: "Asia/Bangkok" },
         {
+          id: "region:thailand-andaman",
+          parentId: "country:th",
+          name: "Thailand — Phuket & Krabi",
+          timezone: "Asia/Bangkok",
+        },
+        {
           id: "city:phuket",
           parentId: "country:th",
           name: "Phuket",
           timezone: "Asia/Bangkok",
         },
       ],
-      marketIds: ["city:mumbai", "country:th"],
+      marketIds: ["city:mumbai", "country:th", "region:thailand-andaman"],
       supportedThemes: ["beaches", "food"],
     })),
     searchLocations: vi.fn(async (query: string) => {
@@ -78,6 +84,17 @@ function repository() {
             type: "city" as const,
             countryCode: "TH",
             aliases: [],
+          },
+        ];
+      }
+      if (query === "thailand — phuket & krabi") {
+        return [
+          {
+            id: "region:thailand-andaman",
+            name: "Thailand — Phuket & Krabi",
+            type: "region" as const,
+            countryCode: "TH",
+            aliases: ["phuket and krabi"],
           },
         ];
       }
@@ -132,6 +149,28 @@ describe("natural-language trip intake", () => {
       locationId: "country:th",
     });
     expect(result.resolvedLocations.destination?.label).toBe("Thailand");
+  });
+
+  it("preserves a compound destination containing an em dash and ampersand", async () => {
+    const extractTripIntent = vi.fn(async () => completeIntent);
+    const result = await runNaturalIntake(
+      {
+        message: "Plan an adventurous friends trip from Delhi to Thailand — Phuket & Krabi for four adults from 10 October 2026 to 13 October 2026.",
+        currentRequest: emptyRequest,
+      },
+      { model: { extractTripIntent }, repository: repository(), today: () => "2026-08-31" },
+    );
+
+    expect(extractTripIntent).not.toHaveBeenCalled();
+    expect(result.request.destination).toEqual({
+      kind: "specified",
+      locationId: "region:thailand-andaman",
+    });
+    expect(result.resolvedLocations.destination).toEqual({
+      id: "region:thailand-andaman",
+      label: "Thailand — Phuket & Krabi",
+    });
+    expect(result.missingRequired).toEqual([]);
   });
 
   it("resolves inventory locations, maps a child destination to its market, and applies a canonical patch", async () => {

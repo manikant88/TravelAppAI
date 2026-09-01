@@ -1,6 +1,6 @@
 # AI implementation handoff
 
-Last updated: 30 August 2026
+Last updated: 31 August 2026
 
 This file records the current implementation boundaries that are easy to lose
 when iterating on the UI. `PROJECT_CONTEXT.md` remains the product source of
@@ -39,11 +39,41 @@ deterministic planner tracks `activity_id` and never selects the same activity
 identity more than once in an itinerary. The assembler continues to enforce
 this invariant as a final validation boundary.
 
+## Hybrid modification intent
+
+High-confidence budget, activity-addition, and explicitly scoped card changes
+are interpreted deterministically. Natural phrasing that does not map
+confidently to one of those typed commands is sent to the configured planning
+model for `ScopedModificationIntent` generation. The model does not bypass any
+domain boundary: canonical IDs, trip dates, themes, constraints, locks,
+inventory, previews, and proposals remain code-validated. A genuinely
+ambiguous explicit card target is clarified with the user instead of being
+delegated to the model to guess.
+
+## OpenAI runtime configuration
+
+- `src/agent/openai-config.server.ts` is the single server-only source for the
+  OpenAI model, API key, timeout policy, and diagnostic client request IDs.
+- Recommended default deadlines are 20 seconds for communication and travel
+  context, 25 seconds for destination discovery, and 30 seconds for planning,
+  modification, and explanation. These reflect observed structured-response
+  latency from the configured `gpt-5-mini` model rather than the former 2.5–4
+  second hardcoded limits.
+- A request-specific timeout environment value overrides `OPENAI_TIMEOUT_MS`,
+  which overrides the checked-in default. See `.env.example` for names.
+- Reasoning effort is also centralized: communication and context default to
+  `minimal`; destination discovery and planning default to `low`. This avoids
+  spending deep-reasoning latency on schema-constrained copy while keeping the
+  setting explicitly overridable per request class.
+- Every Responses API call sends a unique `X-Client-Request-Id`. Structured-call
+  logs include that ID, the server request ID when available, schema, model,
+  duration, timeout, and failure reason without logging prompts or credentials.
+
 ## Verification baseline
 
 - ESLint: clean.
 - TypeScript: clean with `tsc --noEmit`.
-- Vitest: 39 files and 180 tests passing.
+- Vitest: 41 files and 202 tests passing.
 
 ## Next product pass
 

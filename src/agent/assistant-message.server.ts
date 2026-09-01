@@ -1,8 +1,10 @@
 import { composeCommunication } from "@/agent/communication";
 import type { CommunicationContext, CommunicationOutput } from "@/agent/interaction-contracts";
 import { createOpenAICommunicationModel } from "@/agent/model";
-
-const DEFAULT_COMMUNICATION_TIMEOUT_MS = 4_000;
+import {
+  getOpenAIModelConfig,
+  resolveOpenAITimeoutMs,
+} from "@/agent/openai-config.server";
 
 /**
  * The single server-side boundary for final assistant copy.
@@ -11,14 +13,13 @@ const DEFAULT_COMMUNICATION_TIMEOUT_MS = 4_000;
  */
 export async function generateAssistantCommunication(
   context: CommunicationContext,
-  timeoutMs = DEFAULT_COMMUNICATION_TIMEOUT_MS,
+  timeoutMs = resolveOpenAITimeoutMs("communication"),
 ): Promise<CommunicationOutput> {
-  const model = process.env.OPENAI_MODEL?.trim();
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const config = getOpenAIModelConfig("communication");
   return composeCommunication(
     context,
-    model && apiKey
-      ? createOpenAICommunicationModel({ model, apiKey, timeoutMs })
+    config
+      ? createOpenAICommunicationModel({ ...config, timeoutMs })
       : undefined,
   );
 }

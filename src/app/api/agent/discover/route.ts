@@ -7,18 +7,18 @@ import {
   createOpenAIDestinationDiscoveryModel,
 } from "@/agent/model";
 import { generateAssistantMessage } from "@/agent/assistant-message.server";
+import { getOpenAIModelConfig } from "@/agent/openai-config.server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => undefined);
-  const modelName = process.env.OPENAI_MODEL?.trim();
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const config = getOpenAIModelConfig("discovery");
   try {
     const result = await runDestinationDiscovery(body, {
-      model: modelName && apiKey
-        ? createOpenAIDestinationDiscoveryModel({ model: modelName, apiKey, timeoutMs: 2_500 })
+      model: config
+        ? createOpenAIDestinationDiscoveryModel(config)
         : undefined,
     });
     const recommendationExplanation = result.type === "destination_options"

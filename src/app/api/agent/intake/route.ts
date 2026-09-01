@@ -1,19 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { NaturalIntakeError, runNaturalIntake } from "@/agent/natural-intake";
 import { createOpenAINaturalIntakeModel } from "@/agent/model";
+import { getOpenAIModelConfig } from "@/agent/openai-config.server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => undefined);
-  const modelName = process.env.OPENAI_MODEL?.trim();
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const config = getOpenAIModelConfig("planning");
   try {
     return NextResponse.json(
       await runNaturalIntake(body, {
-        model: modelName && apiKey
-          ? createOpenAINaturalIntakeModel({ model: modelName, apiKey })
+        model: config
+          ? createOpenAINaturalIntakeModel(config)
           : undefined,
       }),
     );

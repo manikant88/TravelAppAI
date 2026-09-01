@@ -51,6 +51,8 @@ import {
 import type { ActivityOffer, CoverageResult } from "@/inventory/contracts";
 import {
   createDeterministicModificationModel,
+  interpretModificationIntentHybrid,
+  NoDeterministicModificationIntentError,
   SelectionTargetError,
 } from "@/agent/deterministic-modification";
 
@@ -1137,24 +1139,31 @@ export async function runModification(
           supportedThemes: catalog.supportedThemes,
         };
       try {
-        // Explicit selection/category/budget changes are code-owned. Only an
-        // ambiguous message is offered to the model for semantic resolution.
-        rawIntent = await deterministicModel.interpretModification(modelInput);
+        // High-confidence typed commands remain code-owned. Unclassified
+        // language is interpreted by the model, then validated below against
+        // canonical IDs, themes, constraints, locks, inventory, and proposals.
+        rawIntent = await interpretModificationIntentHybrid(
+          modelInput,
+          dependencies.model,
+        );
       } catch (error: unknown) {
         if (error instanceof SelectionTargetError) {
           throw new ModifyError("INVALID_REQUEST", error.message, 400, false);
         }
-        try {
-          if (!dependencies.model) throw new Error("No ambiguity resolver configured");
-          rawIntent = await dependencies.model.interpretModification(modelInput);
-        } catch {
+        if (error instanceof NoDeterministicModificationIntentError) {
           throw new ModifyError(
             "INVALID_REQUEST",
-            "Tell me whether you want to change the travel, stay, or an activity.",
+            "I couldn't interpret that change without the AI intent service. Try naming the travel, stay, activity, schedule, or budget you want to update.",
             400,
             false,
           );
         }
+        throw new ModifyError(
+          "MODEL_FAILURE",
+          "I couldn't interpret that change just now. Please try again or name the travel, stay, activity, schedule, or budget you want to update.",
+          502,
+          true,
+        );
       }
     }
     const intent = validateIntent(rawIntent, trip, new Set(catalog.supportedThemes));

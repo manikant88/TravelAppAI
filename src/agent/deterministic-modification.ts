@@ -12,6 +12,13 @@ export class SelectionTargetError extends Error {
   }
 }
 
+export class NoDeterministicModificationIntentError extends Error {
+  constructor() {
+    super("No high-confidence deterministic modification intent was found");
+    this.name = "NoDeterministicModificationIntentError";
+  }
+}
+
 function totalPrice(facts: GroundedFact[]): number {
   const value = facts.find((fact) => fact.dimension === "total_price")?.value;
   return typeof value === "number" ? value : Number.POSITIVE_INFINITY;
@@ -121,7 +128,9 @@ function activityAdditionIntent(
 }
 
 function budgetIntent(message: string, selections: ModificationSelectionSummary[]): ScopedModificationIntent | undefined {
-  const amountMatch = message.match(/(?:budget(?:\s+to)?|under|below|max(?:imum)?)\s*(?:₹|inr\s*)?([\d,]+)/i);
+  const amountMatch = message.match(
+    /(?:budget(?:\s+to)?|under|below|within(?:\s+a)?(?:\s+budget\s+of)?|max(?:imum)?|(?:make|keep)\s+(?:the\s+|my\s+|this\s+)?trip\s+(?:possible|affordable)\s+(?:in|within|for))\s*(?:₹\s*|inr\s*)?([\d,]+)/i,
+  );
   if (!amountMatch) return undefined;
   const amount = Number(amountMatch[1]!.replaceAll(",", ""));
   if (!Number.isFinite(amount) || amount <= 0) return undefined;
@@ -139,6 +148,19 @@ function budgetIntent(message: string, selections: ModificationSelectionSummary[
   };
 }
 
+function hasHighConfidenceSelectionIntent(
+  input: Parameters<ModificationPlannerModel["interpretModification"]>[0],
+  kind: ModificationSelectionSummary["kind"] | undefined,
+): boolean {
+  const message = input.message.toLocaleLowerCase("en");
+  const namesSelection = input.selections.some((selection) =>
+    message.includes(selection.label.toLocaleLowerCase("en")),
+  );
+  const requestsChange = /\b(?:remove|delete|drop|replace|change|swap|find|make|use|choose|unlock|cheaper|later|earlier|quieter|faster|shorter|better)\b/i.test(message);
+  const hasSelector = /\bday\s*\d{1,2}\b|\b\d{4}-\d{2}-\d{2}\b|\b(?:low|medium|high)\s+mobility\b|\b(?:return|inbound|outbound|departure|departing|transfer|connection|connecting)\b/i.test(message);
+  return requestsChange && (namesSelection || Boolean(kind) || hasSelector);
+}
+
 function deterministicIntent(input: Parameters<ModificationPlannerModel["interpretModification"]>[0]): ScopedModificationIntent {
   const budget = budgetIntent(input.message, input.selections);
   if (budget) return budget;
@@ -147,6 +169,9 @@ function deterministicIntent(input: Parameters<ModificationPlannerModel["interpr
   if (activityAddition) return activityAddition;
 
   const kind = targetKind(input.message);
+  if (!hasHighConfidenceSelectionIntent(input, kind)) {
+    throw new NoDeterministicModificationIntentError();
+  }
   const target = selectTarget(input, kind);
 
   const action = /\b(?:remove|delete|drop)\b/i.test(input.message) && target.kind === "activity"
@@ -187,4 +212,17 @@ export function createDeterministicModificationModel(): ModificationPlannerModel
       };
     },
   };
+}
+
+export async function interpretModificationIntentHybrid(
+  input: Parameters<ModificationPlannerModel["interpretModification"]>[0],
+  semanticModel?: ModificationPlannerModel,
+): Promise<ScopedModificationIntent> {
+  try {
+    return await createDeterministicModificationModel().interpretModification(input);
+  } catch (error: unknown) {
+    if (!(error instanceof NoDeterministicModificationIntentError)) throw error;
+    if (!semanticModel) throw error;
+    return semanticModel.interpretModification(input);
+  }
 }

@@ -77,6 +77,17 @@ DATABASE_ADMIN_URL=
 INVENTORY_SOURCE=snapshot
 OPENAI_API_KEY=
 OPENAI_MODEL=
+# Optional global override. Request-specific timeout settings take precedence.
+OPENAI_TIMEOUT_MS=
+OPENAI_COMMUNICATION_TIMEOUT_MS=20000
+OPENAI_CONTEXT_TIMEOUT_MS=20000
+OPENAI_DISCOVERY_TIMEOUT_MS=25000
+OPENAI_PLANNING_TIMEOUT_MS=30000
+OPENAI_REASONING_EFFORT=
+OPENAI_COMMUNICATION_REASONING_EFFORT=minimal
+OPENAI_CONTEXT_REASONING_EFFORT=minimal
+OPENAI_DISCOVERY_REASONING_EFFORT=low
+OPENAI_PLANNING_REASONING_EFFORT=low
 INVENTORY_VERSION=travel-seed-v2
 ```
 
@@ -87,6 +98,16 @@ Rules:
 - `INVENTORY_SOURCE` defaults to `snapshot` for a deployment-safe, versioned, read-only inventory bundled from the canonical seed. Use `hybrid` to prefer Neon with a circuit-breaker fallback, or `neon` when explicitly verifying the database adapter.
 - database and OpenAI credentials remain server-side.
 - `OPENAI_MODEL` is configurable.
+- OpenAI runtime configuration is centralized in
+  `src/agent/openai-config.server.ts`. Timeout precedence is request-specific
+  environment value, then `OPENAI_TIMEOUT_MS`, then the checked-in recommended
+  default. Invalid values fail safe to that default.
+- Reasoning effort follows the same request-specific/global/default precedence.
+  Communication and context use `minimal` for responsive copy; discovery and
+  planning use `low` for bounded decision quality without unnecessary latency.
+- Every OpenAI Responses request includes a unique `X-Client-Request-Id` and
+  logs it with the server `x-request-id` when one is returned, so calls can be
+  correlated even when a client-side timeout occurs.
 - inventory routes run in the Node.js runtime.
 - local, preview, test, and production environments use the same migrations and seed version.
 
@@ -1221,6 +1242,13 @@ P0 UI requires add/replace/remove activity, replace travel/stay, constraint chan
 
 Rules:
 
+- modification intent uses a hybrid boundary: high-confidence typed commands
+  are interpreted deterministically, while otherwise unclassified language is
+  mapped by the model into the same closed `ScopedModificationIntent` schema;
+- deterministic target ambiguity is never delegated to the model to guess: it
+  produces `SelectionClarification`, while every model-produced intent still
+  passes canonical ID, date, theme, constraint, lock, inventory, preview, and
+  proposal validation before it can affect trip state;
 - code constructs operations from validated intent and search results;
 - unrelated selections are preserved by default;
 - locked selections cannot be replaced or removed;
