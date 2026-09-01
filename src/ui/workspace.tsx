@@ -53,12 +53,19 @@ import { AppIcon } from "@/ui/components/app-icon";
 import { Badge, Button, Card, Chip, IconButton } from "@/ui/components/primitives";
 import { PriceSummary } from "@/ui/patterns/price-summary";
 import {
+  activitySelectionInsight,
+  staySelectionInsight,
+  transferSelectionInsight,
+  transportSelectionInsight,
+} from "@/ui/selection-insights";
+import {
   interactionPresentationSchema,
   type GuidedAction,
   type InteractionEvent,
   type InteractionPresentation,
 } from "@/agent/interaction-contracts";
 import { completePlanningEvents, planningEvents } from "@/agent/interaction-guidance";
+import { buildConversationContext } from "@/agent/conversation-context";
 import {
   continueTripConversation,
   interpretTripBrief,
@@ -455,7 +462,7 @@ function BriefSetupWorkspace({
       field: "dates" as const,
       label: "Travel dates",
       complete: Boolean(request.startDate && request.endDate),
-      actions: recommendations.filter((action) => action.type === "set_dates"),
+      actions: recommendations.filter((action) => action.type === "set_dates" || action.type === "request_date_recommendation"),
     },
     {
       field: "guests" as const,
@@ -483,8 +490,8 @@ function BriefSetupWorkspace({
                 <strong>{item.complete ? "Added" : "Add manually"}</strong>
               </button>
               {suggestedActions.length > 0 ? (
-                <div className="brief-setup-recommendations" aria-label={`Recommended ${item.label.toLocaleLowerCase("en")}`}>
-                  <small>Recommended</small>
+                <div className="brief-setup-recommendations" aria-label={`${item.field === "dates" && request.dateWindow ? "Suggested" : "Recommended"} ${item.label.toLocaleLowerCase("en")}`}>
+                  <small>{item.field === "dates" && request.dateWindow ? "Date options" : "Recommended"}</small>
                   <div>
                     {suggestedActions.map((action) => (
                       <Chip type="button" disabled={busy} key={action.id} onClick={() => onRecommendation(action)}>
@@ -819,12 +826,22 @@ function airlineLogo(operator: string): string | undefined {
   return undefined;
 }
 
+function PlannerInsight({ text }: { text: string }) {
+  return (
+    <div className="card-grounding" role="note" aria-label="Planner insight based on verified itinerary details">
+      <i aria-hidden="true"><AppIcon name="sparkles" size={17} /></i>
+      <div>
+        <span>{text}</span>
+      </div>
+    </div>
+  );
+}
+
 function TravelCard({ item }: { item: HydratedSelection }) {
   const { offer } = item;
   if (isTransport(offer)) {
     const logo = airlineLogo(offer.operator);
     const serviceNumber = offer.segments[0]?.number;
-    const stopDescription = offer.stops === 0 ? "non-stop" : `${offer.stops} stop${offer.stops === 1 ? "" : "s"}`;
     return (
       <article className="itinerary-card itinerary-flight-card">
         <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true"><AppIcon name="flight" /></span><strong>{offer.mode} · {displayLocation(offer.from)} to {displayLocation(offer.to)} · {durationLabel(offer.durationMinutes)}</strong></header>
@@ -836,7 +853,14 @@ function TravelCard({ item }: { item: HydratedSelection }) {
           <dl className="flight-facts"><div><dt>Operator</dt><dd>{offer.operator}</dd></div>{serviceNumber ? <div><dt>Flight</dt><dd>{serviceNumber}</dd></div> : null}<div><dt>Stops</dt><dd>{offer.stops === 0 ? "Non-stop" : `${offer.stops} stop${offer.stops === 1 ? "" : "s"}`}</dd></div></dl>
           <div className="card-price"><strong>{formatMoney(offer.price.amount)}</strong><span>/ traveller</span></div>
         </div>
-        <div className="card-grounding"><i aria-hidden="true"><AppIcon name="check" size={16} /></i><span>{offer.operator} was selected for this dated route: it departs at {formatTime(offer.departureAt)}, arrives at {formatTime(offer.arrivalAt)}, and is {stopDescription}.</span></div>
+        <PlannerInsight text={transportSelectionInsight({
+          operator: offer.operator,
+          from: displayLocation(offer.from),
+          to: displayLocation(offer.to),
+          departureTime: formatTime(offer.departureAt),
+          arrivalTime: formatTime(offer.arrivalAt),
+          stops: offer.stops,
+        })} />
       </article>
     );
   }
@@ -848,7 +872,12 @@ function TravelCard({ item }: { item: HydratedSelection }) {
           <div className="transfer-illustration" aria-hidden="true"><AppIcon name="car" size={56} strokeWidth={1.5} /></div>
           <div><h3>{offer.mode === "shared" ? "Shared transfer" : "Private transfer"}</h3><p>A direct connection between the selected arrival point and stay area.</p><span><AppIcon name="map-pin" size={14} /> {displayLocation(offer.from)} to {displayLocation(offer.to)}</span><small>{durationLabel(offer.durationMinutes)} · capacity {offer.capacity} · {formatMoney(offer.price.amount)} / vehicle</small></div>
         </div>
-        <div className="card-grounding"><i aria-hidden="true"><AppIcon name="check" size={16} /></i><span>This {offer.mode} transfer directly connects {displayLocation(offer.from)} to {displayLocation(offer.to)} in {durationLabel(offer.durationMinutes)} and fits the validated route.</span></div>
+        <PlannerInsight text={transferSelectionInsight({
+          mode: offer.mode,
+          from: displayLocation(offer.from),
+          to: displayLocation(offer.to),
+          duration: durationLabel(offer.durationMinutes),
+        })} />
       </article>
     );
   }
@@ -883,7 +912,13 @@ function StayCard({ item, travellerCount, onModify }: { item: HydratedSelection;
           <Button variant="text" size="sm" className="inline-card-action" onClick={onModify}>Modify room</Button>
         </div>
       </div>
-      <div className="card-grounding"><i aria-hidden="true"><AppIcon name="check" size={16} /></i><span>This stay covers all {nights} night{nights === 1 ? "" : "s"} for {offer.rooms} room{offer.rooms === 1 ? "" : "s"}. It is rated {offer.propertyFacts.rating.toFixed(1)} from {offer.propertyFacts.reviewCount} reviews and includes {offer.propertyFacts.amenities.slice(0, 2).join(" and ")}.</span></div>
+      <PlannerInsight text={staySelectionInsight({
+        nights,
+        rooms: offer.rooms,
+        rating: offer.propertyFacts.rating.toFixed(1),
+        reviewCount: offer.propertyFacts.reviewCount,
+        amenities: offer.propertyFacts.amenities,
+      })} />
     </article>
   );
 }
@@ -899,7 +934,10 @@ function ActivityCard({ item, onModify }: { item: HydratedSelection; onModify():
         <SkeletonImage src={activityImage(offer)} alt={offer.activityFacts.imageAltText ?? offer.activityFacts.name} width={320} height={240} />
         <div><h3>{offer.activityFacts.name}</h3><p>{formatDateTime(offer.startsAt)} – {formatDateTime(offer.endsAt)}</p><div className="card-price"><strong>{formatMoney(offer.price.amount)}</strong><span>/ per person</span></div><ul><li>Duration {durationLabel(durationMinutes)}</li><li>{offer.activityFacts.mobility} mobility</li><li>Capacity {offer.capacity}</li></ul><Button variant="text" size="sm" className="inline-card-action" onClick={onModify}>Modify activity</Button></div>
       </div>
-      <div className="card-grounding"><i aria-hidden="true"><AppIcon name="check" size={16} /></i><span>This {offer.activityFacts.mobility}-mobility experience fits the available time on this day without overlapping travel. It supports {offer.activityFacts.tags.slice(0, 3).join(", ")} interests.</span></div>
+      <PlannerInsight text={activitySelectionInsight({
+        mobility: offer.activityFacts.mobility,
+        interests: offer.activityFacts.tags,
+      })} />
     </article>
   );
 }
@@ -1268,10 +1306,55 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
   const [highlightedDay, setHighlightedDay] = useState<string>();
   const [showPlanningAnimation, setShowPlanningAnimation] = useState(false);
   const [editingFact, setEditingFact] = useState<BriefFact>();
+  const [workspaceRestored, setWorkspaceRestored] = useState(false);
   const factEditorRef = useRef<HTMLFormElement | null>(null);
   const conversationRef = useRef<HTMLElement | null>(null);
   const initialPlanningDeadlineRef = useRef<Promise<void> | undefined>(undefined);
   const initialPromptConsumedRef = useRef(false);
+  const workspaceStorageKey = `travel-workspace:v1:${initialPrompt.trim() || "manual"}`;
+
+  useEffect(() => {
+    let savedState: typeof state | undefined;
+    let savedOriginLabel: string | undefined;
+    let savedDestinationLabel: string | undefined;
+    try {
+      const raw = window.sessionStorage.getItem(workspaceStorageKey);
+      if (raw) {
+        const saved = JSON.parse(raw) as { state?: unknown; originLabel?: unknown; destinationLabel?: unknown };
+        if (saved.state && typeof saved.state === "object") {
+          savedState = saved.state as typeof state;
+          savedOriginLabel = typeof saved.originLabel === "string" ? saved.originLabel : undefined;
+          savedDestinationLabel = typeof saved.destinationLabel === "string" ? saved.destinationLabel : undefined;
+        }
+      }
+    } catch {
+      // A corrupt or obsolete tab snapshot must never block a fresh workspace.
+      window.sessionStorage.removeItem(workspaceStorageKey);
+    }
+    const restoreTask = window.setTimeout(() => {
+      if (savedState) {
+        dispatch({ type: "workspace_restored", state: savedState });
+        if (savedOriginLabel !== undefined) setOriginLabel(savedOriginLabel);
+        if (savedDestinationLabel !== undefined) setDestinationLabel(savedDestinationLabel);
+        initialPromptConsumedRef.current = true;
+      }
+      setWorkspaceRestored(true);
+    }, 0);
+    return () => window.clearTimeout(restoreTask);
+  }, [workspaceStorageKey]);
+
+  useEffect(() => {
+    if (!workspaceRestored || state.asyncStatus !== "idle") return;
+    try {
+      window.sessionStorage.setItem(workspaceStorageKey, JSON.stringify({
+        state: { ...state, asyncStatus: "idle", error: undefined },
+        originLabel,
+        destinationLabel,
+      }));
+    } catch {
+      // Storage can be disabled or full; the in-memory workspace still works.
+    }
+  }, [workspaceRestored, workspaceStorageKey, state, originLabel, destinationLabel]);
 
   async function addAssistantEntry(
     fallbackMessage: string,
@@ -1458,6 +1541,10 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     event?.preventDefault();
     const message = (overrideMessage ?? composerText).trim();
     if (!message || busy || trip) return;
+    const turnContext = buildConversationContext(
+      state.conversation.map(({ role, text }) => ({ role, text })),
+      state.activeInteraction,
+    );
     void beginPlanningAnimation();
     setElapsed(0);
     dispatch({
@@ -1467,7 +1554,7 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     setComposerText("");
 
     try {
-      const body = await interpretTripBrief(message, preparedRequest());
+      const body = await interpretTripBrief(message, preparedRequest(), turnContext);
       const envelope = body as { kind?: unknown; result?: unknown; interaction?: unknown };
       const result = envelope.result;
       if ((body as { kind?: unknown })?.kind !== "intake" || !isNaturalIntakeResponse(result)) {
@@ -1561,45 +1648,6 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     });
     setComposerText("");
 
-    // Handle whole-trip date changes deterministically before selection-level
-    // modification routing. These requests change the planning scope rather
-    // than targeting a particular itinerary card.
-    const extendMatch = message.match(/\b(?:add|extend|include)\s+(?:one|1|an?)\s+(?:more\s+)?day\b/i);
-    if (extendMatch && trip.request.endDate) {
-      const nextEndDate = addDays(trip.request.endDate, 1);
-      const nextRequest: TripRequest = { ...trip.request, endDate: nextEndDate };
-      dispatch({ type: "replace_request", request: nextRequest });
-      await addAssistantEntry(
-        `I’ll extend the trip through ${formatDate(nextEndDate)} and rebuild the connected itinerary.`,
-        "modify_trip",
-        [`The trip end date is now ${formatDate(nextEndDate)}`, "The connected itinerary will be rebuilt"],
-      );
-      await executeSpecifiedPlan(nextRequest, undefined, false);
-      return;
-    }
-
-    // If the user asks for activities without naming a day, guide them with
-    // the actual days in this itinerary instead of returning an opaque target
-    // disambiguation error.
-    if (/\b(?:add|include|schedule|plan)\b.*\bactivit(?:y|ies)\b/i.test(message) && !/\bday\s*\d+\b/i.test(message)) {
-      const guideId = operationId("activity-guide");
-      const days = projectionState?.itinerary ?? [];
-      const actions: GuidedAction[] = days.slice(0, 6).map((day) => ({
-        id: `${guideId}:${day.date}`,
-        type: "select_activity_day",
-        date: day.date,
-        label: `Explore activities on Day ${day.dayNumber}`,
-      }));
-      const fallbackGuidance = `Sure — which day would you like to add activities to? I found ${days.length} days in this trip.`;
-      const guidance = await rewriteAssistantMessage(fallbackGuidance, "clarify", [`This trip has ${days.length} days`, "The user wants to add activities but did not specify a day"]);
-      dispatch({ type: "conversation_reply_received", entry: { id: messageId("assistant"), role: "assistant", text: guidance } });
-      dispatch({ type: "interaction_updated", interaction: {
-        message: guidance,
-        events: [{ id: `${guideId}:event`, type: "fact_recognized", status: "completed", label: "Ready to add activities to a selected day" }],
-        actions,
-      } });
-      return;
-    }
     const turnOperationId = operationId("turn");
     const requestedDay = Number(message.match(/\bday\s+(\d+)\b/i)?.[1]);
     const requestedDate = Number.isInteger(requestedDay) && requestedDay > 0
@@ -1627,12 +1675,39 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
       const body = await continueTripConversation({
         message,
         trip,
-        conversationHistory: state.conversation.slice(-8).map(({ role, text }) => ({ role, text })),
+        selectionId: requestedSelectionId,
+        targetDate: requestedDate,
+        context: buildConversationContext(
+          state.conversation.map(({ role, text }) => ({ role, text })),
+          state.activeInteraction,
+        ),
       });
 
       await responseDeadline;
 
-      const envelope = body as { kind?: unknown; result?: unknown; message?: unknown };
+      const envelope = body as { kind?: unknown; result?: unknown; message?: unknown; actionId?: unknown };
+      if (envelope.kind === "guided_action" && typeof envelope.actionId === "string") {
+        const action = state.activeInteraction?.availableActions.find((item) => item.id === envelope.actionId);
+        if (!action) throw new Error("That option is no longer available");
+        await handleGuidedAction(action, false);
+        return;
+      }
+      if (envelope.kind === "clarification") {
+        const interaction = interactionPresentationSchema.safeParse((body as { interaction?: unknown }).interaction);
+        if (!interaction.success) throw new Error("Invalid conversation clarification");
+        dispatch({ type: "conversation_reply_received", entry: { id: messageId("assistant"), role: "assistant", text: interaction.data.message } });
+        dispatch({ type: "interaction_updated", interaction: interaction.data });
+        return;
+      }
+      if (envelope.kind === "request_update") {
+        const nextRequest = (body as { request?: TripRequest }).request;
+        if (!nextRequest?.startDate || !nextRequest.endDate) throw new Error("Invalid trip request update");
+        const reply = typeof envelope.message === "string" ? envelope.message : "I’ll rebuild the trip with the updated details.";
+        dispatch({ type: "replace_request", request: nextRequest });
+        dispatch({ type: "conversation_reply_received", entry: { id: messageId("assistant"), role: "assistant", text: reply } });
+        await executeSpecifiedPlan(nextRequest, undefined, false);
+        return;
+      }
       if (envelope.kind === "reply" && typeof envelope.message === "string") {
         dispatch({ type: "conversation_reply_received", entry: { id: messageId("assistant"), role: "assistant", text: envelope.message } });
         dispatch({ type: "interaction_updated", interaction: {
@@ -1868,10 +1943,10 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
   });
 
   useEffect(() => {
-    if (!autoSubmitInitialPrompt || !initialPrompt.trim() || initialPromptConsumedRef.current) return;
+    if (!workspaceRestored || !autoSubmitInitialPrompt || !initialPrompt.trim() || initialPromptConsumedRef.current) return;
     initialPromptConsumedRef.current = true;
     submitInitialPrompt(initialPrompt);
-  }, [autoSubmitInitialPrompt, initialPrompt]);
+  }, [workspaceRestored, autoSubmitInitialPrompt, initialPrompt]);
 
   async function submitPlan(event?: FormEvent) {
     event?.preventDefault();
@@ -1990,14 +2065,46 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     return [...unique.values()].slice(0, 4);
   }
 
-  async function handleGuidedAction(action: GuidedAction) {
+  async function handleGuidedAction(action: GuidedAction, recordConversationEntry = true) {
     if (busy) return;
     if (action.type === "retry" || action.type === "submit_plan") {
       await submitPlan();
       return;
     }
     if (!trip && (action.type === "select_activity_day" || action.type === "select_modification_target" || action.type === "apply_proposal" || action.type === "keep_current")) return;
-    dispatch({ type: "conversation_entry_added", entry: { id: messageId("user"), role: "user", text: action.label } });
+    if (recordConversationEntry) {
+      dispatch({ type: "conversation_entry_added", entry: { id: messageId("user"), role: "user", text: action.label } });
+    }
+    if (action.type === "request_date_recommendation") {
+      const dateRecommendationReason = action.reason
+        ?? (request.dateWindow
+          ? request.dateWindow.durationDays ? "change_window" : "missing_duration"
+          : "missing_window");
+      const message = dateRecommendationReason === "change_window"
+        ? `I’ve kept ${request.dateWindow?.label ?? "that period"} as your preference, but the demo inventory can’t search it yet. What other month or date range would you like to compare?`
+        : dateRecommendationReason === "missing_duration"
+          ? `How many days should the trip be within ${request.dateWindow?.label ?? "that window"}? I’ll use that duration to suggest a few date ranges for you to compare.`
+          : "What month, range of months, or broad period are you considering, and roughly how many days should the trip be? I’ll keep it flexible and suggest date ranges within that window.";
+      const interaction: InteractionPresentation = {
+        message,
+        events: [{
+          id: `${action.id}:window`,
+          type: "fact_missing",
+          status: "active",
+          label: dateRecommendationReason === "change_window"
+            ? "A searchable travel window is needed"
+            : dateRecommendationReason === "missing_duration"
+              ? "Trip duration needed"
+              : "Travel window and duration needed",
+          target: { type: "trip_field", field: "dates" },
+        }],
+        actions: [],
+        focus: { operationId: action.id, target: { type: "trip_field", field: "dates" }, phase: "understanding" },
+      };
+      dispatch({ type: "interaction_updated", interaction });
+      await addAssistantEntry(message, "clarify");
+      return;
+    }
     if (action.type === "select_activity_day") {
       await addActivityToDay(action.date);
       return;
@@ -2036,6 +2143,7 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
     } else if (action.type === "set_dates") {
       nextRequest.startDate = action.startDate;
       nextRequest.endDate = action.endDate;
+      nextRequest.dateWindow = undefined;
     } else if (action.type === "set_travellers") {
       nextRequest.travellers = [
         ...Array.from({ length: action.adults }, (_, index): Traveller => ({ id: `traveller:adult:${index + 1}`, type: "adult" })),
@@ -2393,6 +2501,8 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
       ? `From ${formatDate(request.startDate)}`
       : request.endDate
         ? `Until ${formatDate(request.endDate)}`
+        : request.dateWindow
+          ? `${request.dateWindow.label}${request.dateWindow.durationDays ? ` · ${request.dateWindow.durationDays} days` : ""}`
         : "Select dates";
   const guestsFact = request.travellers.length > 0
     ? travellerSummary(request.travellers)
@@ -2493,7 +2603,7 @@ export default function TravelWorkspace({ initialPrompt = "", autoSubmitInitialP
             {editingFact ? <form ref={factEditorRef} className="trip-form fact-editor" onSubmit={(event) => { event.preventDefault(); }}>
               {editingFact === "origin" ? <LocationField id="edit-origin" label="From city" placeholder="Search city or airport" selectedId={request.origin} selectedLabel={originLabel} onSelectedLabelChange={setOriginLabel} onSelect={(location) => updateRequest({ origin: location?.id })} /> : null}
               {editingFact === "destination" ? <><LocationField id="edit-destination" label="To city / country" placeholder="Search destination" selectedId={request.destination?.kind === "specified" ? request.destination.locationId : undefined} selectedLabel={openDestination ? "Open to recommendations" : destinationLabel} disabled={openDestination} onSelectedLabelChange={setDestinationLabel} onSelect={(location) => updateRequest({ destination: location ? { kind: "specified", locationId: location.id } : undefined })} /><button className={openDestination ? "open-destination-button active" : "open-destination-button"} type="button" onClick={() => { setDestinationLabel(""); updateRequest({ destination: openDestination ? undefined : { kind: "open" } }); }}>Not sure where? Help me choose</button></> : null}
-              {editingFact === "dates" ? <div className="fact-editor-grid"><div className="field"><label htmlFor="edit-start-date">Start</label><input id="edit-start-date" type="date" min="2026-08-28" max="2027-03-30" value={request.startDate ?? ""} onChange={(event) => updateRequest({ startDate: event.target.value || undefined })} /></div><div className="field"><label htmlFor="edit-end-date">End</label><input id="edit-end-date" type="date" min="2026-08-29" max="2027-03-31" value={request.endDate ?? ""} onChange={(event) => updateRequest({ endDate: event.target.value || undefined })} /></div></div> : null}
+              {editingFact === "dates" ? <div className="fact-editor-grid"><div className="field"><label htmlFor="edit-start-date">Start</label><input id="edit-start-date" type="date" min="2026-08-28" max="2027-03-30" value={request.startDate ?? ""} onChange={(event) => updateRequest({ startDate: event.target.value || undefined, dateWindow: undefined })} /></div><div className="field"><label htmlFor="edit-end-date">End</label><input id="edit-end-date" type="date" min="2026-08-29" max="2027-03-31" value={request.endDate ?? ""} onChange={(event) => updateRequest({ endDate: event.target.value || undefined, dateWindow: undefined })} /></div></div> : null}
               {editingFact === "guests" ? <div className="fact-editor-grid guest-grid">{(["adult", "child", "senior"] as const).map((type) => <div className="field" key={type}><label htmlFor={`guest-${type}`}>{type.charAt(0).toUpperCase() + type.slice(1)}s</label><input id={`guest-${type}`} type="number" min="0" max="20" step="1" inputMode="numeric" value={request.travellers.filter((traveller) => traveller.type === type).length} onChange={(event) => setTravellerComposition(type, Math.max(0, Math.min(20, Number(event.target.value) || 0)))} /></div>)}</div> : null}
               {editingFact === "preferences" ? <div className="fact-editor-grid"><div className="field"><label htmlFor="edit-budget">Budget</label><div className="money-input"><span>₹</span><input id="edit-budget" type="number" min="1" value={maxBudgetAmount ?? ""} onChange={(event) => setMaximumBudget(event.target.value)} /></div></div><div className="field"><label htmlFor="edit-pace">Pace</label><select id="edit-pace" value={request.preferences.pace ?? ""} onChange={(event) => updateRequest({ preferences: { ...request.preferences, pace: event.target.value as "relaxed" | "balanced" | "packed" } })}><option value="" disabled>Select pace</option><option value="relaxed">Relaxed</option><option value="balanced">Balanced</option><option value="packed">Packed</option></select></div><div className="field"><label htmlFor="edit-interests">Interests</label><input id="edit-interests" value={interestText} placeholder="food, beaches" onChange={(event) => setInterestText(event.target.value)} /></div></div> : null}
             </form> : null}

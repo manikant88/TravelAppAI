@@ -51,7 +51,7 @@ describe("schema-constrained OpenAI planner model", () => {
       async run(call) {
         expect(() => zodTextFormat(call.schema, call.schemaName)).not.toThrow();
         requests.push({ schemaName: call.schemaName, input: call.input });
-        return { intent: "explain_trip" };
+        return { intent: "explain_trip", actionId: null };
       },
     };
     const model = createOpenAIConversationRouterModel({ model: "test-model", runner });
@@ -69,13 +69,24 @@ describe("schema-constrained OpenAI planner model", () => {
       version: 1,
     };
 
-    await expect(model.classify({ message: "Why this route?", trip })).resolves.toEqual({
+    const context = {
+      history: [{ role: "user" as const, text: "Can you make the hotel cheaper?" }],
+      activeInteraction: {
+        mode: "build" as const,
+        task: "modify_itinerary" as const,
+        awaitingFields: [],
+        availableActions: [],
+      },
+    };
+    await expect(model.classify({ message: "Why this route?", trip, context })).resolves.toEqual({
       intent: "explain_trip",
+      actionId: null,
     });
     expect(requests[0]?.schemaName).toBe("travel_conversation_intent");
     expect(JSON.parse(requests[0]?.input ?? "{}")).toEqual({
       message: "Why this route?",
       trip,
+      context,
     });
   });
 
@@ -90,6 +101,7 @@ describe("schema-constrained OpenAI planner model", () => {
           destination: { kind: "open" },
           startDate: "2026-10-10",
           endDate: "2026-10-15",
+          dateWindow: null,
           travellerGroups: [{ type: "adult", count: 2, mobility: null }],
           pace: "relaxed",
           interests: ["beaches"],
@@ -251,18 +263,20 @@ describe("schema-constrained OpenAI planner model", () => {
         expect(() => zodTextFormat(call.schema, call.schemaName)).not.toThrow();
         requests.push({ schemaName: call.schemaName, input: call.input });
         return {
-          action: "upsert_constraint",
-          constraint: {
+          intent: {
+            action: "upsert_constraint",
+            constraint: {
             category: "travel",
             priority: "hard",
             earliestDeparture: null,
             latestArrival: null,
             allowedModes: ["flight"],
             maxStops: 0,
+            },
+            preserveSelectionIds: [],
+            goal: "Use direct flights only",
+            preferredThemes: [],
           },
-          preserveSelectionIds: [],
-          goal: "Use direct flights only",
-          preferredThemes: [],
         };
       },
     };

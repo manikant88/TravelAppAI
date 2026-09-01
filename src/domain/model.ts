@@ -104,11 +104,20 @@ export type DestinationIntent =
   | { kind: "specified"; locationId: LocationID }
   | { kind: "open" };
 
+export interface FlexibleDateWindow {
+  kind: "flexible_window";
+  earliestStart: ISODate;
+  latestEnd: ISODate;
+  durationDays?: number;
+  label: string;
+}
+
 export interface TripRequest {
   origin?: LocationID;
   destination?: DestinationIntent;
   startDate?: ISODate;
   endDate?: ISODate;
+  dateWindow?: FlexibleDateWindow;
   travellers: Traveller[];
   preferences: {
     pace?: TripPace;
@@ -120,7 +129,7 @@ export interface TripRequest {
 export interface PlannableTripRequest
   extends Omit<
     TripRequest,
-    "origin" | "destination" | "startDate" | "endDate" | "travellers"
+    "origin" | "destination" | "startDate" | "endDate" | "dateWindow" | "travellers"
   > {
   origin: LocationID;
   destination: DestinationIntent;
@@ -134,6 +143,7 @@ export interface RequestPatch {
   destination?: DestinationIntent;
   startDate?: ISODate;
   endDate?: ISODate;
+  dateWindow?: FlexibleDateWindow;
   pace?: TripPace;
   interests?: string[];
   upsertConstraints?: ConstraintDraft[];

@@ -165,6 +165,7 @@ function stayFacts(offer: StayOffer): GroundedFact[] {
     fact(offer.id, "stay", "check_out", "Check-out date", offer.checkOut),
     fact(offer.id, "stay", "rating", "Property rating", offer.propertyFacts.rating),
     fact(offer.id, "stay", "review_count", "Property review count", offer.propertyFacts.reviewCount),
+    fact(offer.id, "stay", "property_tags", "Verified property tags", [...offer.propertyFacts.tags].sort().join(", ")),
     fact(offer.id, "stay", "amenities", "Available amenities", [...offer.propertyFacts.amenities].sort().join(", ")),
     fact(offer.id, "stay", "room_capacity", "Maximum occupancy per room", offer.roomFacts.maxOccupancy),
     fact(offer.id, "stay", "room_label", "Room type", offer.roomFacts.roomLabel),

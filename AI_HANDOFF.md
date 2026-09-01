@@ -1,6 +1,6 @@
 # AI implementation handoff
 
-Last updated: 31 August 2026
+Last updated: 1 September 2026
 
 This file records the current implementation boundaries that are easy to lose
 when iterating on the UI. `PROJECT_CONTEXT.md` remains the product source of
@@ -8,17 +8,41 @@ truth and `IMPLEMENTATION_SPEC.md` remains the technical contract.
 
 ## Current request path
 
-1. The client sends natural-language intake to `/api/agent/conversation`.
-2. Domain and planning code extracts and validates the trip request, searches
+1. Explicit UI actions remain typed client actions. Free-form draft and
+   committed turns go to `/api/agent/conversation` with a client turn ID and a
+   bounded `ConversationContext` containing recent history plus the app-owned
+   active task, awaited fields, and actions that were actually presented.
+2. `src/agent/conversation-orchestrator.server.ts` is the single free-form turn
+   boundary. It uses strict model-first semantic routing when AI is configured,
+   then selects exactly one permitted deterministic executor. Model failure
+   falls back to bounded deterministic interpretation rather than blocking the
+   trip.
+3. Domain and planning code extracts and validates the trip request, searches
    grounded inventory, assembles the itinerary, and owns every consequential
    fact and state transition.
-3. Final assistant-facing prose passes through
+4. Final assistant-facing prose passes through
    `src/agent/assistant-message.server.ts`. The language model may improve tone
    and clarity, but it may not add or change facts. A deterministic fallback is
    always returned when communication generation is unavailable or invalid.
-4. The client renders the returned message and typed result. Temporary progress
+5. The client renders the returned message and typed result. Temporary progress
    labels remain deterministic client UI state; they are not presented as model
    conclusions.
+
+## Conversation state and tracing
+
+- `WorkspaceState.activeInteraction` is canonical app-owned conversational
+  state, separate from the visual `InteractionPresentation`. It records whether
+  the user is exploring or building, the current task, awaited fields, the last
+  assistant message, and the exact guided actions shown.
+- Short replies such as `Delhi`, `2 adults`, or `the second one` are interpreted
+  against that active interaction. Presented-option references can resolve only
+  to actions that the application actually supplied.
+- No-destination prompts can remain in explicit recommendation mode. The UI
+  offers editable date and traveller starting points; grounded inventory search
+  still waits until the minimum executable brief is available.
+- Every free-form turn logs a server trace with client turn ID, trace ID, phase,
+  semantic route, deterministic executor, outcome, duration, and degraded-mode
+  status. Downstream OpenAI request IDs include the same trace correlation.
 
 ## Client boundaries
 

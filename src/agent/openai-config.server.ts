@@ -121,10 +121,14 @@ export function getOpenAIModelConfig(
  * OpenAI documents X-Client-Request-Id as an ASCII, per-request diagnostic ID.
  * Prefixing the UUID with the schema makes local logs easier to correlate.
  */
-export function createOpenAIClientRequestId(schemaName: string): string {
+export function createOpenAIClientRequestId(schemaName: string, correlationId?: string): string {
   const safeSchema = schemaName
     .replace(/[^A-Za-z0-9_.-]/g, "-")
     .replace(/-+/g, "-")
     .slice(0, 64) || "structured-response";
-  return `travel-${safeSchema}-${randomUUID()}`;
+  const safeCorrelation = correlationId
+    ?.replace(/[^A-Za-z0-9_.-]/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 80);
+  return `travel-${safeSchema}-${safeCorrelation ? `${safeCorrelation}-` : ""}${randomUUID()}`;
 }

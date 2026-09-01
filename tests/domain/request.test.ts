@@ -63,6 +63,30 @@ describe("canonical trip request", () => {
     expect(requirePlannableRequest(request)).toEqual(request);
   });
 
+  it("keeps a flexible window exploratory and rejects it alongside exact dates", () => {
+    const flexible: TripRequest = {
+      destination: { kind: "open" },
+      dateWindow: {
+        kind: "flexible_window",
+        earliestStart: "2026-11-01",
+        latestEnd: "2026-11-30",
+        durationDays: 4,
+        label: "November 2026",
+      },
+      travellers: [{ id: "traveller:1", type: "adult" }],
+      preferences: {},
+      constraints: [],
+    };
+
+    expect(tripRequestSchema.safeParse(flexible).success).toBe(true);
+    expect(checkRequirements(flexible).missingRequired).toContain("dates");
+    expect(tripRequestSchema.safeParse({
+      ...flexible,
+      startDate: "2026-11-01",
+      endDate: "2026-11-04",
+    }).success).toBe(false);
+  });
+
   it("rejects incomplete dates, duplicate semantic constraints, and unknown traveller scopes", () => {
     const base = {
       origin: "city:delhi",

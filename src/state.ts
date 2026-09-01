@@ -7,6 +7,8 @@ import type { ProposalPreview, TripProposal } from "@/domain/proposals";
 import type { ExplanationResult } from "@/agent/explanation-contracts";
 import type { NaturalIntakeResponse } from "@/agent/natural-intake-contracts";
 import type { InteractionPresentation } from "@/agent/interaction-contracts";
+import type { ActiveInteraction } from "@/agent/conversation-contracts";
+import { deriveActiveInteraction } from "@/agent/conversation-context";
 
 export interface ConversationEntry {
   id: string;
@@ -52,12 +54,14 @@ export interface WorkspaceState {
   latestIntake?: NaturalIntakeResponse;
   conversation: ConversationEntry[];
   interaction?: InteractionPresentation;
+  activeInteraction?: ActiveInteraction;
   asyncStatus: "idle" | "interpreting" | "discovering" | "planning" | "modifying" | "explaining" | "applying" | "error";
   error?: WorkspaceError;
   optionalClarificationUsed: boolean;
 }
 
 export type WorkspaceAction =
+  | { type: "workspace_restored"; state: WorkspaceState }
   | { type: "replace_request"; request: TripRequest }
   | { type: "conversation_entry_added"; entry: ConversationEntry }
   | { type: "interaction_updated"; interaction: InteractionPresentation }
@@ -115,6 +119,12 @@ export function workspaceReducer(
   action: WorkspaceAction,
 ): WorkspaceState {
   switch (action.type) {
+    case "workspace_restored":
+      return {
+        ...action.state,
+        asyncStatus: "idle",
+        error: undefined,
+      };
     case "replace_request":
       return {
         ...state,
@@ -127,9 +137,13 @@ export function workspaceReducer(
         conversation: [...state.conversation, action.entry],
       };
     case "interaction_updated":
-      return { ...state, interaction: action.interaction };
+      return {
+        ...state,
+        interaction: action.interaction,
+        activeInteraction: deriveActiveInteraction(state.itinerary.request, action.interaction),
+      };
     case "interaction_cleared":
-      return { ...state, interaction: undefined };
+      return { ...state, interaction: undefined, activeInteraction: undefined };
     case "conversation_started":
       return {
         ...state,
@@ -137,6 +151,7 @@ export function workspaceReducer(
         error: undefined,
         latestExplanation: undefined,
         interaction: undefined,
+        activeInteraction: undefined,
         conversation: [...state.conversation, action.entry],
       };
     case "conversation_reply_received":
@@ -155,6 +170,7 @@ export function workspaceReducer(
         destinationDiscovery: undefined,
         latestIntake: undefined,
         interaction: undefined,
+        activeInteraction: undefined,
         conversation: [...state.conversation, action.entry],
       };
     case "intake_received":
@@ -185,6 +201,7 @@ export function workspaceReducer(
         modificationConflict: undefined,
         latestExplanation: undefined,
         interaction: undefined,
+        activeInteraction: undefined,
         conversation: action.entry ? [...state.conversation, action.entry] : state.conversation,
       };
     case "discovery_received":
@@ -211,6 +228,7 @@ export function workspaceReducer(
         modificationConflict: undefined,
         latestExplanation: undefined,
         interaction: undefined,
+        activeInteraction: undefined,
         conversation: action.entry ? [...state.conversation, action.entry] : state.conversation,
       };
     case "planning_succeeded":
@@ -326,6 +344,7 @@ export function workspaceReducer(
         modificationConflict: undefined,
         latestExplanation: undefined,
         interaction: undefined,
+        activeInteraction: undefined,
         asyncStatus: "idle",
         error: undefined,
         conversation: [...state.conversation, action.entry],

@@ -174,7 +174,7 @@ function selectionSummary(
 
 function allowedDimensions(offer: ResolvedOffer): string[] {
   if ("serviceId" in offer) return ["price", "timing", "duration", "comfort"];
-  if ("roomOfferId" in offer) return ["price", "comfort", "location"];
+  if ("roomOfferId" in offer) return ["price", "comfort", "location", "property_tags", "rating"];
   if ("sessionId" in offer) return ["price", "timing", "duration", "activity_fit", "pace"];
   return ["price", "duration", "comfort"];
 }
@@ -414,6 +414,18 @@ async function noAlternativeConflict(
 
 function asksForLowerPrice(goal: string): boolean {
   return /\b(?:cheaper|less expensive|lower(?:-|\s+)(?:price|cost)|reduce (?:the )?(?:price|cost)|save money)\b/i.test(goal);
+}
+
+function requiredStayTag(goal: string): string | undefined {
+  if (/\b(?:quiet|quieter|peaceful|calm)\b/i.test(goal)) return "quiet";
+  if (/\b(?:social|lively|nightlife)\b/i.test(goal)) return "social";
+  if (/\b(?:premium|luxury|luxurious)\b/i.test(goal)) return "premium";
+  return undefined;
+}
+
+function candidateHasVerifiedTag(candidate: { facts: GroundedFact[] }, tag: string): boolean {
+  const value = candidate.facts.find((fact) => fact.dimension === "property_tags")?.value;
+  return typeof value === "string" && value.split(",").map((item) => item.trim().toLocaleLowerCase("en")).includes(tag);
 }
 
 function replacementOperation(selection: Selection, nextOfferId: string): TripOperation {
@@ -1263,9 +1275,13 @@ export async function runModification(
     }
 
     const lowerPriceRequested = asksForLowerPrice(intent.goal);
-    const eligible = lowerPriceRequested
+    const stayTag = selection.kind === "stay" ? requiredStayTag(intent.goal) : undefined;
+    const priceEligible = lowerPriceRequested
       ? valid.filter((item) => item.candidate.evaluation.preview.budgetDelta.amount < 0)
       : valid;
+    const eligible = stayTag
+      ? priceEligible.filter((item) => candidateHasVerifiedTag(item, stayTag))
+      : priceEligible;
 
     if (eligible.length === 0) {
       const currentLabel = selectionLabel(selection, currentOffer);
@@ -1278,8 +1294,12 @@ export async function runModification(
         context,
         createId,
         {
-          summary: `${currentLabel} is already the lowest-priced valid option in the available inventory.`,
-          message: `I checked the valid alternatives, but none is cheaper than ${currentLabel}. I kept your current ${selectionNoun} and the rest of the trip unchanged.`,
+          summary: stayTag
+            ? `No valid alternative has verified “${stayTag}” evidence in the available inventory.`
+            : `${currentLabel} is already the lowest-priced valid option in the available inventory.`,
+          message: stayTag
+            ? `I checked the valid alternatives, but none has verified “${stayTag}” evidence. I kept your current ${selectionNoun} and the rest of the trip unchanged.`
+            : `I checked the valid alternatives, but none is cheaper than ${currentLabel}. I kept your current ${selectionNoun} and the rest of the trip unchanged.`,
         },
       );
     }

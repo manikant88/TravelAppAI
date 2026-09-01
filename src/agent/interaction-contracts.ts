@@ -67,6 +67,14 @@ export const guidedActionSchema = z.union([
   }).strict(),
   z.object({
     id: idSchema,
+    type: z.literal("request_date_recommendation"),
+    // Optional for compatibility with interactions created before the reason
+    // field was introduced; new server responses always provide it.
+    reason: z.enum(["missing_window", "missing_duration", "change_window"]).optional(),
+    label: z.string().trim().min(1).max(80),
+  }).strict(),
+  z.object({
+    id: idSchema,
     type: z.literal("set_travellers"),
     adults: z.number().int().nonnegative().max(20),
     children: z.number().int().nonnegative().max(20),

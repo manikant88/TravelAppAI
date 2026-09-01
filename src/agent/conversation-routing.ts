@@ -1,11 +1,7 @@
-export type CommittedConversationIntent =
-  | "activity_suggestion"
-  | "modify_trip"
-  | "explain_trip"
-  | "travel_context"
-  | "unsupported";
+import type { CommittedConversationIntent } from "@/agent/conversation-contracts";
 
 const modificationPattern = /\b(?:add|change|replace|remove|delete|cheaper|lock|unlock|update|move|reschedule|cancel|increase|decrease|extend|shorten|make|swap)\b/i;
+const modificationPreferencePattern = /\b(?:quieter|cheaper|costlier|better|different|closer|later|earlier|instead)\b.*\b(?:flight|travel|hotel|stay|room|activity|transfer|itinerary)\b|\b(?:flight|travel|hotel|stay|room|activity|transfer|itinerary)\b.*\b(?:quieter|cheaper|costlier|better|different|closer|later|earlier|instead)\b/i;
 const activitySuggestionPattern = /\b(?:suggest|recommend|more|nearby|near the (?:stay|hotel)|hang(?:ing)? out|places? to (?:go|visit)|things? to do)\b/i;
 const activitySubjectPattern = /\b(?:activit(?:y|ies)|experience|place|nearby|hang(?:ing)? out|things? to do|restaurant|cafe|market)\b/i;
 const deterministicTripPattern = /\b(?:trip total|total cost|price|budget|breakdown|selected|selection|itinerary|schedule|departure|arrival|flight|hotel|stay|check[ -]?in|check[ -]?out|activity|mobility|capacity|duration|route|transfer|day\s*\d+)\b/i;
@@ -28,10 +24,10 @@ export function classifyCommittedConversation(
   message: string,
   trip: ConversationTripContext,
 ): CommittedConversationIntent {
-  if (activitySuggestionPattern.test(message) && activitySubjectPattern.test(message)) {
+  if (activitySuggestionPattern.test(message) && (activitySubjectPattern.test(message) || /\bnear (?:the )?(?:stay|hotel)\b/i.test(message))) {
     return "activity_suggestion";
   }
-  if (modificationPattern.test(message)) return "modify_trip";
+  if (modificationPattern.test(message) || modificationPreferencePattern.test(message)) return "modify_trip";
   if (deterministicTripPattern.test(message) && explanationPattern.test(message)) {
     return "explain_trip";
   }
@@ -39,6 +35,9 @@ export function classifyCommittedConversation(
     message.toLocaleLowerCase("en").includes(term.toLocaleLowerCase("en")),
   );
   if (travelContextPattern.test(message) || mentionsTripPlace) return "travel_context";
+  if (/^(?:hi|hello|hey|thanks|thank you|help|what can you do)[!.?\s]*$/i.test(message)) {
+    return "conversational";
+  }
   return "unsupported";
 }
 

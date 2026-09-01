@@ -5,7 +5,7 @@ import {
   naturalIntakeResponseSchema,
   naturalTripIntentSchema,
 } from "@/agent/natural-intake-contracts";
-import type { ConstraintDraft, RequestPatch, TripRequest } from "@/domain/model";
+import type { ConstraintDraft, FlexibleDateWindow, RequestPatch, TripRequest } from "@/domain/model";
 import {
   applyConstraintPatch,
   canonicalizeTripRequest,
@@ -17,6 +17,7 @@ import {
   type ActiveLocationNode,
 } from "@/inventory/repository";
 import { normalizeLocationQuery, searchLocations } from "@/inventory/service";
+import type { ActiveInteraction, ConversationContext } from "@/agent/conversation-contracts";
 
 export interface NaturalIntakeModel {
   extractTripIntent(input: {
@@ -24,6 +25,7 @@ export interface NaturalIntakeModel {
     currentRequest: TripRequest;
     today: string;
     inventoryWindow: { from: string; until: string };
+    context?: ConversationContext;
   }): Promise<NaturalTripIntent>;
 }
 
@@ -31,6 +33,24 @@ export interface NaturalIntakeDependencies {
   model?: NaturalIntakeModel;
   repository?: ReturnType<typeof createInventoryRepository>;
   today?: () => string;
+}
+
+type NaturalDateWindow = NonNullable<NaturalTripIntent["dateWindow"]>;
+
+function toNaturalDateWindow(window: FlexibleDateWindow | undefined): NaturalDateWindow | null {
+  return window
+    ? { ...window, durationDays: window.durationDays ?? null }
+    : null;
+}
+
+function toFlexibleDateWindow(
+  window: NaturalTripIntent["dateWindow"] | FlexibleDateWindow | undefined,
+): FlexibleDateWindow | undefined {
+  if (!window) return undefined;
+  return {
+    ...window,
+    durationDays: window.durationDays ?? undefined,
+  };
 }
 
 export class NaturalIntakeError extends Error {
@@ -79,6 +99,19 @@ function marketForLocation(
 
 function marketLabel(marketId: string, graph: ActiveLocationNode[]): string {
   return graph.find((node) => node.id === marketId)?.name ?? marketId;
+}
+
+async function resolveLocationQuery(
+  query: string,
+  graph: ActiveLocationNode[],
+  repository: ReturnType<typeof createInventoryRepository>,
+) {
+  // Follow-up turns carry canonical IDs from the durable trip brief. Do not
+  // feed those IDs back through fuzzy text search ("city:manali" is not a
+  // user-facing location name).
+  const canonical = graph.find((node) => node.id === query);
+  if (canonical) return { id: canonical.id, name: canonical.name ?? canonical.id };
+  return (await searchLocations({ q: query }, repository)).results[0];
 }
 
 function constraintDrafts(intent: NaturalTripIntent): ConstraintDraft[] {
@@ -156,6 +189,108 @@ function explicitDateRange(message: string, today: string): { startDate: string;
   return relativeDates;
 }
 
+function flexiblePeriodYear(
+  startMonth: number,
+  endMonth: number,
+  today: string,
+  explicitYear?: number,
+): number {
+  if (explicitYear) return explicitYear;
+  const currentYear = Number(today.slice(0, 4));
+  const currentMonth = Number(today.slice(5, 7));
+  return endMonth < currentMonth && startMonth <= endMonth ? currentYear + 1 : currentYear;
+}
+
+function monthEnd(year: number, month: number): string {
+  return new Date(Date.UTC(year, month, 0, 12)).toISOString().slice(0, 10);
+}
+
+function monthLabel(month: number): string {
+  return new Intl.DateTimeFormat("en-IN", { month: "long", timeZone: "UTC" })
+    .format(new Date(Date.UTC(2026, month - 1, 1, 12)));
+}
+
+export function explicitFlexibleDateWindow(message: string, today: string): NaturalDateWindow | undefined {
+  const durationDays = explicitDayCount(message);
+  const monthNames = Object.keys(monthNumbers).join("|");
+  const mentionedMonths = [
+    ...message.matchAll(new RegExp(`\\b(${monthNames})\\b`, "gi")),
+  ].map((match) => Number(monthNumbers[match[1]!.toLocaleLowerCase("en")]));
+  if (mentionedMonths.length >= 2) {
+    const startMonth = mentionedMonths[0]!;
+    const endMonth = mentionedMonths.at(-1)!;
+    const explicitYearMatch = message.match(/\b(20\d{2})\b/);
+    const year = flexiblePeriodYear(
+      startMonth,
+      endMonth,
+      today,
+      explicitYearMatch ? Number(explicitYearMatch[1]) : undefined,
+    );
+    const endYear = endMonth < startMonth ? year + 1 : year;
+    return {
+      kind: "flexible_window",
+      earliestStart: `${year}-${String(startMonth).padStart(2, "0")}-01`,
+      latestEnd: monthEnd(endYear, endMonth),
+      durationDays: durationDays ?? null,
+      label: `${monthLabel(startMonth)}–${monthLabel(endMonth)} ${year}${endYear !== year ? `–${endYear}` : ""}`,
+    };
+  }
+  const monthRange = message.match(new RegExp(`\\b(${monthNames})\\s*(?:to|through|until|[-–—/])\\s*(${monthNames})(?:\\s+(20\\d{2}))?\\b`, "i"));
+  if (monthRange) {
+    const startMonth = Number(monthNumbers[monthRange[1]!.toLocaleLowerCase("en")]);
+    const endMonth = Number(monthNumbers[monthRange[2]!.toLocaleLowerCase("en")]);
+    const explicitYear = monthRange[3] ? Number(monthRange[3]) : undefined;
+    const year = flexiblePeriodYear(startMonth, endMonth, today, explicitYear);
+    const endYear = endMonth < startMonth ? year + 1 : year;
+    return {
+      kind: "flexible_window",
+      earliestStart: `${year}-${String(startMonth).padStart(2, "0")}-01`,
+      latestEnd: monthEnd(endYear, endMonth),
+      durationDays: durationDays ?? null,
+      label: `${monthLabel(startMonth)}–${monthLabel(endMonth)} ${year}${endYear !== year ? `–${endYear}` : ""}`,
+    };
+  }
+
+  const singleMonth = message.match(new RegExp(`\\b(${monthNames})(?:\\s+(20\\d{2}))?\\b`, "i"));
+  if (singleMonth) {
+    const month = Number(monthNumbers[singleMonth[1]!.toLocaleLowerCase("en")]);
+    const year = flexiblePeriodYear(month, month, today, singleMonth[2] ? Number(singleMonth[2]) : undefined);
+    return {
+      kind: "flexible_window",
+      earliestStart: `${year}-${String(month).padStart(2, "0")}-01`,
+      latestEnd: monthEnd(year, month),
+      durationDays: durationDays ?? null,
+      label: `${monthLabel(month)} ${year}`,
+    };
+  }
+
+  const broadPeriod = message.match(/\b(springs?|summers?|monsoons?|autumns?|falls?|winters?|mid(?:dle)?(?:\s+of\s+the)?\s+year)\b(?:\s+(20\d{2}))?/i);
+  if (!broadPeriod) return undefined;
+  const rawToken = broadPeriod[1]!.toLocaleLowerCase("en");
+  const token = rawToken.startsWith("mid") ? rawToken : rawToken.replace(/s$/, "");
+  const periods: Record<string, { startMonth: number; endMonth: number; label: string }> = {
+    spring: { startMonth: 3, endMonth: 5, label: "Spring" },
+    summer: { startMonth: 6, endMonth: 8, label: "Summer" },
+    monsoon: { startMonth: 6, endMonth: 9, label: "Monsoon" },
+    autumn: { startMonth: 9, endMonth: 11, label: "Autumn" },
+    fall: { startMonth: 9, endMonth: 11, label: "Autumn" },
+    winter: { startMonth: 12, endMonth: 2, label: "Winter" },
+    "mid year": { startMonth: 5, endMonth: 8, label: "Middle of the year" },
+    "middle of the year": { startMonth: 5, endMonth: 8, label: "Middle of the year" },
+  };
+  const period = periods[token];
+  if (!period) return undefined;
+  const year = flexiblePeriodYear(period.startMonth, period.endMonth, today, broadPeriod[2] ? Number(broadPeriod[2]) : undefined);
+  const endYear = period.endMonth < period.startMonth ? year + 1 : year;
+  return {
+    kind: "flexible_window",
+    earliestStart: `${year}-${String(period.startMonth).padStart(2, "0")}-01`,
+    latestEnd: monthEnd(endYear, period.endMonth),
+    durationDays: durationDays ?? null,
+    label: `${period.label} ${year}${endYear !== year ? `–${endYear}` : ""}`,
+  };
+}
+
 function explicitBudget(message: string): number | undefined {
   const match = message.match(/(?:under|below|within|max(?:imum)?|budget(?:\s+of)?)\s*(?:₹|inr\s*)?([\d,]+(?:\.\d+)?)\s*(k|l| lakh| lakhs)?\b/i)
     ?? message.match(/(?:₹|inr\s*)([\d,]+(?:\.\d+)?)\s*(k|l| lakh| lakhs)?\b/i);
@@ -172,9 +307,37 @@ function explicitLocationQuery(message: string, kind: "origin" | "destination"):
   // the former ASCII-only class dropped the entire destination at the em dash.
   const location = "[\\p{L}\\d][\\p{L}\\p{M}\\d\\s.'’&()\\-/–—]*?";
   const pattern = kind === "origin"
-    ? new RegExp(`\\b(?:from|leaving from|departing from|starting from)\\s+(${location})(?=\\s+(?:to|for|on|starting|between|under|with|and|this|upcoming|next)\\b|[,.!?;]|$)`, "iu")
-    : new RegExp(`\\b(?:to|in|visit(?:ing)?)\\s+(${location})(?=\\s+(?:from|for|on|starting|between|under|with|and|this|upcoming|next)\\b|[,.!?;]|$)`, "iu");
+    ? new RegExp(`\\b(?:from|leaving from|departing from|starting from)\\s+(${location})(?=\\s+(?:to|for|on|in|during|starting|between|under|with|and|this|upcoming|next)\\b|[,.!?;]|$)`, "iu")
+    : new RegExp(`\\b(?:to|in|visit(?:ing)?)\\s+(${location})(?=\\s+(?:from|for|on|in|during|starting|between|under|with|and|this|upcoming|next)\\b|[,.!?;]|$)`, "iu");
   return pattern.exec(message)?.[1]?.trim();
+}
+
+const ordinalIndex = {
+  first: 0, "1st": 0, second: 1, "2nd": 1, third: 2, "3rd": 2, fourth: 3, "4th": 3,
+} as const;
+
+function contextualAction(
+  message: string,
+  context?: ConversationContext,
+): ActiveInteraction["availableActions"][number] | undefined {
+  const actions = context?.activeInteraction?.availableActions ?? [];
+  const normalized = normalizeLocationQuery(message.replace(/\b(?:the|option|one)\b/gi, " "));
+  const exact = actions.find((action) => normalizeLocationQuery(action.label) === normalized);
+  if (exact) return exact;
+  const ordinal = /\b(first|1st|second|2nd|third|3rd|fourth|4th)\b/i.exec(message)?.[1]?.toLowerCase();
+  const index = ordinal ? ordinalIndex[ordinal as keyof typeof ordinalIndex] : undefined;
+  return index === undefined ? undefined : actions[index];
+}
+
+function shortAnswerFor(
+  message: string,
+  field: "origin" | "destination",
+  context?: ConversationContext,
+): string | undefined {
+  if (context?.activeInteraction?.awaitingFields[0] !== field) return undefined;
+  const value = message.trim();
+  if (value.length > 80 || !/^[\p{L}\p{M}\d\s.'’&()\-/–—]+$/u.test(value)) return undefined;
+  return value;
 }
 
 async function deterministicIntent(
@@ -183,40 +346,84 @@ async function deterministicIntent(
   catalog: Awaited<ReturnType<ReturnType<typeof createInventoryRepository>["getPlannerCatalog"]>>,
   repository: ReturnType<typeof createInventoryRepository>,
   today: string,
-): Promise<{ intent: NaturalTripIntent; complete: boolean }> {
-  const originQuery = explicitLocationQuery(message, "origin");
-  const destinationQuery = explicitLocationQuery(message, "destination");
-  const asksForRecommendations = /\b(?:(?:recommend|suggest)\s+(?:a\s+)?(?:destination|place|somewhere)|help me choose|open to|anywhere|somewhere|flexible destination|destination flexible)\b/i.test(message);
-  const dateRange = explicitDateRange(message, today);
-  const travellers = explicitTravellers(message);
+  context?: ConversationContext,
+): Promise<{
+  intent: NaturalTripIntent;
+  complete: boolean;
+  unresolvedOriginQuery?: string;
+  unresolvedDestinationQuery?: string;
+}> {
+  const selectedAction = contextualAction(message, context);
+  const originAction = selectedAction?.type === "set_location" && selectedAction.field === "origin" ? selectedAction : undefined;
+  const destinationAction = selectedAction?.type === "set_location" && selectedAction.field === "destination" ? selectedAction : undefined;
+  const originQuery = explicitLocationQuery(message, "origin") ?? originAction?.label ?? shortAnswerFor(message, "origin", context);
+  const destinationCandidate = explicitLocationQuery(message, "destination") ?? destinationAction?.label ?? shortAnswerFor(message, "destination", context);
+  const asksForRecommendations = selectedAction?.type === "set_open_destination" || /\b(?:(?:recommend|suggest)\s+(?:a\s+)?(?:destination|place|somewhere)|help me choose|open to|anywhere|somewhere|flexible destination|destination flexible|surprise me|nothing in mind|without (?:anything|a destination) in mind|not sure where)\b/i.test(message);
+  // "in mind" is conversational scope, not a destination introduced by "in".
+  const destinationQuery = asksForRecommendations && normalizeLocationQuery(destinationCandidate ?? "") === "mind"
+    ? undefined
+    : destinationCandidate;
+  const dateRange = selectedAction?.type === "set_dates"
+    ? { startDate: selectedAction.startDate, endDate: selectedAction.endDate }
+    : explicitDateRange(message, today);
+  const explicitDateToken = dateRange
+    ? undefined
+    : message.match(/\b(?:20\d{2}-\d{2}-\d{2}|\d{1,2}(?:st|nd|rd|th)?(?:[\s-]+of)?[\s-]+(?:january|february|march|april|may|june|july|august|september|october|november|december)(?:[\s,]+20\d{2})?)\b/i)?.[0];
+  const partialStartDate = explicitDateToken ? parseExplicitDate(explicitDateToken, today) : undefined;
+  const statedDurationDays = explicitDayCount(message);
+  const parsedDateWindow = dateRange || partialStartDate
+    ? undefined
+    : explicitFlexibleDateWindow(message, today);
+  const dateWindow = parsedDateWindow
+    ? {
+        ...parsedDateWindow,
+        durationDays: parsedDateWindow.durationDays
+          ?? statedDurationDays
+          ?? currentRequest.dateWindow?.durationDays
+          ?? null,
+      }
+    : (currentRequest.dateWindow
+      ? {
+          ...toNaturalDateWindow(currentRequest.dateWindow)!,
+          durationDays: statedDurationDays ?? currentRequest.dateWindow.durationDays ?? null,
+        }
+      : undefined);
+  const travellers = selectedAction?.type === "set_travellers"
+    ? [
+        ...Array.from({ length: selectedAction.adults }, (_, index) => ({ id: `traveller:${index + 1}`, type: "adult" as const })),
+        ...Array.from({ length: selectedAction.children }, (_, index) => ({ id: `traveller:${selectedAction.adults + index + 1}`, type: "child" as const })),
+        ...Array.from({ length: selectedAction.seniors }, (_, index) => ({ id: `traveller:${selectedAction.adults + selectedAction.children + index + 1}`, type: "senior" as const })),
+      ]
+    : explicitTravellers(message);
   const budget = explicitBudget(message);
   const paceMatch = /\b(relaxed|relaxing|balanced|packed)\b/i.exec(message)?.[1]?.toLocaleLowerCase("en");
   const pace = paceMatch === "relaxing" ? "relaxed" : paceMatch as NaturalTripIntent["pace"] ?? null;
   const supportedThemes = new Set(catalog.supportedThemes.map((theme) => theme.toLocaleLowerCase("en")));
   const interests = [...supportedThemes].filter(
-    (theme) => theme !== "budget" && new RegExp(`\\b${theme.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}\\b`, "i").test(message),
+    (theme) => theme !== "budget" && theme !== pace && new RegExp(`\\b${theme.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}\\b`, "i").test(message),
   );
   const origin = originQuery
-    ? (await searchLocations({ q: originQuery }, repository)).results[0]
+    ? await resolveLocationQuery(originQuery, catalog.locationGraph, repository)
     : currentRequest.origin ? { id: currentRequest.origin } : undefined;
   const destination = destinationQuery
     ? (await searchLocations({ q: destinationQuery }, repository)).results[0]
     : currentRequest.destination;
-  const destinationIntent: NaturalTripIntent["destination"] = destinationQuery
+  const destinationIntent: NaturalTripIntent["destination"] = destinationQuery && destination
     ? { kind: "specified" as const, query: destinationQuery }
     : asksForRecommendations
       ? { kind: "open" as const }
       : destination && "kind" in destination && destination.kind === "specified"
         ? { kind: "specified" as const, query: destination.locationId }
         : null;
-  const startDate = dateRange?.startDate ?? currentRequest.startDate;
+  const startDate = dateRange?.startDate ?? partialStartDate ?? currentRequest.startDate;
   const endDate = dateRange?.endDate ?? currentRequest.endDate;
   const resolvedTravellers = travellers ?? currentRequest.travellers;
   const intent: NaturalTripIntent = {
-    originQuery: originQuery ?? null,
+    originQuery: originQuery && origin ? originQuery : null,
     destination: destinationIntent,
     startDate: startDate ?? null,
     endDate: endDate ?? null,
+    dateWindow: dateRange || partialStartDate ? null : dateWindow ?? toNaturalDateWindow(currentRequest.dateWindow),
     travellerGroups: resolvedTravellers.length > 0
       ? (["adult", "child", "senior"] as const).flatMap((type) => {
           const count = resolvedTravellers.filter((traveller) => traveller.type === type).length;
@@ -229,6 +436,8 @@ async function deterministicIntent(
   };
   return {
     intent,
+    unresolvedOriginQuery: originQuery && !origin ? originQuery : undefined,
+    unresolvedDestinationQuery: destinationQuery && !destination ? destinationQuery : undefined,
     complete: Boolean(
       origin && destinationIntent && startDate && endDate && resolvedTravellers.length > 0 &&
       (!originQuery || origin.id) && (!destinationQuery || destination),
@@ -240,16 +449,21 @@ function mergeIntent(
   inferred: NaturalTripIntent,
   explicit: NaturalTripIntent,
 ): NaturalTripIntent {
+  const pace = explicit.pace ?? inferred.pace;
+  const interests = explicit.interests.length > 0 ? explicit.interests : inferred.interests;
   return {
     originQuery: explicit.originQuery ?? inferred.originQuery,
     destination: explicit.destination ?? inferred.destination,
     startDate: explicit.startDate ?? inferred.startDate,
     endDate: explicit.endDate ?? inferred.endDate,
+    dateWindow: explicit.startDate || explicit.endDate
+      ? null
+      : explicit.dateWindow ?? inferred.dateWindow,
     travellerGroups: explicit.travellerGroups.length > 0
       ? explicit.travellerGroups
       : inferred.travellerGroups,
-    pace: explicit.pace ?? inferred.pace,
-    interests: explicit.interests.length > 0 ? explicit.interests : inferred.interests,
+    pace,
+    interests: [...new Set(interests.filter((interest) => interest !== pace))],
     constraints: explicit.constraints.length > 0 ? explicit.constraints : inferred.constraints,
   };
 }
@@ -306,24 +520,28 @@ function explicitDayCount(message: string): number | undefined {
   return days >= 2 && days <= 21 ? days : undefined;
 }
 
-function suggestedDateRanges(message: string, today: string, supportedFrom: string, supportedUntil: string) {
-  const durationDays = explicitDayCount(message) ?? 3;
-  if (durationDays < 2 || durationDays > 21) return [];
-  const base = new Date(`${today}T12:00:00Z`);
+function suggestedDateRanges(window: FlexibleDateWindow | undefined, supportedFrom: string, supportedUntil: string) {
+  const durationDays = window?.durationDays;
+  if (!window || !durationDays || durationDays < 2 || durationDays > 21) return [];
+  const earliest = new Date(`${window.earliestStart}T12:00:00Z`);
+  const latestStart = new Date(`${window.latestEnd}T12:00:00Z`);
+  latestStart.setUTCDate(latestStart.getUTCDate() - durationDays + 1);
+  if (latestStart < earliest) return [];
+  const availableDays = Math.round((latestStart.getTime() - earliest.getTime()) / 86_400_000);
   const candidates = [
-    { id: "dates:recommended", prefix: "Recommended", offset: 2 },
-    { id: "dates:next-week", prefix: "Next week", offset: 7 },
-    { id: "dates:following-week", prefix: "Following week", offset: 14 },
+    { id: "dates:early", prefix: "Early", ratio: 0 },
+    { id: "dates:middle", prefix: "Mid", ratio: 0.5 },
+    { id: "dates:late", prefix: "Late", ratio: 1 },
   ];
   const display = (date: Date) => new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", timeZone: "UTC" }).format(date);
-  return candidates.flatMap(({ id, prefix, offset }) => {
-    const start = new Date(base);
-    start.setUTCDate(start.getUTCDate() + offset);
+  return candidates.flatMap(({ id, prefix, ratio }) => {
+    const start = new Date(earliest);
+    start.setUTCDate(start.getUTCDate() + Math.round(availableDays * ratio));
     const end = new Date(start);
     end.setUTCDate(end.getUTCDate() + durationDays - 1);
     const startDate = isoDate(start);
     const endDate = isoDate(end);
-    const label = `${prefix} · ${display(start)} – ${display(end)}`;
+    const label = `${prefix} ${window.label} · ${display(start)} – ${display(end)}`;
     return startDate >= supportedFrom && endDate <= supportedUntil ? [{ id, label, startDate, endDate }] : [];
   });
 }
@@ -394,6 +612,7 @@ export async function runNaturalIntake(
       catalog,
       repository,
       today,
+      parsed.data.context,
     );
   } catch {
     deterministic = {
@@ -402,6 +621,7 @@ export async function runNaturalIntake(
         destination: null,
         startDate: null,
         endDate: null,
+        dateWindow: null,
         travellerGroups: [],
         pace: null,
         interests: [],
@@ -410,7 +630,7 @@ export async function runNaturalIntake(
       complete: false,
     };
   }
-  if (deterministic.complete || !dependencies.model) {
+  if (!dependencies.model) {
     intent = deterministic.intent;
   } else {
     try {
@@ -420,6 +640,7 @@ export async function runNaturalIntake(
           currentRequest: parsed.data.currentRequest,
           today,
           inventoryWindow: { from: meta.supportedFrom, until: meta.supportedUntil },
+          context: parsed.data.context,
         }),
       );
       // Explicitly parsed facts always win. The model only fills ambiguity and
@@ -436,10 +657,24 @@ export async function runNaturalIntake(
   const resolvedLocations: NaturalIntakeResponse["resolvedLocations"] = {};
   const appliedFields: NaturalIntakeResponse["appliedFields"] = [];
 
+  if (!intent.originQuery && deterministic.unresolvedOriginQuery) {
+    issues.push({
+      code: "UNSUPPORTED_ORIGIN",
+      field: "origin",
+      message: `“${deterministic.unresolvedOriginQuery}” is not a supported origin location.`,
+    });
+  }
+  if (!intent.destination && deterministic.unresolvedDestinationQuery) {
+    issues.push({
+      code: "UNSUPPORTED_DESTINATION",
+      field: "destination",
+      message: `“${deterministic.unresolvedDestinationQuery}” does not resolve to a supported destination market.`,
+    });
+  }
+
   if (intent.originQuery) {
     try {
-      const result = await searchLocations({ q: intent.originQuery }, repository);
-      const origin = result.results[0];
+      const origin = await resolveLocationQuery(intent.originQuery, catalog.locationGraph, repository);
       if (origin) {
         patch.origin = origin.id;
         resolvedLocations.origin = { id: origin.id, label: origin.name };
@@ -467,8 +702,7 @@ export async function runNaturalIntake(
     appliedFields.push("destination");
   } else if (intent.destination?.kind === "specified") {
     try {
-      const result = await searchLocations({ q: intent.destination.query }, repository);
-      const location = result.results[0];
+      const location = await resolveLocationQuery(intent.destination.query, catalog.locationGraph, repository);
       const marketId = location
         ? marketForLocation(location.id, catalog.locationGraph, new Set(catalog.marketIds))
         : undefined;
@@ -503,6 +737,9 @@ export async function runNaturalIntake(
       ? addCalendarDays((extractedStartDate ?? parsed.data.currentRequest.startDate)!, dayCount - 1)
     : null;
   const extractedEndDate = intent.endDate ?? relativeDates?.endDate ?? derivedEndDate ?? null;
+  const proposedDateWindow = extractedStartDate || extractedEndDate
+    ? undefined
+    : toFlexibleDateWindow(intent.dateWindow ?? parsed.data.currentRequest.dateWindow);
   if (extractedStartDate || extractedEndDate) {
     const proposedStart = extractedStartDate ?? parsed.data.currentRequest.startDate;
     const proposedEnd = extractedEndDate ?? parsed.data.currentRequest.endDate;
@@ -532,6 +769,29 @@ export async function runNaturalIntake(
     }
   }
 
+  if (proposedDateWindow) {
+    if (proposedDateWindow.latestEnd < proposedDateWindow.earliestStart) {
+      issues.push({
+        code: "INVALID_DATE_RANGE",
+        field: "dates",
+        message: "The flexible travel window must end on or after it starts.",
+      });
+    } else {
+      patch.dateWindow = proposedDateWindow;
+      appliedFields.push("date_window");
+      if (
+      proposedDateWindow.earliestStart < meta.supportedFrom ||
+      proposedDateWindow.latestEnd > meta.supportedUntil
+      ) {
+        issues.push({
+          code: "OUTSIDE_INVENTORY_WINDOW",
+          field: "dates",
+          message: `${proposedDateWindow.label} is saved as your preferred travel window, but the current demo inventory only covers ${meta.supportedFrom} to ${meta.supportedUntil}.`,
+        });
+      }
+    }
+  }
+
   const travellers = explicitTravellers(parsed.data.message) ?? travellersFor(intent);
   if (travellers) {
     patch.travellerHints = travellers.map(({ type, mobility }) => ({ type, mobility }));
@@ -556,6 +816,9 @@ export async function runNaturalIntake(
     destination: patch.destination ?? parsed.data.currentRequest.destination,
     startDate: patch.startDate ?? parsed.data.currentRequest.startDate,
     endDate: patch.endDate ?? parsed.data.currentRequest.endDate,
+    dateWindow: extractedStartDate || extractedEndDate
+      ? undefined
+      : patch.dateWindow ?? parsed.data.currentRequest.dateWindow,
     travellers: travellers ?? parsed.data.currentRequest.travellers,
     preferences: {
       ...parsed.data.currentRequest.preferences,
@@ -571,7 +834,7 @@ export async function runNaturalIntake(
   const missingRequired = checkRequirements(next).missingRequired;
   const dateSuggestions = next.startDate && next.endDate
     ? []
-    : suggestedDateRanges(parsed.data.message, today, meta.supportedFrom, meta.supportedUntil);
+    : suggestedDateRanges(next.dateWindow, meta.supportedFrom, meta.supportedUntil);
 
   return naturalIntakeResponseSchema.parse({
     request: next,

@@ -58,6 +58,21 @@ function entry(id: string, role: ConversationEntry["role"]): ConversationEntry {
 }
 
 describe("workspace reducer", () => {
+  it("restores a persisted workspace as idle without reviving an old error", () => {
+    const saved: WorkspaceState = {
+      ...initialWorkspaceState,
+      itinerary: { request, trip, projection },
+      asyncStatus: "error",
+      error: { code: "OLD", message: "Old failure", retryable: true },
+      conversation: [entry("message:saved", "assistant")],
+    };
+
+    const next = workspaceReducer(initialWorkspaceState, { type: "workspace_restored", state: saved });
+    expect(next.itinerary.trip).toBe(trip);
+    expect(next.conversation).toHaveLength(1);
+    expect(next.asyncStatus).toBe("idle");
+    expect(next.error).toBeUndefined();
+  });
   it("starts without assuming a traveller count or pace", () => {
     expect(initialWorkspaceState.itinerary.request.travellers).toEqual([]);
     expect(initialWorkspaceState.itinerary.request.preferences.pace).toBeUndefined();

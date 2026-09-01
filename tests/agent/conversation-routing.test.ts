@@ -24,4 +24,8 @@ describe("committed conversation routing", () => {
   it("rejects unrelated requests", () => {
     expect(classifyCommittedConversation("Write a sorting algorithm", trip)).toBe("unsupported");
   });
+
+  it("keeps deterministic fallback coverage for conversational turns", () => {
+    expect(classifyCommittedConversation("Thanks!", trip)).toBe("conversational");
+  });
 });

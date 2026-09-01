@@ -14,12 +14,13 @@ import {
 export async function generateAssistantCommunication(
   context: CommunicationContext,
   timeoutMs = resolveOpenAITimeoutMs("communication"),
+  correlationId?: string,
 ): Promise<CommunicationOutput> {
   const config = getOpenAIModelConfig("communication");
   return composeCommunication(
     context,
     config
-      ? createOpenAICommunicationModel({ ...config, timeoutMs })
+      ? createOpenAICommunicationModel({ ...config, timeoutMs, correlationId })
       : undefined,
   );
 }
@@ -27,10 +28,11 @@ export async function generateAssistantCommunication(
 export async function generateAssistantMessage(
   fallbackMessage: string,
   context: Omit<CommunicationContext, "fallbackMessage">,
+  correlationId?: string,
 ): Promise<string> {
   const communication = await generateAssistantCommunication({
     ...context,
     fallbackMessage,
-  });
+  }, resolveOpenAITimeoutMs("communication"), correlationId);
   return communication.message;
 }

@@ -47,8 +47,9 @@ export function intakePresentation(
   ));
   const actions: GuidedAction[] = [];
   let message = result.message;
+  const progressiveOpenField = result.request.destination?.kind === "open" ? firstMissing : undefined;
 
-  if (missingSet.has("origin")) {
+  if (missingSet.has("origin") && (!progressiveOpenField || progressiveOpenField === "origin")) {
     actions.push(...originSuggestions.slice(0, 2).map((location) => ({
       id: `${operationId}:origin:${location.id}`,
       type: "set_location" as const,
@@ -57,19 +58,37 @@ export function intakePresentation(
       label: location.label,
     })));
   }
-  if (missingSet.has("destination_intent")) {
+  if (missingSet.has("destination_intent") && (!progressiveOpenField || progressiveOpenField === "destination_intent")) {
     actions.push({ id: `${operationId}:destination:open`, type: "set_open_destination", label: "Help me choose" });
   }
-  if (missingSet.has("dates")) {
+  if (missingSet.has("dates") && (!progressiveOpenField || progressiveOpenField === "dates")) {
     actions.push(...result.suggestedDateRanges.map((range) => ({
       id: `${operationId}:dates:${range.id}`,
       type: "set_dates" as const,
       startDate: range.startDate,
       endDate: range.endDate,
       label: range.label,
-    })));
+    }))); 
+    if (result.suggestedDateRanges.length === 0) {
+      const outsideInventory = result.issues.some((issue) => issue.code === "OUTSIDE_INVENTORY_WINDOW");
+      const reason = outsideInventory
+        ? "change_window" as const
+        : result.request.dateWindow
+          ? "missing_duration" as const
+          : "missing_window" as const;
+      actions.push({
+        id: `${operationId}:dates:recommend`,
+        type: "request_date_recommendation",
+        reason,
+        label: reason === "change_window"
+          ? "Choose another travel window"
+          : result.request.dateWindow
+            ? "Recommend dates in this window"
+            : "Help me choose dates",
+      });
+    }
   }
-  if (missingSet.has("travellers")) {
+  if (missingSet.has("travellers") && (!progressiveOpenField || progressiveOpenField === "travellers")) {
     actions.push(
       { id: `${operationId}:travellers:solo`, type: "set_travellers", adults: 1, children: 0, seniors: 0, label: "Just me" },
       { id: `${operationId}:travellers:two`, type: "set_travellers", adults: 2, children: 0, seniors: 0, label: "2 adults" },
@@ -78,7 +97,14 @@ export function intakePresentation(
   }
   if (result.missingRequired.length > 0) {
     const missingLabels = essentials.filter((item) => missingSet.has(item.requirement)).map((item) => item.label.toLocaleLowerCase("en"));
-    message = `I added the details I could verify. To start planning, complete ${missingLabels.join(", ")}. The checklist and highlighted Trip Brief fields will update as you add them.`;
+    const firstMissingLabel = essentials.find((item) => item.requirement === firstMissing)?.label.toLocaleLowerCase("en");
+    const dateWindowCopy = result.request.dateWindow
+      ? ` I’ve kept ${result.request.dateWindow.label}${result.request.dateWindow.durationDays ? ` and the ${result.request.dateWindow.durationDays}-day duration` : ""} as a flexible window rather than inventing exact dates.`
+      : "";
+    const issueCopy = result.issues[0] ? ` ${result.issues[0].message}` : "";
+    message = result.request.destination?.kind === "open"
+      ? `Absolutely — we can shape this together without choosing everything up front.${dateWindowCopy}${issueCopy} Let’s start with ${firstMissingLabel ?? missingLabels[0]}; the suggestions are only starting points and you can change them anytime.`
+      : `I added the details I could verify.${dateWindowCopy}${issueCopy} To start planning, complete ${missingLabels.join(", ")}. The checklist and highlighted Trip Brief fields will update as you add them.`;
   } else if (result.issues.length > 0) {
     const issue = result.issues[0]!;
     message = `${issue.message} You can update that detail and I’ll continue from the rest of your brief.`;

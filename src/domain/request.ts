@@ -114,10 +114,22 @@ export const destinationIntentSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("open") }).strict(),
 ]);
 
+export const flexibleDateWindowSchema = z.object({
+  kind: z.literal("flexible_window"),
+  earliestStart: isoDateSchema,
+  latestEnd: isoDateSchema,
+  durationDays: z.number().int().min(2).max(21).optional(),
+  label: z.string().trim().min(1).max(80),
+}).strict().refine((value) => value.latestEnd >= value.earliestStart, {
+  message: "Flexible date window must end on or after it starts",
+  path: ["latestEnd"],
+});
+
 function validateRequestRelationships(
   value: {
     startDate?: string;
     endDate?: string;
+    dateWindow?: unknown;
     travellers: Array<{ id: string }>;
     constraints: Constraint[];
   },
@@ -128,6 +140,14 @@ function validateRequestRelationships(
       code: z.ZodIssueCode.custom,
       message: "Trip end date must be after start date",
       path: ["endDate"],
+    });
+  }
+
+  if (value.dateWindow && (value.startDate || value.endDate)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Exact dates and a flexible date window cannot be active at the same time",
+      path: ["dateWindow"],
     });
   }
 
@@ -169,6 +189,7 @@ const requestFields = {
   destination: destinationIntentSchema.optional(),
   startDate: isoDateSchema.optional(),
   endDate: isoDateSchema.optional(),
+  dateWindow: flexibleDateWindowSchema.optional(),
   travellers: z.array(travellerSchema),
   preferences: z
     .object({
@@ -188,6 +209,7 @@ export const plannableTripRequestSchema = z
     destination: destinationIntentSchema,
     startDate: isoDateSchema,
     endDate: isoDateSchema,
+    dateWindow: z.undefined().optional(),
     travellers: z.array(travellerSchema).min(1),
   })
   .strict()
@@ -199,6 +221,7 @@ export const requestPatchSchema = z
     destination: destinationIntentSchema.optional(),
     startDate: isoDateSchema.optional(),
     endDate: isoDateSchema.optional(),
+    dateWindow: flexibleDateWindowSchema.optional(),
     pace: z.enum(["relaxed", "balanced", "packed"]).optional(),
     interests: z.array(z.string().trim().min(1)).max(20).optional(),
     upsertConstraints: z.array(constraintDraftSchema).optional(),

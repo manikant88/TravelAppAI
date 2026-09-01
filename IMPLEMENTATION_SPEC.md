@@ -254,11 +254,20 @@ export type DestinationIntent =
   | { kind: "specified"; locationId: LocationID }
   | { kind: "open" };
 
+export interface FlexibleDateWindow {
+  kind: "flexible_window";
+  earliestStart: ISODate;
+  latestEnd: ISODate;
+  durationDays?: number;
+  label: string;
+}
+
 export interface TripRequest {
   origin?: LocationID;
   destination?: DestinationIntent;
   startDate?: ISODate;
   endDate?: ISODate;
+  dateWindow?: FlexibleDateWindow;
   travellers: Traveller[];
   preferences: {
     pace?: TripPace;
@@ -293,6 +302,8 @@ export interface RequirementCheck {
 ```
 
 Planning starts exactly when `missingRequired` is empty. `canPlan` is derived, not stored.
+
+A month, range of months, season, or broad period is stored as `dateWindow`; it never becomes an invented exact range. A flexible window places the conversation in exploration mode while `dates` remains a missing execution requirement. The UI must offer manual date entry or bounded ranges inside that window. If no timing information was supplied, it asks whether the user wants to add dates or provide a window for recommendations; it must not default to near-term dates.
 
 ---
 
@@ -983,6 +994,21 @@ export interface RequestPatch {
 ```
 
 Code resolves locations, dates, semantic constraint keys, traveller IDs, and all patches. After a trip exists, changes use proposals rather than direct request patches.
+
+Free-form conversation is mediated by one bounded server-side orchestrator. The
+client supplies a unique turn ID and a maximum-eight-turn `ConversationContext`.
+The context includes app-owned `ActiveInteraction` state: exploration/build
+mode, current task, awaited fields, last assistant message, and only the guided
+actions actually presented to the user. A short follow-up may fill an awaited
+field or reference one of those actions, but history never replaces the
+canonical `TripRequest` or `TripState`.
+
+When a model is configured, free-form turns use strict model-first semantic
+interpretation. Deterministically extracted facts win during intake, and all
+canonical IDs, inventory, dates, totals, constraints, locks, proposals, and
+mutations remain code-owned. Model failure uses a bounded deterministic fallback
+and is recorded as degraded execution. Explicit UI actions bypass semantic
+routing and dispatch their typed operation directly.
 
 The intake model returns semantic location queries, an open/specified destination signal, explicitly stated calendar dates, traveller groups, preferences, and typed constraint drafts. It never returns normalized location IDs. Code resolves origin queries against active locations, maps a destination child to its declared market through the location graph, validates dates against the seeded window, assigns stable draft traveller and constraint IDs, applies the patch to the canonical draft, and computes missing requirements deterministically. The user reviews the populated Trip Brief before discovery or PLAN begins; intake never commits a trip.
 

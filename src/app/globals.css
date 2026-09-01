@@ -318,8 +318,10 @@ h1, h2, h3, p { margin-top: 0; }
 .card-price { white-space: nowrap; }
 .card-price strong { font-family: var(--heading); font-size: 20px; }
 .card-price span { margin-left: 4px; color: var(--muted); font-size: 12px; text-transform: capitalize; }
-.card-grounding { display: flex; min-height: 48px; margin: 0 16px 16px; padding: 10px 16px; align-items: center; justify-content: flex-start; gap: 9px; border: 1px solid #bfd8fa; border-radius: 7px; background: #eaf3ff; color: #34445a; font-size: 12px; line-height: 1.45; text-align: left; }
-.card-grounding > i { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: #dff7e7; color: var(--success); font-size: 11px; font-style: normal; font-weight: 900; }
+.card-grounding { display: flex; min-height: 56px; margin: 0 16px 16px; padding: 11px 14px; align-items: flex-start; justify-content: flex-start; gap: 11px; border: 1px solid #b9d8fb; border-radius: 8px; background: linear-gradient(105deg, #edf6ff 0%, #e9f2ff 55%, #f2efff 100%); color: #34445a; font-size: 12px; line-height: 1.45; text-align: left; }
+.card-grounding > i { display: grid; width: 28px; height: 28px; flex: 0 0 auto; place-items: center; border: 1px solid rgb(83 133 230 / 20%); border-radius: 9px; background: linear-gradient(135deg, #d9f3ff, #e8e2ff); box-shadow: 0 3px 10px rgb(47 99 190 / 10%); color: #496fc5; font-size: 11px; font-style: normal; font-weight: 900; }
+.card-grounding > div { display: grid; min-width: 0; gap: 2px; }
+.card-grounding > div > span { color: #34445a; }
 .transfer-card-body { display: grid; min-height: 160px; padding: 16px; grid-template-columns: 240px 1fr; gap: 24px; }
 .transfer-illustration { display: grid; min-height: 128px; place-items: center; border-radius: 7px; background: linear-gradient(135deg, #f4f6f8, #dfe4e9); font-size: 68px; }
 .transfer-card-body h3, .activity-card-body h3, .hotel-details h3 { margin: 0 0 6px; font-family: var(--heading); font-size: 20px; }

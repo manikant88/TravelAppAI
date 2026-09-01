@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isoDateSchema, tripRequestSchema } from "@/domain/request";
 import type { ConstraintDraft, MissingRequirement, TripRequest } from "@/domain/model";
+import { conversationContextSchema } from "@/agent/conversation-contracts";
 
 const nullableTextSchema = z.string().trim().min(1).max(160).nullable();
 
@@ -8,6 +9,20 @@ export const naturalDestinationIntentSchema = z.union([
   z.object({ kind: z.literal("specified"), query: z.string().trim().min(1).max(160) }).strict(),
   z.object({ kind: z.literal("open") }).strict(),
 ]);
+
+// OpenAI structured outputs require every object property to be present. The
+// durable request uses an optional duration because a user may name only a
+// month or season; the model boundary represents that absence explicitly as
+// null and is normalized before it enters application state.
+export const naturalFlexibleDateWindowSchema = z
+  .object({
+    kind: z.literal("flexible_window"),
+    earliestStart: isoDateSchema,
+    latestEnd: isoDateSchema,
+    durationDays: z.number().int().min(2).max(21).nullable(),
+    label: z.string().trim().min(1).max(80),
+  })
+  .strict();
 
 export const naturalTravellerGroupSchema = z
   .object({
@@ -115,6 +130,7 @@ export const naturalTripIntentSchema = z
     destination: naturalDestinationIntentSchema.nullable(),
     startDate: isoDateSchema.nullable(),
     endDate: isoDateSchema.nullable(),
+    dateWindow: naturalFlexibleDateWindowSchema.nullable(),
     travellerGroups: z.array(naturalTravellerGroupSchema).max(6),
     pace: z.enum(["relaxed", "balanced", "packed"]).nullable(),
     interests: z.array(z.string().trim().min(1).max(80)).max(20),
@@ -186,6 +202,7 @@ export const naturalIntakeRequestSchema = z
   .object({
     message: z.string().trim().min(3).max(1_200),
     currentRequest: tripRequestSchema,
+    context: conversationContextSchema.optional(),
   })
   .strict();
 
@@ -216,7 +233,7 @@ export const naturalIntakeResponseSchema = z
       })
       .strict(),
     appliedFields: z.array(
-      z.enum(["origin", "destination", "dates", "travellers", "pace", "interests", "constraints"]),
+      z.enum(["origin", "destination", "dates", "date_window", "travellers", "pace", "interests", "constraints"]),
     ),
     missingRequired: z.array(z.enum(["origin", "destination_intent", "dates", "travellers"])),
     suggestedDateRanges: z.array(z.object({

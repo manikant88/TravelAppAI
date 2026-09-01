@@ -62,6 +62,7 @@ export interface OpenAIPlannerModelOptions {
   runner?: StructuredResponseRunner;
   timeoutMs?: number;
   reasoningEffort?: OpenAIReasoningEffort;
+  correlationId?: string;
 }
 
 const contextualTravelAnswerSchema = z.object({ message: z.string().trim().min(1).max(420) }).strict();
@@ -108,9 +109,10 @@ export function createOpenAITravelContextModel(
 
 const naturalIntakeInstructions = `You are the natural-language intent extraction layer of one bounded travel planner.
 Extract only details the user explicitly states or unambiguously implies. Return null or an empty array for details that are absent; do not copy defaults from the current structured brief into the extraction.
+Use activeInteraction as the authoritative conversational task when it is supplied. A short reply such as "Delhi", "the second one", or "2 adults" should answer the field currently being awaited and may select only from supplied availableActions. Recent history is supporting context, not canonical trip state.
 Return location names or airport codes as text queries. Code resolves them to normalized inventory IDs. Never invent location IDs.
-Use destination kind open only when the user asks for recommendations or does not want to choose a destination. Otherwise return the stated destination as a text query.
-Convert explicitly stated calendar dates and unambiguous relative phrases such as "this weekend" or "upcoming weekend" to YYYY-MM-DD using the supplied current date. When the user supplies a start date and an explicit number of nights, set endDate to startDate plus that many calendar nights. Do not shift a date merely to fit the inventory window. Do not invent dates, durations, or a year when the phrase is genuinely ambiguous.
+Use destination kind open when the user asks for recommendations, says they have nothing in mind, or wants to explore before choosing a destination. Otherwise return the stated destination as a text query.
+Convert explicitly stated calendar dates and unambiguous relative phrases such as "this weekend" or "upcoming weekend" to YYYY-MM-DD using the supplied current date. When the user supplies a start date and an explicit number of nights, set endDate to startDate plus that many calendar nights. When the user supplies only a month, month range, season, or broad period, keep startDate and endDate null and return a flexible dateWindow that preserves that period and any stated duration. Do not choose exact dates merely because a window was supplied. Do not shift a date merely to fit the inventory window. Do not invent dates, durations, or a year when the phrase is genuinely ambiguous.
 Create one traveller group per explicitly stated traveller type. When the user gives a total party size and says it includes a child or senior, preserve the stated total and assign the remainder to adults (for example, "6 people including my 4-year-old" means 5 adults and 1 child). Do not infer children, seniors, mobility needs, or traveller counts that are not stated.
 Classify "must", "only", "under", "no", and equivalent non-negotiable language as hard constraints. Treat ordinary preferences as strong or flexible. Maximum budgets use maxTotal; approximate budgets use targetTotal.
 Interests are soft themes, not inventory facts. Do not invent prices, availability, schedules, recommendations, or explanations. Do not expose hidden reasoning.`;
@@ -133,10 +135,14 @@ export function createOpenAINaturalIntakeModel(
   };
 }
 
-const conversationRouterInstructions = `You route one user message inside an existing travel-planning conversation.
+const conversationRouterInstructions = `You route one free-form user turn inside an existing bounded travel-planning conversation.
+Choose select_presented_action when the user is selecting one of activeInteraction.availableActions by its label, position, or a short reference such as "the second one". In that case copy exactly that supplied action ID into actionId. Never invent an action ID.
+Choose activity_suggestion when the user wants ideas or additional grounded activities but has not directly identified a current itinerary card to change.
 Choose modify_trip when the user asks to add, remove, replace, preserve, lock, unlock, constrain, relax, or otherwise change the committed trip.
-Choose explain_trip when the user asks why, how, what, when, where, how much, or requests context about the current committed trip without asking to change it.
-Use only the supplied message and canonical trip. Do not answer the user, plan a trip, invent facts, or mutate state. Return only the schema-constrained intent.`;
+Choose explain_trip when the user asks about a fact, choice, price, schedule, or trade-off already contained in the canonical itinerary.
+Choose travel_context for general destination, seasonal, cultural, neighbourhood, or place questions that are relevant to this trip but are not facts in its canonical itinerary.
+Choose conversational only for greetings, thanks, help, or capability questions. Choose unsupported for unrelated requests.
+Use the active interaction and recent history to understand short follow-ups such as "that one" or "for day 2". For every intent other than select_presented_action, actionId must be null. The canonical trip remains authoritative. Do not answer the user, plan a trip, invent facts, resolve IDs, or mutate state. Return only the schema-constrained intent.`;
 
 export function createOpenAIConversationRouterModel(
   options: OpenAIPlannerModelOptions,
@@ -356,7 +362,7 @@ function createOpenAIRunner(options: OpenAIPlannerModelOptions): StructuredRespo
   return {
     async run<T>(request: StructuredResponseRequest<T>) {
       const startedAt = Date.now();
-      const clientRequestId = createOpenAIClientRequestId(request.schemaName);
+      const clientRequestId = createOpenAIClientRequestId(request.schemaName, options.correlationId);
       const signal = AbortSignal.timeout(timeoutMs);
       try {
         const response = await client.responses.parse(
@@ -537,6 +543,13 @@ Reference only supplied candidate and fact IDs, and only comparison dimensions s
 All hard constraints, prices, dates, locks, proposal construction, validation, and state mutation belong to code.
 Do not invent facts or expose hidden reasoning.`;
 
+// OpenAI structured outputs require the root schema to be an object. The
+// modification intent itself is a discriminated union, so keep that reusable
+// domain contract and wrap it only at the model boundary.
+const modificationIntentOutputSchema = z.object({
+  intent: scopedModificationIntentSchema,
+}).strict();
+
 export function createOpenAIModificationModel(
   options: OpenAIPlannerModelOptions,
 ): ModificationPlannerModel {
@@ -547,11 +560,11 @@ export function createOpenAIModificationModel(
   return {
     interpretModification(input) {
       return runStructured(runner, {
-        schema: scopedModificationIntentSchema,
+        schema: modificationIntentOutputSchema,
         schemaName: "travel_modification_intent",
         instructions: modificationIntentInstructions,
         input: jsonForModel(input),
-      });
+      }).then((output) => output.intent);
     },
     recommendModification(input) {
       return runStructured(runner, {

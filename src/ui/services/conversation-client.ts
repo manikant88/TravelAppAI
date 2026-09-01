@@ -1,11 +1,20 @@
 import type { CommunicationContext } from "@/agent/interaction-contracts";
+import type { ConversationContext } from "@/agent/conversation-contracts";
 import type { TripRequest, TripState } from "@/domain/model";
 import { postAgentJson } from "@/ui/services/agent-http";
 
-export function interpretTripBrief(message: string, currentRequest: TripRequest) {
+function clientTurnId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `turn-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function interpretTripBrief(
+  message: string,
+  currentRequest: TripRequest,
+  context?: ConversationContext,
+) {
   return postAgentJson(
     "/api/agent/conversation",
-    { phase: "draft", message, currentRequest },
+    { phase: "draft", clientTurnId: clientTurnId(), message, currentRequest, context },
     { code: "INTAKE_FAILED", message: "The trip brief could not be interpreted." },
   );
 }
@@ -13,11 +22,13 @@ export function interpretTripBrief(message: string, currentRequest: TripRequest)
 export function continueTripConversation(payload: {
   message: string;
   trip: TripState;
-  conversationHistory: Array<{ role: "user" | "assistant"; text: string }>;
+  context: ConversationContext;
+  selectionId?: string;
+  targetDate?: string;
 }) {
   return postAgentJson(
     "/api/agent/conversation",
-    { phase: "committed", ...payload },
+    { phase: "committed", clientTurnId: clientTurnId(), ...payload },
     { code: "CONVERSATION_FAILED", message: "The assistant could not complete that request." },
   );
 }
