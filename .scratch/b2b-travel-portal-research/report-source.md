@@ -1,0 +1,358 @@
+# B2B travel portals and supplier APIs
+
+## What the Reddit thread means for Travel App AI
+
+**Decision research - India-first consumer and group travel product**  
+**Current through 6 September 2026**
+
+## Executive decision
+
+The Reddit thread is useful as a list of names, not as a provider recommendation. The discussion is a small anecdotal exchange in which an agent asks for portals similar to TBO that can book hotels and transfers and generate agency-branded vouchers. Replies mention Restel, Bedsonline, Bonotel, Nuitee, Project Expedition, and RateHawk. It does not compare India coverage, API access, commercial terms, booking success, post-booking support, or supplier liability. Search results around this topic are also unusually saturated with travel-technology vendors publishing promotional comparisons.
+
+Travel App AI should not become a classic B2B agent portal simply because these suppliers exist. Its chosen customer is a traveller or group organizer who needs a feasible, explainable, collaborative trip. A B2B wholesaler or distribution API is infrastructure behind that product. The product should continue to own the itinerary, constraints, provenance, approvals, and comparison experience.
+
+The recommended next experiment is a hotel supplier adapter using **Nuitee Connect (LiteAPI)** sandbox, while beginning commercial conversations with **TBO**, **HBX/Hotelbeds**, and **RateHawk** in parallel. Nuitee has the clearest immediate developer path found in this research: a free sandbox key, search -> prebook -> book simulation, multi-room requests, cancellation terms, and documented idempotency. This makes it suitable for proving Travel App AI's canonical `StayOffer` boundary. It is not yet the default production supplier; India inventory quality, landed prices, support, settlement, content rights, and production terms still require a measured bake-off.
+
+Keep Google Places and Routes as discovery and feasibility evidence. They do not become booking inventory. Keep intercity transport suppliers on a separate track: Google Routes can estimate road journeys and return some scheduled transit, but it cannot prove seat availability, ticket price, or booking rights. Flight booking through Amadeus Self-Service requires production eligibility and an airline consolidator for ticket issuance. TBO may eventually cover several travel verticals, but its public material does not provide instant, self-serve production API access or public commercial pricing.
+
+## 1. What a "B2B travel portal" can mean
+
+The phrase is used for several materially different products. Choosing the wrong category changes what Travel App AI owns and can safely promise.
+
+| Model | What the provider supplies | What Travel App AI owns | Primary use |
+| --- | --- | --- | --- |
+| Agent portal | A logged-in website where an agent manually searches and books net or commissionable inventory | Client relationship and any itinerary assembled outside the portal | Concierge operations and early manual validation |
+| White-label storefront | A provider-hosted or provider-controlled booking interface under a partner brand | Acquisition and some presentation; workflow and data flexibility are constrained | Fast storefront launch |
+| Affiliate or redirect API | Search/content/deep links; traveller completes purchase with supplier | Planning, comparison, attribution, and handoff | Lower operational responsibility and faster launch |
+| Search-and-book API | Live search, price check, booking, cancellation, and sometimes payment/post-booking | Customer UX, orchestration, support boundary, reconciliation, and truthful state | Embedded booking product |
+| GDS, consolidator, or direct contract | Airline or supplier distribution and ticketing capability | Much larger fulfilment, finance, support, and compliance burden | Mature booking operation |
+
+The first two can help a travel agency, but they do not automatically provide a programmable product foundation. A manual portal may be useful for a concierge pilot and for checking whether suggested options are actually bookable. It must not be scraped, automated without permission, or represented to users as a live API integration.
+
+## 2. What the Reddit suggestions are actually good for
+
+### TBO
+
+TBO is the most strategically relevant name in the thread for an India-first company. Its [official platform description](https://www.tbo.com/) positions it as a distribution network connecting retail and API buyers with hotels, airlines, cruises, car rentals, transfers, and rail suppliers. Its [API page](https://www.tbo.com/tbo-api) advertises real-time availability, pricing, cards/VCC/credit facilities, and dedicated API support. Its public pages also describe [air](https://www.tbo.com/tbo-air), [hotels](https://www.tbo.com/tbo-hotels), [transfers](https://www.tbo.com/tbo-transfers), [sightseeing](https://www.tbo.com/tbo-sightseeing), and [cruises](https://www.tbo.com/tbo-cruise).
+
+This breadth makes TBO worth an application and technical discovery call. Public pages do not establish the production API approval criteria, deposit or credit requirements, India-specific inventory quality, cancellation automation, API service levels, or commercial rates that Travel App AI would receive. TBO's application flow is reviewed rather than an open self-serve developer sandbox. Treat the published inventory and buyer counts as first-party scale claims, not measured evidence for this product.
+
+**Fit:** high strategic potential; medium near-term testability; commercial diligence required.
+
+### HBX/Hotelbeds and Bedsonline
+
+Bedsonline is a travel-advisor portal, while HBX/Hotelbeds exposes the technical API suite. The distinction matters. [Bedsonline](https://discover.bedsonline.com/en-na/) is positioned as an agent-only booking platform. Its registration material says applicants must prove they are travel agents. That can support a manual concierge workflow, but it is not the API product to build against.
+
+The [HBX developer platform](https://developer.hotelbeds.com/) exposes hotel, activity, transfer, and car-rental API families. Its [getting-started guide](https://developer.hotelbeds.com/documentation/getting-started/) provides evaluation credentials and a non-production environment, then requires certification for production. The evaluation allowance is 50 requests per day. This is enough for schema discovery and adapter tests, though not a realistic performance or coverage load test.
+
+**Fit:** strong multi-vertical candidate and good second sandbox; production certification and commercial terms remain gates.
+
+### RateHawk
+
+[RateHawk API](https://www.ratehawk.com/lp/en-us/API/) offers hotel connectivity, content, bookings, and support. New integrations receive an API key and complete certification. RateHawk introduced a dedicated [sandbox](https://blog.ratehawk.com/introducing-the-ratehawk-api-sandbox/) with mock scenarios for search, taxes, price changes, meals, bookings, and cancellations. Its [booking cancellation API](https://docs.emergingtravel.com/docs/b2b-api/post-booking/cancel-booking/) uses a partner order identifier and separates sandbox from production.
+
+RateHawk is credible enough for a controlled bake-off. Its public inventory and performance figures are marketing claims, and its sandbox is sample inventory rather than evidence of live India coverage. Certification is product-specific and public pricing is absent.
+
+**Fit:** strong hotel candidate; good lifecycle testing; verify India supply and settlement.
+
+### Nuitee Connect / LiteAPI
+
+[Nuitee Connect documentation](https://docs.liteapi.travel/reference/overview) offers a direct search -> prebook -> book flow. Every account can obtain a free sandbox key and simulate bookings before adding a payment method, according to the [booking guide](https://docs.liteapi.travel/docs/booking-a-room). The rate endpoint accepts check-in, check-out, nationality, currency, and multiple room occupancies and returns live pricing, rooms, policies, and content in production. The [booking endpoint](https://docs.liteapi.travel/reference/post_rates-book) accepts a client reference that acts as an idempotency key.
+
+Its [published API pricing](https://docs.liteapi.travel/reference/api-pricing-usage-costs) says the core hotel search/prebook/book workflow is free within its terms and a reasonable look-to-book ratio; premium price-index and places endpoints have usage charges, and flight ticketing/servicing has separate fees. These are current public list terms and can change or be superseded by a commercial agreement.
+
+This is the best immediate engineering experiment because it can validate dates, occupancy, rate terms, price re-checks, booking state, cancellation, and duplicate prevention without waiting for a sales approval cycle.
+
+**Fit:** best first sandbox; production quality and economics require measurement.
+
+### Booking.com Demand API
+
+The [Demand API](https://developers.booking.com/demand/docs) supports content-only, search-and-redirect, search-and-book, and post-booking models. Its [sandbox](https://developers.booking.com/demand/docs/getting-started/sandbox) simulates accommodation search, pricing, booking, modification, and cancellation. Access requires registration as a managed affiliate partner, API credentials, and an affiliate ID. Embedded search-and-book requires approval, a sound business case, and an appropriate agreement, as stated in the [accommodation tutorial](https://developers.booking.com/demand/docs/accommodations/accommodation-tutorial).
+
+Booking.com is attractive for a future redirect or managed affiliate route because the product can start with handoff and later seek order access. It is not instant anonymous sandbox access. The sandbox uses sample properties and does not demonstrate Jaipur or India production inventory.
+
+**Fit:** strong handoff and later booking candidate; partner admission is the gating risk.
+
+### Expedia Rapid
+
+Expedia Rapid provides lodging shopping, price check, booking, and post-booking capabilities. Its [launch requirements](https://developers.expediagroup.com/rapid/setup/launch-requirements/launch-requirements) require a site review before production. The detailed [B2C lodging requirements](https://developers.expediagroup.com/rapid/setup/launch-requirements/b2c-standalone) require transparent cancellation and fee displays, secure personal-data transport, accurate traveller data, support contact details, and a unique affiliate reference to help prevent duplicate bookings. The [Booking API](https://developers.expediagroup.com/rapid/lodging/booking/about-booking-api) supports reservations from a price-check result and notes India-specific tax-identifier handling for some INR transactions.
+
+Rapid is a mature embedded-lodging option, but the integration contract is intentionally strict. Expedia's activities API is still early access in September 2026, with general availability described for 2027 in the [activities documentation](https://developers.expediagroup.com/rapid/activities). Do not plan the initial activity supplier strategy around it yet.
+
+**Fit:** strong mature lodging API; higher launch-review effort; activities too early for the first implementation.
+
+### Amadeus Self-Service
+
+Amadeus has a useful developer test environment for flight search, price confirmation, order creation, and order management. Its current [official FAQ](https://admin.developers.amadeus.com/self-service/apis-docs/guides/developer-guides/faq/) states that test data is limited and production provides complete live data. Production flight booking is subject to approved-market and local legal requirements and requires an airline consolidator to issue tickets. Post-ticketing modifications and refunds are handled with the consolidator.
+
+That makes Amadeus valuable for prototyping a canonical `TransportOffer`, but it does not remove the operational dependency. A PNR or order response is not proof that a ticket has been issued. Search, price, order, ticketing, change, refund, and schedule-change states must remain distinct.
+
+**Fit:** good flight schema/test candidate; ticketing partner and servicing model are mandatory production decisions.
+
+### Bonotel, Restel, and Project Expedition
+
+[Bonotel](https://www.bonotel.com/for-tour-operators) focuses on premium hotel distribution and states that it is not accepting new customer inquiries through its website. Its [terms](https://www.bonotel.com/terms-conditions) place meaningful responsibility on the buyer for booking, cancellation, and payment conditions. This makes it a poor first India MVP candidate even if its inventory is useful to some North American agencies.
+
+[Restel](https://www.restelhotels.com/rsb2b/en/home.html) describes an API-connected real-time hotel platform, but public technical and onboarding evidence is much thinner than for Nuitee, HBX, or RateHawk. It can remain on a later longlist.
+
+[Project Expedition](https://partner.projectexpedition.com/) is primarily an advisor platform for tours, excursions, transfers, referral links, commission, and branded vouchers. It is useful evidence that the Reddit author cared about agent fulfilment and voucher branding. It is not evidence of a broad public API suitable for Travel App AI's first supplier adapter.
+
+## 3. Provider comparison for this product
+
+| Provider | Immediate test path | Product breadth relevant here | Booking lifecycle evidence | Main unresolved risk | Current recommendation |
+| --- | --- | --- | --- | --- | --- |
+| Nuitee Connect | Free self-serve sandbox | Hotels; newer flight capability | Search, prebook, book, cancel; idempotent client reference | India rate competitiveness, support, wallet/settlement | Implement first sandbox adapter |
+| HBX/Hotelbeds | Evaluation key, 50 calls/day | Hotels, activities, transfers, cars | Booking APIs plus certification | Certification, commercial terms, local depth | Run second sandbox comparison |
+| RateHawk | Partner key and sandbox | Primarily accommodations plus expanding services | Search, booking, cancellation, certification | Production terms and India coverage | Commercial/technical bake-off |
+| TBO | Reviewed onboarding | Strong multi-vertical distribution claim | Portal and API support described | Access time, deposits/credit, exact API contracts | Apply now; integrate only after diligence |
+| Booking.com Demand | Managed affiliate access | Accommodation, cars, attractions and orders by approved scope | Redirect; approved in-app orders and post-booking | Partner approval and allowed integration type | Strong handoff candidate |
+| Expedia Rapid | Partner onboarding and test tools | Mature lodging; activities early access | Price check, book, manage, cancel; site review | Certification effort, MoR/payment design | Later lodging comparison |
+| Amadeus Self-Service | Developer test environment | Flights, hotels and destination APIs | Flight search/price/order; consolidator issues ticket | Ticketing and post-ticket support | Prototype transport adapter after hotels |
+| Bedsonline | Travel-agent portal registration | Hotels, activities, transfers, cars | Manual portal operations | Not the programmable API product | Concierge/manual validation only |
+| Project Expedition | Advisor portal/referral registration | Activities, tours, transfers | Portal, referrals and vouchers | No broad public API established | Later affiliate/activity option |
+| Bonotel / Restel | Sales-led or thin public evidence | Hotels | Contract/portal dependent | Access and India relevance | Do not prioritize |
+
+No public documentation proves that any one provider has the best landed rate or availability for Travel App AI's launch destinations. Inventory-count claims are not comparable because suppliers count properties, room products, direct contracts, and aggregated feeds differently. A provider should win through matched live searches and completed lifecycle tests, not headline inventory size.
+
+## 4. Architecture consequences
+
+The repository's current provider-neutral direction is sound. The canonical model must absorb provider differences without discarding evidence or leaking supplier payloads into editable itinerary state.
+
+### Preserve three separate layers
+
+1. **Discovery and feasibility evidence:** Google place identity, coordinates, hours, route geometry, and estimated travel time.
+2. **Supplier offer:** a dated, occupied, priced option with availability, rate rules, expiry, provenance, and booking method.
+3. **Trip selection:** the stable user choice that references a canonical offer and records approvals, locks, participants, and revisions.
+
+Google hotel panels visible to consumers cannot be scraped into supplier offers. A hotel price is valid only for the requested dates, room occupancies, traveller nationality or point of sale where required, currency, taxes/fees, meal/refund terms, and a freshness window.
+
+### Extend the canonical offer before adding editable supplier state
+
+The existing `StayOffer` contract needs the same provenance and lifecycle strength already designed for `TransportOffer` and `TransferOffer`. At minimum, add:
+
+- `schemaVersion` and `kind: "supplier_offer"`;
+- provider, provider offer ID, checked time, expiry or recheck requirement;
+- availability and bookability state;
+- room allocation per traveller group;
+- total and unit pricing with currency, tax/fee breakdown, pay-now/pay-later amounts, and charges due at property;
+- meal plan, refundability, cancellation penalty windows, and mandatory property fees;
+- booking method (`handoff` or `managed`) and provider-specific terms represented canonically;
+- content provenance and allowed retention/attribution;
+- a fingerprint of the search context: dates, occupancy, nationality/point of sale, currency, and market;
+- explicit `price_changed`, `sold_out`, `expired`, `booking_pending`, `confirmed`, `cancel_pending`, `cancelled`, `failed`, and `manual_support_required` outcomes where supported.
+
+Store the raw supplier response in an access-controlled evidence record for debugging and reconciliation, with a retention policy. Editable client state should contain canonical IDs and safe projections, not the full provider payload or credentials.
+
+### Use capabilities, not provider-name conditionals
+
+Each adapter should declare capabilities such as live price, live availability, multi-room, hold/prebook, book, modify, cancel, voucher, webhook, payment model, and supported transport modes. The planner can then degrade honestly. For example, a provider that can search but not cancel must never produce an in-app "Cancel" promise.
+
+### Build for re-check and idempotency
+
+Search results expire. Before a user applies a material change or leaves for booking, re-price the selected offer. Preserve the previously reviewed value, show the delta, and require renewed approval when the change is material under product rules.
+
+Every managed booking request needs a client-generated idempotency reference. A timeout is an unknown result, not a failed booking. The system must query booking status before retrying. Expedia's launch requirements and Nuitee's client-reference behavior both reinforce this boundary.
+
+## 5. Operational reality behind embedded booking
+
+Moving from handoff to managed booking changes the company from a planning product into a travel fulfilment operation.
+
+### Customer support becomes part of the product
+
+Real bookings introduce supplier rejection, stale rates, duplicate attempts, name errors, schedule changes, property relocations, no-shows, cancellations, partial refunds, currency differences, chargebacks, and emergency support. Provider "24/7 support" is upstream support; Travel App AI still needs a clear customer-facing escalation route and ownership matrix.
+
+### Merchant-of-record and settlement choices affect scope
+
+The product must know who charges the traveller, who appears on the statement, who issues the invoice or voucher, who holds funds, and who pays the supplier. Use a licensed payment provider and supplier-supported payment flow for the first managed-booking pilot. Avoid designing an internal wallet or collecting and onward-settling money across independent merchants until specialist legal and payments review confirms the model.
+
+India's RBI framework regulates entities that aggregate customer payments and settle merchants, with authorization, governance, escrow, security, and grievance obligations. Applicability depends on the exact fund flow and contractual role. Separately, RBI rules prohibit ordinary merchants and payment-chain participants from storing raw card-on-file data; use tokenized hosted payment flows. Relevant primary references include the [RBI PA/PG framework index](https://www.rbi.org.in/scripts/RTGS_Notification.aspx) and the [card-on-file restriction](https://www.rbi.org.in/scripts/NotificationUser.aspx?Id=12345).
+
+### Commercial economics are more than commission
+
+Measure contribution after supplier price, payment cost, foreign exchange, taxes, customer support, refunds, fraud/chargebacks, and promotions. Also record working-capital terms: prepaid wallet, card settlement, VCC, credit line, deposit, remittance timing, and refund timing. Public supplier pages rarely disclose the terms a startup will actually receive.
+
+## 6. India-specific regulatory and trust requirements
+
+This section identifies design and diligence consequences; it is not a substitute for advice on the final corporate, tax, payment, and contracting model.
+
+### Tourism recognition
+
+The Ministry of Tourism's [2020 tourism service provider guidelines](https://tourism.gov.in/sites/default/files/2020-12/Tour%20Opertaors%20Revised%20Guidelines.pdf) and [OTA approval guideline](https://nidhi.tourism.gov.in/uploads/gallery/1659457488.pdf) describe voluntary recognition schemes. The OTA guideline defines an OTA as an intermediary selling travel products for suppliers over the internet. Recognition may improve credibility and supplier conversations, but it is not a universal license that by itself authorizes payments, airline ticketing, or all travel operations.
+
+### Airline accreditation and ticket issuance
+
+[IATA BSP](https://www.iata.org/en/services/finance/bsp/) is for accredited agents and provides standardized reporting, remittance, and settlement with airlines. Travel App AI does not need IATA accreditation merely to show route evidence or use a consolidator. It becomes relevant if the business seeks direct airline distribution and BSP participation. Even Amadeus's self-service flight booking guidance requires a consolidator for production ticket issuance.
+
+### Consumer and e-commerce obligations
+
+India's [Consumer Protection (E-Commerce) Rules, 2020](https://consumeraffairs.gov.in/public/upload/files/E%20commerce%20rules_1732703966.pdf) apply broadly to goods and services sold over digital networks. Product consequences include prominent legal and contact information, a grievance process, accurate seller/supplier information, transparent refund/cancellation/payment terms, and avoiding misleading representations. The rules and general consumer law make the app's existing distinction between estimates, route evidence, supplier offers, handoffs, and confirmed bookings a customer-protection requirement as well as a UX choice.
+
+### Data protection
+
+The final [Digital Personal Data Protection Rules, 2025](https://www.meity.gov.in/static/uploads/2025/11/53450e6e5dc0bfa85ebd78686cadad39.pdf) use phased commencement. As of 6 September 2026, the principal operational provisions on notice, consent, security, breach response, children, rights, and erasure are scheduled to commence 18 months after 13 November 2025; the consent-manager provision is scheduled after one year. This runway should be used to build compliant collection and deletion now rather than defer it.
+
+Travel App AI handles exact pickup addresses, traveller identities, preferences, age/child information, and potentially passport/payment data. Apply data minimization: collect a hub or area until an exact address is needed; restrict exact-address visibility; separate organizer-entered details awaiting confirmation; do not send unnecessary personal data to the planning model; record supplier disclosures; and define retention by purpose.
+
+### GST and tax model
+
+GST treatment depends on whether Travel App AI acts as an agent, marketplace/e-commerce operator, tour operator, or principal reseller. CBIC's [valuation rule](https://cbic-gst.gov.in/valuation-rules.html) includes a special deemed-value method for air travel agents, and CBIC's [sectoral FAQ](https://cbic-gst.gov.in/sectoral-faq.html) states that online travel agents can fall within e-commerce-operator TCS rules. Cancellation charges also have GST consequences under [Circular 178/10/2022](https://cbic-gst.gov.in/pdf/cir-178-08-2022-cgst.pdf). Do not hard-code tax treatment from a supplier label; obtain a CA opinion against the exact contracting and invoice flow before managed booking.
+
+For overseas tour packages, the 2026 Union Budget proposed a 2% TCS rate without an amount threshold. The implemented rule must be confirmed against the operative Income-tax Act and rules when international package sales are introduced. This is not relevant to the first domestic handoff pilot.
+
+## 7. Recommended implementation sequence
+
+### Phase 1 - Prove the supplier boundary (1-2 weeks)
+
+1. Create a `StayProvider` interface around canonical search criteria and `StayOffer` output.
+2. Add the missing provenance, price-breakdown, policy, availability, expiry, and lifecycle fields described above.
+3. Implement Nuitee sandbox behind a server-only adapter. Keep credentials out of the client.
+4. Run the existing Delhi -> Jaipur, two-adult, three-night scenario through search and prebook.
+5. Render actual supplier price, room, meal, cancellation, taxes/fees, and last-checked time in the existing stay card and timeline.
+6. Keep booking disabled in the customer UI; exercise sandbox booking and cancellation only through an internal test harness.
+
+Success means the app can replace a stale or unavailable hotel without changing unrelated travel/activity selections, can show a price change honestly, and can explain why the replacement still satisfies constraints.
+
+### Phase 2 - Compare suppliers with matched searches (2-4 weeks)
+
+Obtain HBX evaluation and RateHawk sandbox credentials and begin TBO onboarding. Execute the same request matrix for all candidates:
+
+- Jaipur, Goa, and one smaller launch destination;
+- 1 room/2 adults, 2 rooms with unequal occupancy, and a family with child ages;
+- refundable and non-refundable options;
+- breakfast included/excluded;
+- near-term and 60-90 day dates;
+- INR and one foreign currency where permitted;
+- sold-out, price-change, cancellation, and timeout scenarios.
+
+Score matched results rather than raw inventory counts: valid response rate, unique bookable properties, total landed price, cancellation clarity, prebook price-change rate, booking success, cancellation automation, latency, duplicate handling, content quality, India support response, and reconciliation exports.
+
+### Phase 3 - Launch booking handoff (after evidence)
+
+Use supplier or affiliate deep links where approved. Refresh price and availability before handoff, show the supplier and timestamp, preserve the reviewed itinerary, and never imply that the handoff completed a booking. Ask the user to confirm booking status or use an approved callback/attribution signal where available.
+
+### Phase 4 - Add one transport supplier track
+
+Prototype Amadeus flight offers or a TBO flight sandbox only after the hotel adapter proves the canonical boundary. Keep route evidence and bookable offers separate. Add `ticketingStatus` and `servicingOwner`; do not collapse order creation, ticket issuance, and confirmed travel into one boolean.
+
+For bus, rail, ferry, ship, and cruise, use the existing `TravelMode` distinctions. Supplier coverage should be capability-driven. A ferry used to reach a casino cruise is a transfer; a round-trip casino cruise is an activity. Do not force either into an airline-style schema.
+
+### Phase 5 - Consider managed booking
+
+Proceed only after the company can own customer support, cancellations/refunds, reconciliation, secure payment flow, invoices/vouchers, privacy operations, and regulatory advice. Start with one vertical and a small destination set. A multi-provider cart and internal wallet should come much later.
+
+## 8. Provider diligence checklist
+
+### Access and commercial
+
+- Is the account a portal seat, affiliate, white label, or API contract?
+- Are search, prebook, book, modify, cancel, voucher, and webhook scopes separately approved?
+- What are setup fees, deposits, wallet minimums, credit terms, commission/markup rules, and look-to-book limits?
+- Who is merchant of record, who invoices, and who appears on the card statement?
+- Are domestic India support and emergency escalation available during customer travel?
+
+### Inventory and price
+
+- Does the response include all taxes, resort/property fees, and pay-at-property charges?
+- Are prices net, commissionable, or minimum-selling-price constrained?
+- Are traveller nationality, residency, point of sale, child ages, and room allocation required?
+- How long is the rate valid, and must prebook/price-check be called before booking?
+- How are duplicate properties, room names, meal plans, and cancellation windows normalized?
+
+### Booking and servicing
+
+- Is there a client reference/idempotency key?
+- How is an unknown timeout reconciled before retry?
+- Which changes are API-supported, and which require manual support?
+- Are supplier and property confirmation numbers both returned?
+- How are schedule changes, hotel relocation, no-show, partial cancellation, and refund status represented?
+- Can vouchers be generated under Travel App AI's brand, and what supplier disclosure is mandatory?
+
+### Data, security, and compliance
+
+- What content may be cached, for how long, and with what attribution?
+- Which traveller fields are sent to which supplier and subprocessor?
+- Are raw card details ever visible to Travel App AI? The acceptable answer for the first launch is no.
+- What retention, deletion, breach-notification, audit-log, and data-location terms apply?
+- Does the contract permit AI-assisted recommendation and the intended customer-facing presentation?
+
+## 9. Go/no-go criteria for the first production supplier
+
+A production supplier should not be selected solely because its sandbox is easy. Require all of the following:
+
+1. Adequate bookable coverage in the chosen India launch destinations under matched searches.
+2. Complete landed price and policy fields sufficient for budget and cancellation decisions.
+3. Stable prebook and duplicate-safe booking semantics.
+4. A workable payment and settlement model within the pilot operating ceiling.
+5. Post-booking retrieval and cancellation, or a documented staffed manual path with response targets.
+6. Contractual permission for the product's display, caching, attribution, and handoff/booking model.
+7. Named escalation contacts and acceptable incident behavior.
+8. A completed legal, tax, privacy, and payment-flow review for the exact model.
+
+## 10. Final recommendation
+
+Apply to TBO now because its breadth aligns with the longer-term product, but do not wait for TBO to learn. Implement a Nuitee sandbox stay adapter first, then compare it with HBX and RateHawk using identical India scenarios. Use Booking.com as a likely handoff/affiliate route if partner access is granted, and keep Expedia Rapid as a mature later lodging candidate. Prototype Amadeus only for a separate flight offer/ticketing track with a consolidator plan.
+
+This sequence keeps the product differentiated where it matters: a trustworthy trip artifact that coordinates constraints, travellers, time, movement, and approvals. Suppliers remain replaceable evidence and fulfilment systems. The architecture should make a provider failure or schema change local to its adapter and lifecycle mapping, rather than rewriting the itinerary or AI behavior.
+
+## Source ledger
+
+### Community discovery
+
+- [Reddit thread: B2B portals for travel agents, similar to TBO](https://www.reddit.com/r/travelagents/comments/1ce0n0k/) - anecdotal provider names and the original need for hotels, transfers, and branded vouchers. Access was limited by Reddit anti-bot controls; indexed text was used only as a discovery lead.
+
+### Supplier and API sources
+
+- [TBO corporate platform](https://www.tbo.com/)
+- [TBO API](https://www.tbo.com/tbo-api)
+- [TBO air](https://www.tbo.com/tbo-air)
+- [TBO hotels](https://www.tbo.com/tbo-hotels)
+- [TBO transfers](https://www.tbo.com/tbo-transfers)
+- [TBO sightseeing](https://www.tbo.com/tbo-sightseeing)
+- [TBO cruise](https://www.tbo.com/tbo-cruise)
+- [TBO investor reporting](https://www.tbo.com/engagement/investors/)
+- [HBX/Hotelbeds developer portal](https://developer.hotelbeds.com/)
+- [HBX getting started](https://developer.hotelbeds.com/documentation/getting-started/)
+- [Bedsonline](https://discover.bedsonline.com/en-na/)
+- [RateHawk API](https://www.ratehawk.com/lp/en-us/API/)
+- [RateHawk sandbox](https://blog.ratehawk.com/introducing-the-ratehawk-api-sandbox/)
+- [RateHawk cancellation endpoint](https://docs.emergingtravel.com/docs/b2b-api/post-booking/cancel-booking/)
+- [Nuitee Connect overview](https://docs.liteapi.travel/reference/overview)
+- [Nuitee sandbox booking](https://docs.liteapi.travel/docs/booking-a-room)
+- [Nuitee rate search](https://docs.liteapi.travel/reference/post_hotels-rates)
+- [Nuitee booking endpoint](https://docs.liteapi.travel/reference/post_rates-book)
+- [Nuitee API pricing](https://docs.liteapi.travel/reference/api-pricing-usage-costs)
+- [Booking.com Demand API](https://developers.booking.com/demand/docs)
+- [Booking.com Demand sandbox](https://developers.booking.com/demand/docs/getting-started/sandbox)
+- [Booking.com accommodation tutorial](https://developers.booking.com/demand/docs/accommodations/accommodation-tutorial)
+- [Expedia Rapid launch requirements](https://developers.expediagroup.com/rapid/setup/launch-requirements/launch-requirements)
+- [Expedia Rapid B2C lodging requirements](https://developers.expediagroup.com/rapid/setup/launch-requirements/b2c-standalone)
+- [Expedia Rapid Booking API](https://developers.expediagroup.com/rapid/lodging/booking/about-booking-api)
+- [Expedia Rapid Activities API](https://developers.expediagroup.com/rapid/activities)
+- [Amadeus Self-Service FAQ](https://admin.developers.amadeus.com/self-service/apis-docs/guides/developer-guides/faq/)
+- [Bonotel tour operators](https://www.bonotel.com/for-tour-operators)
+- [Bonotel terms](https://www.bonotel.com/terms-conditions)
+- [Restel](https://www.restelhotels.com/rsb2b/en/home.html)
+- [Project Expedition advisor platform](https://partner.projectexpedition.com/)
+
+### India regulatory and public-policy sources
+
+- [Ministry of Tourism revised tourism service provider guidelines](https://tourism.gov.in/sites/default/files/2020-12/Tour%20Opertaors%20Revised%20Guidelines.pdf)
+- [Ministry of Tourism OTA approval guideline](https://nidhi.tourism.gov.in/uploads/gallery/1659457488.pdf)
+- [IATA Billing and Settlement Plan](https://www.iata.org/en/services/finance/bsp/)
+- [Consumer Protection (E-Commerce) Rules, 2020](https://consumeraffairs.gov.in/public/upload/files/E%20commerce%20rules_1732703966.pdf)
+- [Digital Personal Data Protection Rules, 2025](https://www.meity.gov.in/static/uploads/2025/11/53450e6e5dc0bfa85ebd78686cadad39.pdf)
+- [DPDP Act phased commencement notification](https://www.meity.gov.in/static/uploads/2025/11/c56ceae6c383460ca69577428d36828b.pdf)
+- [RBI payment and settlement circular index](https://www.rbi.org.in/scripts/RTGS_Notification.aspx)
+- [RBI card-on-file restriction](https://www.rbi.org.in/scripts/NotificationUser.aspx?Id=12345)
+- [CBIC valuation rules](https://cbic-gst.gov.in/valuation-rules.html)
+- [CBIC sectoral GST FAQ](https://cbic-gst.gov.in/sectoral-faq.html)
+- [CBIC Circular 178/10/2022 on cancellation charges](https://cbic-gst.gov.in/pdf/cir-178-08-2022-cgst.pdf)
+- [Union Budget 2026-27 speech](https://www.indiabudget.gov.in/doc/budget_speech.pdf)
+
+## Research limits
+
+- No supplier provided account-specific commercial terms, a production SLA, or a matched live India result set for this report.
+- Sandbox inventory is synthetic or curated and cannot establish production coverage or booking success.
+- Supplier inventory counts and support claims are first-party statements and are not directly comparable.
+- The Reddit page was blocked by Reddit's human-verification screen; indexed thread content was used only to identify candidates.
+- Legal and tax conclusions depend on final contracts, fund flow, invoice flow, and the role Travel App AI assumes. Specialist review is required before managed booking.

@@ -29,7 +29,8 @@ export type TravellerType = "adult" | "child" | "senior";
 export type MobilityLevel = "standard" | "limited";
 export type MobilityLoad = "low" | "medium" | "high";
 export type TripPace = "relaxed" | "balanced" | "packed";
-export type TravelMode = "flight" | "train" | "bus" | "ferry";
+export const travelModes = ["flight", "train", "bus", "cab", "self_drive", "ferry", "ship", "cruise"] as const;
+export type TravelMode = (typeof travelModes)[number];
 export type LocationType =
   | "country"
   | "state"

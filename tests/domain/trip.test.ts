@@ -6,10 +6,14 @@ import type {
   TransferOffer,
   TransportOffer,
 } from "@/inventory/contracts";
+import { makeTransferOffer } from "../fixtures/transfer-offer";
+import { snapshotSupplierOffer } from "../fixtures/supplier-offer";
 import type { ResolvedOffer } from "@/domain/trip";
 import { projectTrip, tripStateSchema } from "@/domain/trip";
 
 const outbound: TransportOffer = {
+  schemaVersion: 1,
+  kind: "supplier_offer",
   id: "offer:transport:outbound",
   serviceId: "service:outbound",
   mode: "flight",
@@ -22,6 +26,7 @@ const outbound: TransportOffer = {
   operator: "Example Air",
   segments: [
     {
+      mode: "flight",
       from: "city:delhi",
       to: "airport:udr",
       departureAt: "2026-10-10T07:00:00+05:30",
@@ -30,6 +35,9 @@ const outbound: TransportOffer = {
     },
   ],
   price: { amount: 5_000, currency: "INR", unit: "per_traveller" },
+  availability: "available",
+  source: { provider: "test", providerOfferId: "service:outbound", evidenceKind: "snapshot" },
+  booking: null,
 };
 
 const returning: TransportOffer = {
@@ -43,6 +51,7 @@ const returning: TransportOffer = {
   price: { amount: 4_500, currency: "INR", unit: "per_traveller" },
   segments: [
     {
+      mode: "flight",
       from: "airport:udr",
       to: "city:delhi",
       departureAt: "2026-10-12T18:00:00+05:30",
@@ -53,6 +62,7 @@ const returning: TransportOffer = {
 };
 
 const stay: StayOffer = {
+  ...snapshotSupplierOffer("room:old-city"),
   id: "offer:stay:old-city",
   roomOfferId: "room:old-city",
   propertyId: "property:old-city",
@@ -74,6 +84,7 @@ const stay: StayOffer = {
 };
 
 const activity: ActivityOffer = {
+  ...snapshotSupplierOffer("session:palace"),
   id: "offer:activity:palace",
   activityId: "activity:palace",
   sessionId: "session:palace",
@@ -92,7 +103,7 @@ const activity: ActivityOffer = {
   price: { amount: 500, currency: "INR", unit: "per_participant" },
 };
 
-const arrivalTransfer: TransferOffer = {
+const arrivalTransfer: TransferOffer = makeTransferOffer({
   id: "offer:transfer:arrival",
   transferId: "transfer:arrival",
   from: "airport:udr",
@@ -101,7 +112,7 @@ const arrivalTransfer: TransferOffer = {
   durationMinutes: 45,
   capacity: 3,
   price: { amount: 1_200, currency: "INR", unit: "per_vehicle" },
-};
+});
 
 const departureTransfer: TransferOffer = {
   ...arrivalTransfer,

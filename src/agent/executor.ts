@@ -27,6 +27,7 @@ import type {
   TransportOffer,
   TransportSearchRequest,
 } from "@/inventory/contracts";
+import { transferPriceUnits, transferTotalAmount, transferPriceUnitLabel } from "@/inventory/offer-pricing";
 import { createInventoryRepository } from "@/inventory/repository";
 import {
   searchActivities,
@@ -195,14 +196,17 @@ function activityFacts(offer: ActivityOffer, travellerCount: number): GroundedFa
 }
 
 function transferFacts(offer: TransferOffer, travellerCount: number): GroundedFact[] {
-  const requiredVehicles = Math.ceil(travellerCount / offer.capacity);
+  const units = transferPriceUnits(offer, travellerCount);
+  const unitLabel = transferPriceUnitLabel(offer);
+  const requiredDimension = offer.price.unit === "per_vehicle" ? "required_vehicles" : "required_travellers";
+  const requiredLabel = offer.price.unit === "per_vehicle" ? "Required vehicles" : "Priced travellers";
   return [
-    fact(offer.id, "transfer", "unit_price", "Price per vehicle (INR)", offer.price.amount),
+    fact(offer.id, "transfer", "unit_price", `Price per ${unitLabel} (INR)`, offer.price.amount),
     fact(offer.id, "transfer", "price_unit", "Price unit", offer.price.unit),
-    fact(offer.id, "transfer", "required_vehicles", "Required vehicles", requiredVehicles),
-    fact(offer.id, "transfer", "total_price", "Total transfer price (INR)", offer.price.amount * requiredVehicles),
+    fact(offer.id, "transfer", requiredDimension, requiredLabel, units),
+    fact(offer.id, "transfer", "total_price", "Total transfer price (INR)", transferTotalAmount(offer, travellerCount)),
     fact(offer.id, "transfer", "duration", "Transfer duration in minutes", offer.durationMinutes),
-    fact(offer.id, "transfer", "capacity", "Capacity per vehicle", offer.capacity),
+    fact(offer.id, "transfer", "capacity", "Offer capacity", offer.capacity),
     fact(offer.id, "transfer", "mode", "Transfer mode", offer.mode),
     fact(offer.id, "transfer", "from", "Transfer origin", offer.from),
     fact(offer.id, "transfer", "to", "Transfer destination", offer.to),

@@ -1,10 +1,11 @@
 @AGENTS.md
 
-# Project continuation
+## Agent skills
 
-Before changing code, read these files in order:
+### Issue tracker
 
-1. `PROJECT_CONTEXT.md`
-2. the relevant sections of `IMPLEMENTATION_SPEC.md`
+Use local Markdown specs and tickets in `.scratch/<feature>/`. See `docs/agents/issue-tracker.md` before creating, reading, or updating tickets.
 
-Do not run automated browser tests unless the user explicitly asks for them.
+### Domain docs
+
+Use a single domain glossary (`CONTEXT.md`, created when terms are resolved) and `docs/adr/` for consequential decisions. See `docs/agents/domain.md` before product discovery, architecture work, or documentation changes.

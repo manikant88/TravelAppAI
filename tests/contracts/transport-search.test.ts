@@ -37,6 +37,8 @@ describe("transport search API contract", () => {
       inventoryVersion: "travel-seed-v1",
       results: [
         {
+          schemaVersion: 1,
+          kind: "supplier_offer",
           id: "offer:transport:example",
           serviceId: "transport:del-udr-morning",
           mode: "flight",
@@ -49,6 +51,7 @@ describe("transport search API contract", () => {
           operator: "IndiGo",
           segments: [
             {
+              mode: "flight",
               from: "airport:del",
               to: "airport:udr",
               departureAt: "2026-10-10T09:20:00+05:30",
@@ -58,6 +61,13 @@ describe("transport search API contract", () => {
             },
           ],
           price: { amount: 6_900, currency: "INR", unit: "per_traveller" },
+          availability: "available",
+          source: {
+            provider: "snapshot-inventory",
+            providerOfferId: "transport:del-udr-morning",
+            evidenceKind: "snapshot",
+          },
+          booking: null,
         },
       ],
       resultCount: 1,

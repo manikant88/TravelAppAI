@@ -2,6 +2,7 @@ import { z } from "zod";
 import { addCalendarDays, calendarDayDifference, isValidISODate } from "@/domain/dates";
 import { minimumInitialActivityDays } from "@/domain/itinerary-quality";
 import { addMoney, multiplyMoney, subtractMoney } from "@/domain/money";
+import { transferPriceUnits } from "@/inventory/offer-pricing";
 import { plannableTripRequestSchema, requirePlannableRequest } from "@/domain/request";
 import type {
   ActivitySelection,
@@ -322,7 +323,7 @@ export function calculateTripBudget(trip: TripState, hydrated: HydratedSelection
     if (selection.kind === "travel" && isTransportOffer(offer)) {
       travel.push(multiplyMoney(offer.price, selection.travellerIds.length));
     } else if (selection.kind === "travel" && isTransferOffer(offer)) {
-      travel.push(multiplyMoney(offer.price, Math.ceil(selection.travellerIds.length / offer.capacity)));
+      travel.push(multiplyMoney(offer.price, transferPriceUnits(offer, selection.travellerIds.length)));
     } else if (selection.kind === "stay" && isStayOffer(offer)) {
       const nights = calendarDayDifference(selection.checkIn, selection.checkOut);
       stays.push(multiplyMoney(offer.price, nights * selection.rooms));

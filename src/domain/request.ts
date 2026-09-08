@@ -1,16 +1,16 @@
 import { z } from "zod";
 import { isValidISODate } from "@/domain/dates";
-import type {
-  Constraint,
-  ConstraintDraft,
-  MissingRequirement,
-  PlannableTripRequest,
-  RequestPatch,
-  RequirementCheck,
-  TripRequest,
+import {
+  travelModes,
+  type Constraint,
+  type ConstraintDraft,
+  type MissingRequirement,
+  type PlannableTripRequest,
+  type RequestPatch,
+  type RequirementCheck,
+  type TripRequest,
 } from "@/domain/model";
 
-const travelModes = ["flight", "train", "bus", "ferry"] as const;
 const constraintPriorities = ["hard", "strong", "flexible"] as const;
 const localTimeSchema = z
   .string()

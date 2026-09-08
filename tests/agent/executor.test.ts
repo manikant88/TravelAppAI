@@ -14,6 +14,8 @@ import type {
   TransferOffer,
   TransportOffer,
 } from "@/inventory/contracts";
+import { makeTransferOffer } from "../fixtures/transfer-offer";
+import { snapshotSupplierOffer } from "../fixtures/supplier-offer";
 
 const generatedAt = "2026-08-27T00:00:00.000Z";
 
@@ -30,6 +32,8 @@ function response<T>(queryId: string, results: T[]): SearchResponse<T> {
 }
 
 const transportOffer: TransportOffer = {
+  schemaVersion: 1,
+  kind: "supplier_offer",
   id: "offer:transport:1",
   serviceId: "service:1",
   mode: "flight",
@@ -42,6 +46,7 @@ const transportOffer: TransportOffer = {
   operator: "Example Air",
   segments: [
     {
+      mode: "flight",
       from: "city:delhi",
       to: "city:udaipur",
       departureAt: "2026-10-11T08:30:00+05:30",
@@ -50,9 +55,13 @@ const transportOffer: TransportOffer = {
     },
   ],
   price: { amount: 5_000, currency: "INR", unit: "per_traveller" },
+  availability: "available",
+  source: { provider: "test", providerOfferId: "service:1", evidenceKind: "snapshot" },
+  booking: null,
 };
 
 const stayOffer: StayOffer = {
+  ...snapshotSupplierOffer("room:1"),
   id: "offer:stay:1",
   roomOfferId: "room:1",
   propertyId: "property:1",
@@ -75,6 +84,7 @@ const stayOffer: StayOffer = {
 
 function activityOffer(date: string, suffix: string): ActivityOffer {
   return {
+    ...snapshotSupplierOffer(`session:${suffix}`),
     id: `offer:activity:${suffix}`,
     activityId: `activity:${suffix}`,
     sessionId: `session:${suffix}`,
@@ -94,7 +104,7 @@ function activityOffer(date: string, suffix: string): ActivityOffer {
   };
 }
 
-const transferOffer: TransferOffer = {
+const transferOffer: TransferOffer = makeTransferOffer({
   id: "offer:transfer:1",
   transferId: "transfer:1",
   from: "airport:udr",
@@ -103,7 +113,7 @@ const transferOffer: TransferOffer = {
   durationMinutes: 45,
   capacity: 3,
   price: { amount: 1_200, currency: "INR", unit: "per_vehicle" },
-};
+});
 
 const request: PlannableTripRequest = {
   origin: "city:delhi",

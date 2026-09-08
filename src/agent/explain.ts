@@ -22,6 +22,7 @@ import { tripStateSchema, type HydratedSelection, type TripProjection } from "@/
 import { projectTrip } from "@/domain/trip";
 import { createInventoryRepository } from "@/inventory/repository";
 import { resolveOffer } from "@/inventory/service";
+import { transferTotalAmount } from "@/inventory/offer-pricing";
 
 type Selection = TravelSelection | StaySelection | ActivitySelection;
 
@@ -309,7 +310,7 @@ function deterministicExplanation(
     message = `${offer.operator} ${offer.mode} is scheduled from ${offer.departureAt} to ${offer.arrivalAt} and costs ${formatInr(offer.price.amount * travellerCount)} for the selected travellers.`;
   } else if ("transferId" in offer) {
     chosen = [facts("mode"), facts("from"), facts("to"), facts("duration"), facts("total_price")];
-    message = `This ${offer.mode} transfer connects ${offer.from} to ${offer.to}, takes ${offer.durationMinutes} minutes, and costs ${formatInr(offer.price.amount * Math.ceil(travellerCount / offer.capacity))}.`;
+    message = `This ${offer.transportMode ?? offer.mode} transfer connects ${offer.from} to ${offer.to}, takes ${offer.durationMinutes} minutes, and costs ${formatInr(transferTotalAmount(offer, travellerCount))}.`;
   } else if ("roomOfferId" in offer) {
     chosen = [facts("property_name"), facts("check_in"), facts("check_out"), facts("total_price"), facts("rating")];
     const nights = Math.round((Date.parse(`${offer.checkOut}T00:00:00Z`) - Date.parse(`${offer.checkIn}T00:00:00Z`)) / 86_400_000);

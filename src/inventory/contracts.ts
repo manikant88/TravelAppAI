@@ -1,16 +1,24 @@
 import { z } from "zod";
 import { constraintSchema, isoDateSchema, travellerSchema } from "@/domain/request";
-import type {
-  CatalogItemID,
-  ISODate,
-  ISODateTime,
-  LocationID,
-  LocationType,
-  MobilityLoad,
-  OfferID,
-  TravelMode,
-  UnitPrice,
+import {
+  travelModes,
+  type CatalogItemID,
+  type ISODate,
+  type ISODateTime,
+  type LocationID,
+  type LocationType,
+  type Money,
+  type MobilityLoad,
+  type OfferID,
+  type TravelMode,
+  type UnitPrice,
 } from "@/domain/model";
+import {
+  supplierOfferSourceSchema,
+  type SupplierOfferSource,
+} from "@/inventory/option-evidence";
+
+export type { SupplierOfferSource } from "@/inventory/option-evidence";
 
 export interface AppliedFilter {
   type: "availability" | "hard_constraint" | "location" | "date" | "capacity";
@@ -46,6 +54,7 @@ export interface LocationSearchResult {
 }
 
 export interface TransportSegment {
+  mode: TravelMode;
   from: LocationID;
   to: LocationID;
   departureAt: ISODateTime;
@@ -54,7 +63,19 @@ export interface TransportSegment {
   number?: string;
 }
 
+export interface OfferBooking {
+  method: "handoff" | "managed";
+  url?: string;
+}
+
+export interface OfferCancellationTerms {
+  summary: string;
+  refundable?: boolean;
+}
+
 export interface TransportOffer {
+  schemaVersion: 1;
+  kind: "supplier_offer";
   id: OfferID;
   serviceId: CatalogItemID;
   mode: TravelMode;
@@ -67,6 +88,11 @@ export interface TransportOffer {
   operator: string;
   segments: TransportSegment[];
   price: UnitPrice;
+  availability: "available" | "unavailable" | "unknown";
+  source: SupplierOfferSource;
+  booking: OfferBooking | null;
+  cancellationTerms?: OfferCancellationTerms;
+  capacity?: { total?: number; remaining?: number };
 }
 
 export interface PropertyFacts {
@@ -82,6 +108,11 @@ export interface PropertyFacts {
   imageCredit?: string;
   imageCreditUrl?: string;
   imageSourceUrl?: string;
+  address?: string;
+  latitude?: number;
+  longitude?: number;
+  description?: string;
+  starRating?: number;
 }
 
 export interface RoomFacts {
@@ -92,6 +123,8 @@ export interface RoomFacts {
 }
 
 export interface StayOffer {
+  schemaVersion: 1;
+  kind: "supplier_offer";
   id: OfferID;
   roomOfferId: CatalogItemID;
   propertyId: CatalogItemID;
@@ -102,6 +135,12 @@ export interface StayOffer {
   propertyFacts: PropertyFacts;
   roomFacts: RoomFacts;
   price: UnitPrice;
+  /** Exact customer-facing total returned by the supplier for all rooms and nights. */
+  totalPrice?: Money;
+  availability: "available" | "unavailable" | "unknown";
+  source: SupplierOfferSource;
+  booking: OfferBooking | null;
+  cancellationTerms?: OfferCancellationTerms;
 }
 
 export interface ActivityFacts {
@@ -119,6 +158,8 @@ export interface ActivityFacts {
 }
 
 export interface ActivityOffer {
+  schemaVersion: 1;
+  kind: "supplier_offer";
   id: OfferID;
   activityId: CatalogItemID;
   sessionId: CatalogItemID;
@@ -128,17 +169,28 @@ export interface ActivityOffer {
   capacity: number;
   activityFacts: ActivityFacts;
   price: UnitPrice;
+  availability: "available" | "unavailable" | "unknown";
+  source: SupplierOfferSource;
+  booking: OfferBooking | null;
+  cancellationTerms?: OfferCancellationTerms;
 }
 
 export interface TransferOffer {
+  schemaVersion: 1;
+  kind: "supplier_offer";
   id: OfferID;
   transferId: CatalogItemID;
   from: LocationID;
   to: LocationID;
   mode: "car" | "van" | "shared";
+  transportMode?: TravelMode;
   durationMinutes: number;
   capacity: number;
   price: UnitPrice;
+  availability: "available" | "unavailable" | "unknown";
+  source: SupplierOfferSource;
+  booking: OfferBooking | null;
+  cancellationTerms?: OfferCancellationTerms;
 }
 
 const locationTypes = [
@@ -149,7 +201,6 @@ const locationTypes = [
   "airport",
   "neighborhood",
 ] as const;
-const travelModes = ["flight", "train", "bus", "ferry"] as const;
 
 export const locationSearchQuerySchema = z
   .object({
@@ -365,14 +416,29 @@ export const coverageResultSchema = z.discriminatedUnion("status", [
 
 const unitPriceSchema = z
   .object({
-    amount: z.number().int().nonnegative(),
+    amount: z.number().finite().nonnegative(),
     currency: z.literal("INR"),
     unit: z.enum(["per_traveller", "per_room_per_night", "per_participant", "per_vehicle"]),
   })
   .strict();
 
+const offerBookingSchema = z.object({
+  method: z.enum(["handoff", "managed"]),
+  url: z.string().url().optional(),
+}).strict().superRefine((booking, context) => {
+  if (booking.method === "handoff" && !booking.url) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Booking handoff requires a URL", path: ["url"] });
+  }
+});
+
+const cancellationTermsSchema = z.object({
+  summary: z.string().trim().min(1),
+  refundable: z.boolean().optional(),
+}).strict();
+
 const transportSegmentSchema = z
   .object({
+    mode: z.enum(travelModes),
     from: z.string().min(1),
     to: z.string().min(1),
     departureAt: z.string().datetime({ offset: true }),
@@ -384,6 +450,8 @@ const transportSegmentSchema = z
 
 export const transportOfferSchema = z
   .object({
+    schemaVersion: z.literal(1),
+    kind: z.literal("supplier_offer"),
     id: z.string().min(1),
     serviceId: z.string().min(1),
     mode: z.enum(travelModes),
@@ -396,8 +464,32 @@ export const transportOfferSchema = z
     operator: z.string().min(1),
     segments: z.array(transportSegmentSchema).min(1),
     price: unitPriceSchema.extend({ unit: z.literal("per_traveller") }).strict(),
+    availability: z.enum(["available", "unavailable", "unknown"]),
+    source: supplierOfferSourceSchema,
+    booking: z.union([z.null(), offerBookingSchema]),
+    cancellationTerms: cancellationTermsSchema.optional(),
+    capacity: z.object({ total: z.number().int().positive().optional(), remaining: z.number().int().nonnegative().optional() }).strict().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((offer, context) => {
+    const first = offer.segments[0];
+    const last = offer.segments.at(-1);
+    if (!first || !last) return;
+    if (first.from !== offer.from) context.addIssue({ code: z.ZodIssueCode.custom, message: "First segment must start at offer origin", path: ["segments", 0, "from"] });
+    if (last.to !== offer.to) context.addIssue({ code: z.ZodIssueCode.custom, message: "Last segment must end at offer destination", path: ["segments", offer.segments.length - 1, "to"] });
+    if (offer.stops !== offer.segments.length - 1) context.addIssue({ code: z.ZodIssueCode.custom, message: "Stops must equal segment count minus one", path: ["stops"] });
+    offer.segments.forEach((segment, index) => {
+      if (Date.parse(segment.arrivalAt) <= Date.parse(segment.departureAt)) context.addIssue({ code: z.ZodIssueCode.custom, message: "Segment arrival must follow departure", path: ["segments", index, "arrivalAt"] });
+      const next = offer.segments[index + 1];
+      if (next && (segment.to !== next.from || Date.parse(next.departureAt) < Date.parse(segment.arrivalAt))) context.addIssue({ code: z.ZodIssueCode.custom, message: "Segments must connect in place and time order", path: ["segments", index + 1] });
+    });
+    if (Date.parse(offer.departureAt) !== Date.parse(first.departureAt)) context.addIssue({ code: z.ZodIssueCode.custom, message: "Offer departure must match first segment", path: ["departureAt"] });
+    if (Date.parse(offer.arrivalAt) !== Date.parse(last.arrivalAt)) context.addIssue({ code: z.ZodIssueCode.custom, message: "Offer arrival must match last segment", path: ["arrivalAt"] });
+    const elapsed = Math.round((Date.parse(offer.arrivalAt) - Date.parse(offer.departureAt)) / 60_000);
+    if (elapsed !== offer.durationMinutes) context.addIssue({ code: z.ZodIssueCode.custom, message: "Duration must match offer timestamps", path: ["durationMinutes"] });
+    if (offer.capacity?.total !== undefined && offer.capacity.remaining !== undefined && offer.capacity.remaining > offer.capacity.total) context.addIssue({ code: z.ZodIssueCode.custom, message: "Remaining capacity cannot exceed total capacity", path: ["capacity", "remaining"] });
+    if (offer.availability === "available" && offer.capacity?.remaining === 0) context.addIssue({ code: z.ZodIssueCode.custom, message: "An available offer cannot have zero remaining capacity", path: ["availability"] });
+  });
 
 const propertyFactsSchema = z
   .object({
@@ -413,6 +505,11 @@ const propertyFactsSchema = z
     imageCredit: z.string().min(1).optional(),
     imageCreditUrl: z.string().url().optional(),
     imageSourceUrl: z.string().url().optional(),
+    address: z.string().trim().min(1).optional(),
+    latitude: z.number().min(-90).max(90).optional(),
+    longitude: z.number().min(-180).max(180).optional(),
+    description: z.string().trim().min(1).optional(),
+    starRating: z.number().min(0).max(5).optional(),
   })
   .strict();
 
@@ -427,6 +524,8 @@ const roomFactsSchema = z
 
 export const stayOfferSchema = z
   .object({
+    schemaVersion: z.literal(1),
+    kind: z.literal("supplier_offer"),
     id: z.string().min(1),
     roomOfferId: z.string().min(1),
     propertyId: z.string().min(1),
@@ -437,6 +536,11 @@ export const stayOfferSchema = z
     propertyFacts: propertyFactsSchema,
     roomFacts: roomFactsSchema,
     price: unitPriceSchema.extend({ unit: z.literal("per_room_per_night") }).strict(),
+    totalPrice: z.object({ amount: z.number().finite().nonnegative(), currency: z.literal("INR") }).strict().optional(),
+    availability: z.enum(["available", "unavailable", "unknown"]),
+    source: supplierOfferSourceSchema,
+    booking: z.union([z.null(), offerBookingSchema]),
+    cancellationTerms: cancellationTermsSchema.optional(),
   })
   .strict();
 
@@ -458,6 +562,8 @@ const activityFactsSchema = z
 
 export const activityOfferSchema = z
   .object({
+    schemaVersion: z.literal(1),
+    kind: z.literal("supplier_offer"),
     id: z.string().min(1),
     activityId: z.string().min(1),
     sessionId: z.string().min(1),
@@ -467,19 +573,30 @@ export const activityOfferSchema = z
     capacity: z.number().int().positive(),
     activityFacts: activityFactsSchema,
     price: unitPriceSchema.extend({ unit: z.literal("per_participant") }).strict(),
+    availability: z.enum(["available", "unavailable", "unknown"]),
+    source: supplierOfferSourceSchema,
+    booking: z.union([z.null(), offerBookingSchema]),
+    cancellationTerms: cancellationTermsSchema.optional(),
   })
   .strict();
 
 export const transferOfferSchema = z
   .object({
+    schemaVersion: z.literal(1),
+    kind: z.literal("supplier_offer"),
     id: z.string().min(1),
     transferId: z.string().min(1),
     from: z.string().min(1),
     to: z.string().min(1),
     mode: z.enum(["car", "van", "shared"]),
+    transportMode: z.enum(travelModes).optional(),
     durationMinutes: z.number().int().positive(),
     capacity: z.number().int().positive(),
-    price: unitPriceSchema.extend({ unit: z.literal("per_vehicle") }).strict(),
+    price: unitPriceSchema.extend({ unit: z.enum(["per_vehicle", "per_traveller"]) }).strict(),
+    availability: z.enum(["available", "unavailable", "unknown"]),
+    source: supplierOfferSourceSchema,
+    booking: z.union([z.null(), offerBookingSchema]),
+    cancellationTerms: cancellationTermsSchema.optional(),
   })
   .strict();
 

@@ -33,6 +33,8 @@ describe("stay search API contract", () => {
 
   it("exposes facts but rejects database-only room inventory fields", () => {
     const offer = {
+      schemaVersion: 1,
+      kind: "supplier_offer",
       id: "offer:stay:example",
       roomOfferId: "room:haveli-family",
       propertyId: "property:udaipur-haveli-courtyard",
@@ -56,6 +58,9 @@ describe("stay search API contract", () => {
         refundable: true,
       },
       price: { amount: 9_800, currency: "INR", unit: "per_room_per_night" },
+      availability: "available",
+      source: { provider: "test-snapshot", providerOfferId: "room:haveli-family", evidenceKind: "snapshot" },
+      booking: null,
     };
 
     expect(stayOfferSchema.safeParse(offer).success).toBe(true);

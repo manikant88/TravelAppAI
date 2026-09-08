@@ -55,7 +55,7 @@ export default function HomeGlobe({ markets }: { markets: HomeMarket[] }) {
         <h1>Start with an idea. We’ll plan the rest.</h1>
         <span>Tell us what you have in mind or pick a destination. We’ll build a grounded, day-by-day itinerary around you.</span>
       </section>
-      <div className="globe-stage" aria-label="Supported destinations around the world">
+      <div className="globe-stage" aria-label="Destination inspiration around the world">
         <ThreeGlobe markets={markets} activeMarket={active} onHover={setActive} onLeave={() => setActive(undefined)} onSelect={choose} />
       </div>
       <form className={prompt.trim() ? "globe-composer is-populated" : "globe-composer"} onSubmit={(event) => { event.preventDefault(); submit(); }}>

@@ -19,6 +19,7 @@ import type {
   StayOffer,
   TransportOffer,
 } from "@/inventory/contracts";
+import { snapshotSupplierOffer } from "../fixtures/supplier-offer";
 
 const generatedAt = "2026-08-27T00:00:00.000Z";
 
@@ -35,6 +36,8 @@ function response<T>(queryId: string, results: T[]): SearchResponse<T> {
 }
 
 const outbound: TransportOffer = {
+  schemaVersion: 1,
+  kind: "supplier_offer",
   id: "offer:transport:outbound",
   serviceId: "service:outbound",
   mode: "flight",
@@ -47,6 +50,7 @@ const outbound: TransportOffer = {
   operator: "Example Air",
   segments: [
     {
+      mode: "flight",
       from: "city:delhi",
       to: "city:udaipur",
       departureAt: "2026-10-10T08:00:00+05:30",
@@ -55,6 +59,9 @@ const outbound: TransportOffer = {
     },
   ],
   price: { amount: 5_000, currency: "INR", unit: "per_traveller" },
+  availability: "available",
+  source: { provider: "test", providerOfferId: "service:outbound", evidenceKind: "snapshot" },
+  booking: null,
 };
 
 const returning: TransportOffer = {
@@ -68,6 +75,7 @@ const returning: TransportOffer = {
   price: { amount: 4_500, currency: "INR", unit: "per_traveller" },
   segments: [
     {
+      mode: "flight",
       from: "city:udaipur",
       to: "city:delhi",
       departureAt: "2026-10-12T18:00:00+05:30",
@@ -78,6 +86,7 @@ const returning: TransportOffer = {
 };
 
 const stay: StayOffer = {
+  ...snapshotSupplierOffer("room:udaipur"),
   id: "offer:stay:udaipur",
   roomOfferId: "room:udaipur",
   propertyId: "property:udaipur",
@@ -99,6 +108,7 @@ const stay: StayOffer = {
 };
 
 const activity: ActivityOffer = {
+  ...snapshotSupplierOffer("session:udaipur-heritage"),
   id: "offer:activity:udaipur-heritage",
   activityId: "activity:udaipur-heritage",
   sessionId: "session:udaipur-heritage",

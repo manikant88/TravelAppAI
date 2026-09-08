@@ -1,0 +1,1 @@
+ALTER TABLE "transfers" ADD CONSTRAINT "transfers_price_unit_check" CHECK ("transfers"."price_unit" in ('per_vehicle', 'per_traveller'));

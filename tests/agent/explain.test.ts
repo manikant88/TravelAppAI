@@ -8,6 +8,7 @@ import type { ExplanationModel } from "@/agent/explanation-contracts";
 import type { PlannableTripRequest, TripState } from "@/domain/model";
 import type { TripProjection } from "@/domain/trip";
 import type { StayOffer } from "@/inventory/contracts";
+import { snapshotSupplierOffer } from "../fixtures/supplier-offer";
 
 const request: PlannableTripRequest = {
   origin: "city:delhi",
@@ -20,6 +21,7 @@ const request: PlannableTripRequest = {
 };
 
 const offer: StayOffer = {
+  ...snapshotSupplierOffer("room:lake-house"),
   id: "offer:stay:lake-house",
   roomOfferId: "room:lake-house",
   propertyId: "property:lake-house",

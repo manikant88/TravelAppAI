@@ -191,13 +191,14 @@ export interface TransferCatalogOffer {
   fromLocationId: string;
   toLocationId: string;
   mode: "car" | "van" | "shared";
+  transportMode?: TravelMode;
   durationMinutes: number;
   operatingStartLocalTime?: LocalTime;
   operatingEndLocalTime?: LocalTime;
   capacity: number;
   priceAmount: number;
   currency: "INR";
-  priceUnit: "per_vehicle";
+  priceUnit: "per_vehicle" | "per_traveller";
 }
 
 export interface TransferInventoryRepository {
@@ -394,6 +395,7 @@ function createNeonInventoryRepository(database: Database): InventoryRepository 
     fromLocationId: transfers.fromLocationId,
     toLocationId: transfers.toLocationId,
     mode: transfers.mode,
+    transportMode: transfers.transportMode,
     durationMinutes: transfers.durationMinutes,
     operatingStartLocalTime: transfers.operatingStartLocalTime,
     operatingEndLocalTime: transfers.operatingEndLocalTime,
@@ -455,24 +457,26 @@ function createNeonInventoryRepository(database: Database): InventoryRepository 
 
   function normalizeTransferRows(
     rows: Array<
-      Omit<TransferCatalogOffer, "currency" | "priceUnit" | "operatingStartLocalTime" | "operatingEndLocalTime"> & {
+      Omit<TransferCatalogOffer, "currency" | "priceUnit" | "transportMode" | "operatingStartLocalTime" | "operatingEndLocalTime"> & {
         currency: string;
         priceUnit: string;
+        transportMode: TravelMode | null;
         operatingStartLocalTime: string | null;
         operatingEndLocalTime: string | null;
       }
     >,
   ): TransferCatalogOffer[] {
     return rows.map((row) => {
-      if (row.currency !== "INR" || row.priceUnit !== "per_vehicle") {
+      if (row.currency !== "INR" || (row.priceUnit !== "per_vehicle" && row.priceUnit !== "per_traveller")) {
         throw new Error(`Invalid transfer price contract for ${row.id}`);
       }
       return {
         ...row,
         operatingStartLocalTime: row.operatingStartLocalTime ?? undefined,
         operatingEndLocalTime: row.operatingEndLocalTime ?? undefined,
+        transportMode: row.transportMode ?? undefined,
         currency: "INR",
-        priceUnit: "per_vehicle",
+        priceUnit: row.priceUnit,
       };
     });
   }

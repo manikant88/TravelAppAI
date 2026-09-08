@@ -22,6 +22,7 @@ import type {
   TransportSearchRequest,
 } from "@/inventory/contracts";
 import { reduceActivityOffersForPlanning } from "@/inventory/activity-selection";
+import { transferTotalAmount } from "@/inventory/offer-pricing";
 import type {
   ActiveLocationNode,
   ActivityCatalogSession,
@@ -257,6 +258,7 @@ function buildTransportOffer(
     previousArrivalAt = arrivalAt;
 
     return {
+      mode: service.mode,
       from: segment.fromLocationId,
       to: segment.toLocationId,
       departureAt,
@@ -275,6 +277,8 @@ function buildTransportOffer(
   if (durationMinutes <= 0) throw new Error(`Transport service ${service.id} has invalid duration`);
 
   return {
+    schemaVersion: 1,
+    kind: "supplier_offer",
     id: createTransportOfferId({ kind: "transport", serviceId: service.id, date, inventoryVersion }),
     serviceId: service.id,
     mode: service.mode,
@@ -291,6 +295,13 @@ function buildTransportOffer(
       currency: service.currency,
       unit: service.priceUnit,
     },
+    availability: "available",
+    source: {
+      provider: "snapshot-inventory",
+      providerOfferId: service.id,
+      evidenceKind: "snapshot",
+    },
+    booking: null,
   };
 }
 
@@ -525,6 +536,8 @@ function buildStayOffer(
   }
 
   return {
+    schemaVersion: 1,
+    kind: "supplier_offer",
     id: createStayOfferId({
       kind: "stay",
       roomOfferId: catalog.roomOfferId,
@@ -564,6 +577,13 @@ function buildStayOffer(
       currency: catalog.currency,
       unit: catalog.priceUnit,
     },
+    availability: "available",
+    source: {
+      provider: "snapshot-inventory",
+      providerOfferId: catalog.roomOfferId,
+      evidenceKind: "snapshot",
+    },
+    booking: null,
   };
 }
 
@@ -815,6 +835,8 @@ function buildActivityOffer(
   const endsAt = addMinutesInTimezone(startsAt, session.durationMinutes, session.timezone);
 
   return {
+    schemaVersion: 1,
+    kind: "supplier_offer",
     id: createActivityOfferId({
       kind: "activity",
       sessionId: session.sessionId,
@@ -845,6 +867,13 @@ function buildActivityOffer(
       currency: session.currency,
       unit: session.priceUnit,
     },
+    availability: "available",
+    source: {
+      provider: "snapshot-inventory",
+      providerOfferId: session.sessionId,
+      evidenceKind: "snapshot",
+    },
+    booking: null,
   };
 }
 
@@ -1092,6 +1121,8 @@ function buildTransferOffer(
   inventoryVersion: string,
 ): TransferOffer {
   return {
+    schemaVersion: 1,
+    kind: "supplier_offer",
     id: createTransferOfferId({
       kind: "transfer",
       transferId: transfer.id,
@@ -1101,6 +1132,7 @@ function buildTransferOffer(
     from: transfer.fromLocationId,
     to: transfer.toLocationId,
     mode: transfer.mode,
+    transportMode: transfer.transportMode,
     durationMinutes: transfer.durationMinutes,
     capacity: transfer.capacity,
     price: {
@@ -1108,6 +1140,13 @@ function buildTransferOffer(
       currency: transfer.currency,
       unit: transfer.priceUnit,
     },
+    availability: "available",
+    source: {
+      provider: "snapshot-inventory",
+      providerOfferId: transfer.id,
+      evidenceKind: "snapshot",
+    },
+    booking: null,
   };
 }
 
@@ -1171,8 +1210,8 @@ export async function searchTransfers(
   const results = catalogTransfers
     .map((transfer) => buildTransferOffer(transfer, meta.version))
     .sort((left, right) => {
-      const leftTotal = left.price.amount * Math.ceil(travellerCount / left.capacity);
-      const rightTotal = right.price.amount * Math.ceil(travellerCount / right.capacity);
+      const leftTotal = transferTotalAmount(left, travellerCount);
+      const rightTotal = transferTotalAmount(right, travellerCount);
       return (
         leftTotal - rightTotal ||
         left.durationMinutes - right.durationMinutes ||

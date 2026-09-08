@@ -12,6 +12,8 @@ import type {
   TransferOffer,
   TransportOffer,
 } from "@/inventory/contracts";
+import { makeTransferOffer } from "../fixtures/transfer-offer";
+import { snapshotSupplierOffer } from "../fixtures/supplier-offer";
 
 const generatedAt = "2026-08-27T00:00:00.000Z";
 const price = (amount: number, unit: "per_traveller" | "per_room_per_night" | "per_vehicle" | "per_participant") =>
@@ -30,6 +32,8 @@ function response<T>(queryId: string, results: T[]): SearchResponse<T> {
 }
 
 const outbound: TransportOffer = {
+  schemaVersion: 1,
+  kind: "supplier_offer",
   id: "offer:transport:del-hkt",
   serviceId: "service:del-hkt",
   mode: "flight",
@@ -40,8 +44,11 @@ const outbound: TransportOffer = {
   durationMinutes: 240,
   stops: 0,
   operator: "Example Air",
-  segments: [{ from: "city:delhi", to: "airport:hkt", departureAt: "2026-10-10T08:00:00+05:30", arrivalAt: "2026-10-10T13:30:00+07:00", operator: "Example Air" }],
+  segments: [{ mode: "flight", from: "city:delhi", to: "airport:hkt", departureAt: "2026-10-10T08:00:00+05:30", arrivalAt: "2026-10-10T13:30:00+07:00", operator: "Example Air" }],
   price: price(18_000, "per_traveller"),
+  availability: "available",
+  source: { provider: "test", providerOfferId: "service:del-hkt", evidenceKind: "snapshot" },
+  booking: null,
 };
 
 const returning: TransportOffer = {
@@ -52,11 +59,12 @@ const returning: TransportOffer = {
   to: "city:delhi",
   departureAt: "2026-10-14T16:00:00+07:00",
   arrivalAt: "2026-10-14T19:30:00+05:30",
-  segments: [{ from: "airport:kbv", to: "city:delhi", departureAt: "2026-10-14T16:00:00+07:00", arrivalAt: "2026-10-14T19:30:00+05:30", operator: "Example Air" }],
+  segments: [{ mode: "flight", from: "airport:kbv", to: "city:delhi", departureAt: "2026-10-14T16:00:00+07:00", arrivalAt: "2026-10-14T19:30:00+05:30", operator: "Example Air" }],
 };
 
 function stay(id: string, locationId: string, checkIn: string, checkOut: string): StayOffer {
   return {
+    ...snapshotSupplierOffer(id.replace("offer:stay", "room")),
     id,
     roomOfferId: id.replace("offer:stay", "room"),
     propertyId: id.replace("offer:stay", "property"),
@@ -72,7 +80,7 @@ function stay(id: string, locationId: string, checkIn: string, checkOut: string)
 
 const phuketStay = stay("offer:stay:phuket", "city:phuket", "2026-10-10", "2026-10-12");
 const krabiStay = stay("offer:stay:krabi", "city:krabi", "2026-10-12", "2026-10-14");
-const interstop: TransferOffer = {
+const interstop: TransferOffer = makeTransferOffer({
   id: "offer:transfer:phuket-krabi",
   transferId: "transfer:phuket-krabi",
   from: "city:phuket",
@@ -80,11 +88,12 @@ const interstop: TransferOffer = {
   mode: "van",
   durationMinutes: 180,
   capacity: 4,
-  price: price(4_500, "per_vehicle"),
-};
+  price: { amount: 4_500, currency: "INR", unit: "per_vehicle" },
+});
 
 function activity(id: string, locationId: string, startsAt: string): ActivityOffer {
   return {
+    ...snapshotSupplierOffer(id.replace("offer:", "session:")),
     id,
     activityId: id.replace("offer:", "activity:"),
     sessionId: id.replace("offer:", "session:"),

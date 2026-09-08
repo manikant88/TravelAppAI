@@ -37,6 +37,7 @@ import type {
   TransferOffer,
   TransportOffer,
 } from "@/inventory/contracts";
+import { transferPriceUnitLabel } from "@/inventory/offer-pricing";
 import {
   initialWorkspaceState,
   workspaceReducer,
@@ -51,6 +52,7 @@ import {
 import { PlanningAnimation } from "@/ui/planning-animation";
 import { AppIcon } from "@/ui/components/app-icon";
 import { Badge, Button, Card, Chip, IconButton } from "@/ui/components/primitives";
+import { PlaceCardFrame } from "@/ui/patterns/place-card-frame";
 import { PriceSummary } from "@/ui/patterns/price-summary";
 import {
   activitySelectionInsight,
@@ -865,12 +867,14 @@ function TravelCard({ item }: { item: HydratedSelection }) {
     );
   }
   if (isTransfer(offer)) {
+    const physicalMode = offer.transportMode ?? offer.mode;
+    const priceUnit = transferPriceUnitLabel(offer);
     return (
       <article className="itinerary-card itinerary-transfer-card">
-        <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true"><AppIcon name="car" /></span><strong>Transfer · {displayLocation(offer.from)} to {displayLocation(offer.to)}</strong></header>
+        <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true"><AppIcon name="car" /></span><strong>{physicalMode} transfer · {displayLocation(offer.from)} to {displayLocation(offer.to)}</strong></header>
         <div className="transfer-card-body">
           <div className="transfer-illustration" aria-hidden="true"><AppIcon name="car" size={56} strokeWidth={1.5} /></div>
-          <div><h3>{offer.mode === "shared" ? "Shared transfer" : "Private transfer"}</h3><p>A direct connection between the selected arrival point and stay area.</p><span><AppIcon name="map-pin" size={14} /> {displayLocation(offer.from)} to {displayLocation(offer.to)}</span><small>{durationLabel(offer.durationMinutes)} · capacity {offer.capacity} · {formatMoney(offer.price.amount)} / vehicle</small></div>
+          <div><h3>{offer.mode === "shared" ? `Shared ${physicalMode}` : `Private ${physicalMode}`}</h3><p>A direct connection between the selected arrival point and stay area.</p><span><AppIcon name="map-pin" size={14} /> {displayLocation(offer.from)} to {displayLocation(offer.to)}</span><small>{durationLabel(offer.durationMinutes)} · capacity {offer.capacity} · {formatMoney(offer.price.amount)} / {priceUnit}</small></div>
         </div>
         <PlannerInsight text={transferSelectionInsight({
           mode: offer.mode,
@@ -890,8 +894,7 @@ function StayCard({ item, travellerCount, onModify }: { item: HydratedSelection;
   const nights = Math.max(1, Math.round((new Date(offer.checkOut).getTime() - new Date(offer.checkIn).getTime()) / 86400000));
   const image = stayImage(offer);
   return (
-    <article className="itinerary-card itinerary-hotel-card">
-      <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true"><AppIcon name="hotel" /></span><strong>Hotel · {nights} night{nights === 1 ? "" : "s"} · {displayLocation(offer.locationId)}</strong></header>
+    <PlaceCardFrame kind="hotel" heading={<>Hotel · {nights} night{nights === 1 ? "" : "s"} · {displayLocation(offer.locationId)}</>}>
       <div className="hotel-card-body">
         <div className="hotel-gallery">
           <SkeletonImage src={image} alt={offer.propertyFacts.imageAltText ?? offer.propertyFacts.name} width={320} height={216} eager />
@@ -919,7 +922,7 @@ function StayCard({ item, travellerCount, onModify }: { item: HydratedSelection;
         reviewCount: offer.propertyFacts.reviewCount,
         amenities: offer.propertyFacts.amenities,
       })} />
-    </article>
+    </PlaceCardFrame>
   );
 }
 
@@ -928,8 +931,7 @@ function ActivityCard({ item, onModify }: { item: HydratedSelection; onModify():
   const offer = item.offer;
   const durationMinutes = Math.round((new Date(offer.endsAt).getTime() - new Date(offer.startsAt).getTime()) / 60000);
   return (
-    <article className="itinerary-card itinerary-activity-card">
-      <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true"><AppIcon name="activity" /></span><strong>Activity · {durationLabel(durationMinutes)} · {displayLocation(offer.locationId)}</strong></header>
+    <PlaceCardFrame kind="activity" heading={<>Activity · {durationLabel(durationMinutes)} · {displayLocation(offer.locationId)}</>}>
       <div className="activity-card-body">
         <SkeletonImage src={activityImage(offer)} alt={offer.activityFacts.imageAltText ?? offer.activityFacts.name} width={320} height={240} />
         <div><h3>{offer.activityFacts.name}</h3><p>{formatDateTime(offer.startsAt)} – {formatDateTime(offer.endsAt)}</p><div className="card-price"><strong>{formatMoney(offer.price.amount)}</strong><span>/ per person</span></div><ul><li>Duration {durationLabel(durationMinutes)}</li><li>{offer.activityFacts.mobility} mobility</li><li>Capacity {offer.capacity}</li></ul><Button variant="text" size="sm" className="inline-card-action" onClick={onModify}>Modify activity</Button></div>
@@ -938,7 +940,7 @@ function ActivityCard({ item, onModify }: { item: HydratedSelection; onModify():
         mobility: offer.activityFacts.mobility,
         interests: offer.activityFacts.tags,
       })} />
-    </article>
+    </PlaceCardFrame>
   );
 }
 
@@ -1017,13 +1019,13 @@ function InventoryOptionPicker({ picker, busy, selectingOfferId, onSelect, onClo
               </div>
               <div className="drawer-option-content">
                 {isTransport(offer) ? <><h3>{offer.operator} · {offer.mode}</h3><p className="drawer-flight-times"><strong>{formatTime(offer.departureAt)}</strong><span>{locationCode(offer.from)}</span><AppIcon name="arrow-right" size={14} /><strong>{formatTime(offer.arrivalAt)}</strong><span>{locationCode(offer.to)}</span></p><small>{formatCompactDateTime(offer.departureAt)} · {durationLabel(offer.durationMinutes)} · {offer.stops === 0 ? "Non-stop" : `${offer.stops} stop${offer.stops === 1 ? "" : "s"}`}</small></> : null}
-                {isTransfer(offer) ? <><h3>{offer.mode === "shared" ? "Shared transfer" : "Private transfer"}</h3><p className="inline-route"><span>{displayLocation(offer.from)}</span><AppIcon name="arrow-right" size={14} /><span>{displayLocation(offer.to)}</span></p><small>{durationLabel(offer.durationMinutes)} · capacity {offer.capacity}</small></> : null}
+                {isTransfer(offer) ? <><h3>{offer.mode === "shared" ? `Shared ${offer.transportMode ?? "transfer"}` : `Private ${offer.transportMode ?? "transfer"}`}</h3><p className="inline-route"><span>{displayLocation(offer.from)}</span><AppIcon name="arrow-right" size={14} /><span>{displayLocation(offer.to)}</span></p><small>{durationLabel(offer.durationMinutes)} · capacity {offer.capacity}</small></> : null}
                 {isStay(offer) ? <><h3>{offer.propertyFacts.name}</h3><p className="inline-rating"><AppIcon name="star" size={14} /> {offer.propertyFacts.rating.toFixed(1)} · {offer.propertyFacts.reviewCount} reviews</p><small>{offer.roomFacts.roomLabel} · {offer.roomFacts.mealPlan === "breakfast" ? "Includes breakfast" : "Room only"} · {offer.roomFacts.refundable ? "Refundable" : "Non-refundable"}</small></> : null}
                 {isActivity(offer) ? <><h3>{offer.activityFacts.name}</h3><p>{formatDateTime(offer.startsAt)} · {offer.activityFacts.mobility} mobility</p><small>{offer.activityFacts.tags.slice(0, 3).join(" · ")}</small></> : null}
               </div>
               <div className="drawer-option-action">
                 <strong>{selected ? "Current" : priceDelta === 0 ? "No price change" : `${priceDelta > 0 ? "+ " : "− "}${formatMoney(Math.abs(priceDelta))}`}</strong>
-                <small>{isStay(offer) ? "per room / night" : isTransfer(offer) ? "per vehicle" : "per person"}</small>
+                <small>{isStay(offer) ? "per room / night" : isTransfer(offer) ? `per ${transferPriceUnitLabel(offer)}` : "per person"}</small>
                 {selected ? <Badge tone="info">Selected</Badge> : <Button size="sm" disabled={busy || Boolean(selectingOfferId)} onClick={() => onSelect(offer)}>{selecting ? "Selecting…" : "Select"}</Button>}
               </div>
             </article>;

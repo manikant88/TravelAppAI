@@ -12,8 +12,12 @@ import type {
   TransferOffer,
   TransportOffer,
 } from "@/inventory/contracts";
+import { makeTransferOffer } from "../fixtures/transfer-offer";
+import { snapshotSupplierOffer } from "../fixtures/supplier-offer";
 
 const outbound: TransportOffer = {
+  schemaVersion: 1,
+  kind: "supplier_offer",
   id: "offer:transport:outbound",
   serviceId: "service:outbound",
   mode: "flight",
@@ -26,6 +30,9 @@ const outbound: TransportOffer = {
   operator: "Example Air",
   segments: [],
   price: { amount: 5_000, currency: "INR", unit: "per_traveller" },
+  availability: "available",
+  source: { provider: "test", providerOfferId: "service:outbound", evidenceKind: "snapshot" },
+  booking: null,
 };
 const returning: TransportOffer = {
   ...outbound,
@@ -36,7 +43,7 @@ const returning: TransportOffer = {
   departureAt: "2026-10-12T18:00:00+05:30",
   arrivalAt: "2026-10-12T19:20:00+05:30",
 };
-const arrivalTransfer: TransferOffer = {
+const arrivalTransfer: TransferOffer = makeTransferOffer({
   id: "offer:transfer:arrival",
   transferId: "transfer:arrival",
   from: "airport:udr",
@@ -45,7 +52,7 @@ const arrivalTransfer: TransferOffer = {
   durationMinutes: 45,
   capacity: 3,
   price: { amount: 1_200, currency: "INR", unit: "per_vehicle" },
-};
+});
 const departureTransfer: TransferOffer = {
   ...arrivalTransfer,
   id: "offer:transfer:departure",
@@ -54,6 +61,7 @@ const departureTransfer: TransferOffer = {
   to: "airport:udr",
 };
 const stay: StayOffer = {
+  ...snapshotSupplierOffer("room:current"),
   id: "offer:stay:current",
   roomOfferId: "room:current",
   propertyId: "property:current",
@@ -82,6 +90,7 @@ const cheaperStay: StayOffer = {
   price: { ...stay.price, amount: 2_000 },
 };
 const activity: ActivityOffer = {
+  ...snapshotSupplierOffer("session:walk"),
   id: "offer:activity:walk",
   activityId: "activity:walk",
   sessionId: "session:walk",

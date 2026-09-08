@@ -12,4 +12,6 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 Read `PROJECT_CONTEXT.md` and the relevant sections of `IMPLEMENTATION_SPEC.md`.
 
+Read `AI_HANDOFF.md` before changing existing behavior. Before product discovery, architecture work, or documentation changes, read `docs/agents/domain.md` for document ownership and conflict handling. Before working with specs or tickets, read `docs/agents/issue-tracker.md`.
+
 Do not run automated browser tests unless the user explicitly asks for them.

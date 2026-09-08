@@ -2,9 +2,87 @@
 
 ## Purpose
 
-This file is the technical source of truth for the Cleartrip AI Trip Workspace. It defines the database, inventory APIs, domain state, bounded agent workflow, proposal model, adaptive UI contracts, tests, deployment, and P0 implementation order.
+This file is the technical source of truth for Travel App AI. It defines the database, inventory APIs, domain state, bounded agent workflow, proposal model, adaptive UI contracts, tests, deployment, and the earlier baseline implementation order.
 
 Read `PROJECT_CONTEXT.md` first.
+
+## Product transition — 4 September 2026
+
+### Implemented first live flow
+
+The default `/plan` chat now uses a provisional live contract through `phase: live`
+on `/api/agent/conversation`. `/plan?mode=snapshot` preserves the earlier workspace.
+This supersedes snapshot-only runtime requirements for the live path only.
+`src/live/` owns bounded Google adapters, structured AI extraction/selection, and
+code-validated assembly. It never imports snapshot inventory or represents a
+Google hotel listing as a priced room offer. `LivePlan.totalCost` is null.
+
+The local experiment supports a specified destination, 2–7 calendar days and
+1–12 travellers. It clarifies year/date and nights, retains constraints as needing
+verification, searches hotel and attraction candidates, validates every selected ID,
+then requests opening-hour references and local driving estimates. Before any provider
+search, intake asks the traveller to choose self-driving or public transport. Self-driving
+also requires an explicitly supplied starting area/address; the broad origin city is not
+silently treated as a pickup point. Once the selected stay is known, the planner resolves
+that starting point and searches up to three outbound and return routes for the chosen
+mode using explicit 08:00 outbound and 17:00 return assumptions. The shortest-duration
+returned route is labelled as the provisional suggestion and rendered as a travel card
+inside Day 1 or the final day. Outbound travel, arrival at the stay, local transfers,
+activities and return travel share the same visible time rail. Day 1 starts from the
+returned route arrival plus an explicit 30-minute arrival/check-in buffer; it never resets
+to the normal 10:00 destination-day assumption when arrival is known. An unknown arrival
+makes every downstream Day 1 time unresolved. The adjacent map follows the same scroll
+focus: intercity travel shows its origin, stay and route polyline, while stay/activity rows
+show the local day route. Transit vehicle
+types, line names, scheduled stop times and fare appear only when the Routes response
+contains them. Missing routes remain
+null and invalidate all subsequent derived times. It does not certify opening-hour,
+budget, accessibility, ticket/seat availability, arrival/departure or full-day feasibility.
+It does not search flights or private-cab fares. Meals remain unscheduled.
+
+The browser renders a Google map and a derived timeline; durations, 10:00 starts and
+15-minute connection buffers are explicit assumptions. Google responses remain in
+memory only and are neither written to the database nor browser storage. No trip
+finalization, booking, guaranteed transport fares, hotel availability, or durable background
+tasks are implemented. Closing/refreshing the page loses this live session.
+
+Google route evidence and commercial transport offers are separate contracts. Driving
+departure/arrival values are derived estimates from the stated departure assumption and
+route duration; transit times are scheduled values only when returned. A route
+can establish a path, estimated duration and returned transit schedule; it cannot be
+treated as a bookable train/bus service or availability result. TBO is deferred to the
+next provider implementation because onboarding and approval are required. Its future
+adapter must add supplier offer IDs, price/expiry, availability and handoff/booking terms
+without changing observed Google route evidence into inventory.
+
+Route evidence carries `kind: "route_evidence"`, `schemaVersion: 1` and the provider's
+route identifier when one is returned. Supplier inventory crosses a provider adapter only after validation as
+a canonical `TransportOffer`. Editable itinerary state references the canonical offer ID,
+never the provider response. Provider adapters declare supported modes and whether they
+return live price, availability, capacity, cancellation terms, booking, and refresh
+semantics. Unsupported capabilities remain absent rather than being inferred.
+The shared transport search entry point validates offer shape, segment continuity,
+requested endpoints/date/mode, provider attribution, and every declared capability before
+returning canonical offers. Provider adapters expose raw `fetchOffers` results only to this
+boundary and cannot write directly to trip state.
+
+Each turn permits two AI calls and at most 60 Google calls with no automatic retries,
+a two-minute overall deadline, two concurrent live turns per process, cancellation,
+streamed actual progress and partial provider results. Production requests are blocked
+until authentication, durable state and production quotas are designed. IPv4 preference
+is an explicit local environment setting. Both server-side Google calls and AI calls
+keep credentials outside responses and browser bundles.
+
+
+The first customer implementation slice is specified for review in `.scratch/cheaper-stay/spec.md`: compare alternative stays with dependent transfer costs, then safely apply the organizer's selection. It includes logical operations, persistent state, authority, concurrency, freshness and acceptance cases. Its technical proposals are draft decisions; use it to review and plan this slice before revising the baseline sections or writing application code.
+
+The accepted AI behavior contract is in `PROJECT_CONTEXT.md` section 7. The customer target includes one coordinating planner, bounded tool use, persistent background tasks, current-version validation before writes, and explicit proposal authority. Opt-in monitoring should use bounded deterministic checks and factual notifications where affordable; recurring AI is optional, and all monitoring is not automatically reserved for a paid plan. The implementation sections below describe the earlier baseline until deliberately revised; they do not establish that these new capabilities already exist.
+
+The accepted customer requirements and external-booking boundary are recorded in `PROJECT_CONTEXT.md` section 4. Saved trips, group agreement, multiple origins, custom activities, and timeline/map planning describe product direction; implementation contracts and launch breadth remain to be designed. Earlier single-origin and non-collaborative limits describe the baseline only.
+
+The target is a product for actual customers. P0 references below describe the existing baseline; P1/P2 describe an earlier backlog, not accepted customer release priorities. Synthetic inventory, fixed market coverage, client-only trip storage, and previously excluded integrations are current limitations or earlier decisions to revisit. They must not be used to reject customer requirements by default.
+
+Retain factual contracts and safety invariants until deliberately revised. New product decisions must specify the required behavior and update the affected contracts; changing these documents does not make synthetic data live or introduce persistence, authentication, or booking.
 
 ---
 
@@ -366,7 +444,7 @@ Tables:
 - `transport_segments` — ordered from/to locations, local departure/arrival, duration, operator number.
 
 ```ts
-export type TravelMode = "flight" | "train" | "bus" | "ferry";
+export type TravelMode = "flight" | "train" | "bus" | "cab" | "self_drive" | "ferry" | "ship" | "cruise";
 
 export interface TransportServiceRecord {
   id: CatalogItemID;
@@ -610,6 +688,7 @@ Inventory calls should be parallelized when independent. Do not introduce HTTP m
 
 ```ts
 export interface TransportSegment {
+  mode: TravelMode;
   from: LocationID;
   to: LocationID;
   departureAt: ISODateTime;
@@ -645,6 +724,8 @@ export interface ActivityFacts {
 }
 
 export interface TransportOffer {
+  schemaVersion: 1;
+  kind: "supplier_offer";
   id: OfferID;
   serviceId: CatalogItemID;
   mode: TravelMode;
@@ -657,6 +738,15 @@ export interface TransportOffer {
   operator: string;
   segments: TransportSegment[];
   price: UnitPrice;
+  availability: "available" | "unavailable" | "unknown";
+  source: {
+    provider: string;
+    providerOfferId: string;
+    evidenceKind: "live" | "snapshot";
+    checkedAt?: ISODateTime;
+    expiresAt?: ISODateTime;
+  };
+  booking: null | { method: "handoff" | "managed"; url?: string };
 }
 
 export interface StayOffer {
@@ -685,18 +775,37 @@ export interface ActivityOffer {
 }
 
 export interface TransferOffer {
+  schemaVersion: 1;
+  kind: "supplier_offer";
   id: OfferID;
   transferId: CatalogItemID;
   from: LocationID;
   to: LocationID;
   mode: "car" | "van" | "shared";
+  transportMode?: TravelMode;
   durationMinutes: number;
   capacity: number;
-  price: UnitPrice;
+  price: UnitPrice & { unit: "per_vehicle" | "per_traveller" };
+  availability: "available" | "unavailable" | "unknown";
+  source: SupplierOfferSource;
+  booking: OfferBooking | null;
+  cancellationTerms?: OfferCancellationTerms;
 }
 ```
 
 Offer IDs encode or deterministically reference the catalog record, dates, and inventory version. `resolveOffer(id)` must reconstruct and validate an offer from the database rather than trusting client-supplied facts.
+
+Every `TransportSegment` carries its own `TravelMode`, so a provider may normalize a
+multi-modal journey such as bus → ferry → cruise without discarding transfer boundaries.
+The offer-level mode is the supplier's primary classification. `ferry`, `ship`, and
+`cruise` are distinct modes. A point-to-point cruise can be transport; a sightseeing or
+casino cruise returning to its starting area is an activity, with its connecting ferry
+represented as a transfer. `TransferOffer.transportMode` records that physical mode while
+the existing car/van/shared field continues to express the transfer service arrangement.
+Transfer prices retain the supplier's declared unit. Vehicle-priced transfers multiply by
+the vehicles required for the party; passenger-priced ferries multiply by traveller count.
+Every transfer also carries provenance, availability and booking evidence through the same
+supplier boundary as intercity transport.
 
 Cheapest, fastest, shortest-transfer, and recommended badges are derived for the current candidate set and are never stored in inventory.
 
@@ -1334,7 +1443,7 @@ export interface ProposalPreview {
 - apply only listed operations;
 - increment the trip version exactly once.
 
-P0 proposals remain in client in-memory session state keyed by ID. The inventory database does not store trips or proposals. Adding persistence would require auth/session ownership and is outside P0.
+P0 proposals remain in client in-memory session state keyed by ID. The inventory database does not store trips or proposals. Customer trip persistence requires an explicit ownership and access-control design, to be resolved during product discovery.
 
 ---
 
@@ -1637,7 +1746,7 @@ Integration and contract tests use a dedicated Neon branch seeded with the same 
 - proposal UI equals its derived preview;
 - apply increments version exactly once.
 
-## Demonstration flows
+## Behavior scenarios
 
 1. open-ended beach discovery from a supported origin;
 2. specified Udaipur planning;
@@ -1744,7 +1853,7 @@ Do not author all destination data before one end-to-end database-backed vertica
 
 ---
 
-# 30. P1, P2, and forbidden scope
+# 30. Earlier backlog and scope exclusions
 
 P1:
 
@@ -1761,7 +1870,7 @@ P2:
 - lightweight schematic map visualization from stored coordinates. Revisit only during end-to-end testing: derive markers and route arcs from `TripProjection`, and bind scanning/loading motion to actual pending request state. Exact road geometry requires later stored route shapes or an external routing provider and remains outside P0;
 - richer motion.
 
-Forbidden during P0:
+Previously excluded from the baseline; assess against customer requirements before adopting or ruling out:
 
 - live/private travel APIs or scraping;
 - booking, payment, auth, loyalty, or user profiles;
@@ -1789,9 +1898,9 @@ Twenty markets create a data-authoring burden. Meet the base coverage contract f
 
 The client receives all inventory through server APIs, but server-side agent tools call the shared inventory service directly. Server-to-self HTTP would add latency without increasing realism.
 
-## Recommendation — preserve deterministic demo behavior
+## Recommendation — preserve reproducible development fixtures
 
-Fix the inventory version and supported date window for the submission. Do not introduce random availability or prices. Model prose may vary; selected facts, IDs, calculations, and validation must remain reproducible.
+Pin inventory versions and supported date windows for repeatable fixture-based tests. Customer-facing live offers require explicit freshness, source, availability, and failure contracts; they must not silently fall back to synthetic prices. Arithmetic and validation remain deterministic for the same inputs.
 
 ## Recommendation — show agency through behavior, not animation
 
@@ -1799,7 +1908,7 @@ The strongest proof is selective tool use, evidence-driven refinement, scoped mo
 
 ## Blocker — model credentials
 
-The primary agentic path requires a valid server-side OpenAI key and supported structured outputs. The application must expose a clear invalid/unavailable-model state. Deterministic copy fallback does not replace the core agentic demonstration.
+The primary agentic path requires a valid server-side OpenAI key and supported structured outputs. The application must expose a clear invalid/unavailable-model state. Deterministic copy fallback does not replace the customer-facing planning behavior.
 
 ## Blocker — incomplete market coverage
 
@@ -1823,7 +1932,235 @@ Before implementation or after any architectural change, verify:
 10. Are explanations and adaptive emphasis grounded in supplied facts?
 11. Can a new seed market work without planner/domain/UI code changes?
 12. Are unsupported coverage, no availability, hard-filter failure, model failure, and database failure distinct?
-13. Is any abstraction present only to mimic production scale rather than serve P0?
-14. Do all twenty market coverage tests and the six demonstration flows pass?
+13. Is any abstraction present justified by an accepted customer or operational requirement?
+14. Do all twenty market coverage tests and the six behavior scenarios pass?
 
 If any answer is unclear, resolve the specification before adding application code.
+
+
+### Live card presentation
+
+Live and snapshot stays/activities share `PlaceCardFrame` and the original
+hotel/activity body classes, design tokens and UI primitives. The desktop live
+workspace places a sticky vertical Google map beside the itinerary card column;
+small screens stack it after the cards. All days render in one continuous timeline.
+A sticky date bar scrolls to each day and reflects the visible timeline event.
+Transfers, arrival buffers, meals and visits have separate estimated time ranges; unknown
+connections propagate unresolved times. Each day summarizes activity, meal, drive and
+buffer minutes without claiming unknown prices or dietary handling are verified.
+Stay, flight, route and activity alternatives appear in the shared right-side drawer and
+reuse their corresponding timeline card modules.
+
+One browser map instance follows the visible day/stop with numbered markers,
+highlighted transfer routes and cancellable camera animation. Following can be
+paused; reduced-motion preferences disable animation. Scroll events reuse loaded
+places/routes and never trigger supplier searches.
+
+Places requests now include photos, Google ratings/review counts, and price guidance
+when returned. This uses Enterprise search fields and separate Photo requests.
+At most one photo is resolved per displayed hotel/selected activity. Photo author
+attributions appear with images. Photo resources/URLs are not persisted or cached;
+images load directly in the browser using Google's returned URI, without exposing
+the server key. Missing/failed images have an honest placeholder.
+
+Selected hotel and activity detail requests also request the Google editorial
+summary, official website, affirmative family/pet/restroom facts, parking options,
+and accessibility options. Only fields actually returned are rendered in the card's
+About block. Editorial text remains unchanged and the UI does not infer absent facts.
+These rich detail masks reach Enterprise + Atmosphere; they are limited to selected
+itinerary places rather than every search candidate.
+
+Activity opening hours are planning evidence, not a full weekly content block. The
+provider preserves structured regular periods. After AI selection, deterministic
+code checks the proposed calendar weekday: a regularly closed activity moves to the
+nearest open trip day with remaining capacity, or is omitted when none exists.
+Unknown hours remain unresolved. Cards show the outcome only. Regular hours cannot
+prove future holiday or temporary exceptions, so the UI must not call them a
+date-specific guarantee.
+
+Price range/level is generic Google guidance, never a dated room offer or verified
+entry fee. The multi-provider hotel offers visible on consumer Google Maps are not a
+Places API response and must not be scraped or reproduced. Dated room prices require
+a lodging shopping supplier with dates, occupancy and rate terms. Users may enter an
+INR planning allowance per room/night or person/visit
+on each card. These local estimates remain distinct from supplier facts, do not
+produce a verified trip total, and reset on regeneration. Missing prices are not
+assigned invented defaults.
+
+### Shared option evidence and lifecycle
+
+Option candidates, supplier offers, itinerary selections, and bookings are separate
+domain concepts. A Google place, Google route, user link, or manual entry may create an
+option candidate but never acquires supplier-offer or booking authority by being shown in
+the itinerary. Supplier adapters emit versioned canonical offers and declare whether the
+evidence came from live, sandbox, or snapshot inventory. Live and sandbox observations
+carry a checked time; expiry remains independent and cannot precede that observation.
+
+Verification is recorded independently for identity, location, schedule, price,
+availability, and requirements. The code evaluates the dimensions needed for the next
+action: identity, location, and schedule for an itinerary proposal; those dimensions plus
+price and requirements for plan finalization; and availability as well for a booking
+handoff. Scheduled, user-confirmed, estimated, unknown, and non-applicable facts remain
+distinguishable. A lock preserves a selection through replanning but does not upgrade any
+verification dimension or imply a booking.
+
+Transport, transfer, stay, and activity supplier offers share the same minimum metadata:
+schema version, supplier-offer kind, availability, provider offer identity, evidence
+environment, freshness, booking method, and optional cancellation terms. Provider payloads
+remain outside editable trip state.
+
+### Nuitée sandbox stay adapter
+
+The first commercial-stay adapter calls Nuitée Connect server-side with dates, INR,
+guest nationality, and an explicit occupancy array. The API key never enters the browser.
+The adapter accepts only rates with a matching hotel record, coordinates, at least one
+room rate, and an INR customer-facing total. Empty room-rate arrays remain unavailable
+rather than becoming zero-price offers.
+
+Nuitée returns an exact combined amount for every room and night in the offer. The
+canonical stay offer preserves this as `totalPrice` and separately derives `price` as the
+average per room per night for comparison and nightly-budget constraints. The UI labels
+sandbox provenance, shows both values, room and board facts, and cancellation evidence,
+and removes the manual price-estimate control when supplier pricing exists. A returned
+offer is not bookable until a separate prebook flow is implemented; `booking` remains
+null.
+
+The current live intake knows traveller count but not room sharing or nationality. Until
+those questions are added, the adapter assumes no more than two travellers per room and
+uses `NUITEE_GUEST_NATIONALITY` (default `IN`). Both assumptions are shown in plan warnings.
+Nuitée coordinates are used directly by Google Routes so supplier property IDs are never
+sent as Google Place IDs.
+
+### Nuitée sandbox flight journey
+
+An explicit `flight` preference uses the server-only Nuitée Flights sandbox through the
+canonical transport-provider boundary. The adapter resolves the nearest IATA airports
+from Nuitée's airport catalogue, searches outbound and return as separate one-way offers,
+and emits only validated `TransportOffer` values. The canonical price is Nuitée's stated
+per-adult amount; the party total is derived by deterministic multiplication. Offer IDs,
+expiry, remaining seats, airline, flight number, schedule and fare terms retain sandbox
+provenance. Search results are not booking actions.
+
+The current adapter accepts direct flights only when origin and destination share the
+same observed UTC offset. Nuitée's segment timestamps are local times without an offset,
+so cross-time-zone and connecting itineraries require a verified travel-date time zone
+for every airport before they can satisfy the canonical ISO datetime contract. Such
+results are rejected or excluded instead of receiving an invented offset.
+
+Flight planning requires an explicit pickup area or public meeting point. A complete
+journey contains Google driving evidence from pickup to the origin airport, the supplier
+flight, another road transfer from the destination airport to the selected stay, and the
+inverse chain on return. Day 1 activities start after the last-mile arrival plus the
+30-minute stay/check-in buffer. The map follows each transfer and draws the focused
+airport-to-airport flight line without making scroll-time provider calls.
+
+The deterministic suggestion first filters outbound flights that arrive by 13:00 and
+return flights that depart at or after 17:00, then ranks by per-adult fare and duration.
+If no direct result fits the window, the lowest-priced direct result remains visible for
+review. The current intake treats every traveller as an adult in economy class and states
+that assumption. Passenger ages, baggage selection, round-trip bundles, connecting
+flights, selection persistence, prebook and booking remain future work.
+
+If the flight supplier times out or returns no usable offer for a direction, planning
+continues without inventing a flight. The timeline shows an unresolved flight card and
+offers unselected Google Routes fallbacks. Returned transit evidence is labelled from its
+actual rail/bus modes. Self-drive and cab cards share the validated Google road route;
+the cab card explicitly leaves provider availability, pickup ETA and fare unresolved.
+Choosing a fallback updates the timeline and map. Retrying flights is a server-validated
+selection action that preserves the current stay and activities and refreshes airport
+transfers only when supplier offers return.
+
+### Live option selection and locks
+
+The live workspace supports session-scoped selection among the stay and direct-flight
+offers already returned for the current plan. Selection commands return the entire
+revalidated plan and never mutate a card independently. Server code verifies membership
+in the current result bundle, availability, expiry and the relevant lock before applying
+the change.
+
+Changing a flight refreshes that direction's Google first- and last-mile road routes.
+Changing a stay refreshes its intercity endpoint when present, airport/stay legs for a
+flight journey, and every hotel/activity connection. Failed route refreshes remain empty
+or unresolved. Stay, outbound-flight and return-flight locks are independent and must be
+explicitly removed before replacement.
+
+This state is held only by the browser and sent back through the local-only live endpoint;
+it provides no organizer authority, durable ownership or concurrency protection. Those
+properties require the saved-trip/authentication slice. Google Routes remains the ground
+routing provider while Uber access is pending. A sandbox base URL and client secret alone
+do not authorize estimates; an approved scope and usable access token are also required.
+Manual/link candidates, activity additions
+and removals, supplier repricing, prebook and booking remain deferred.
+
+Alternatives are presented through the existing right-side inventory drawer. The
+continuous timeline contains selected items only. Each selected stay, flight, Google
+intercity route and activity has Lock and Change actions; a lock disables replacement
+until explicitly removed. Drawer alternatives use the same live card modules as the
+selected timeline items. They show only evidence supported by the provider and explain
+itinerary effects such as price difference, elapsed-time difference, arrival shift and
+which transfer chains will be recomputed. Drawer selection is supplied through those card
+interfaces instead of maintaining a second presentation for each itinerary item type.
+
+The live plan retains its bounded Google activity candidate set for this session.
+Replacing an activity is a server command tied to a day and visit position. The server
+rejects candidates outside that set, duplicates already used in the trip, candidates
+whose regular schedule shows them closed that day, and replacement of a locked activity.
+It then refreshes that day's hotel/activity driving chain. Unknown opening hours remain
+explicit and are not treated as confirmed availability. Google route alternatives can be
+selected from the already observed result set without another provider call; their
+schedule and map evidence replace the selected direction atomically.
+
+### Live meal planning
+
+The live intake requires an explicit dining preference before provider searches:
+vegetarian, pure-vegetarian restaurants only, non-vegetarian, or both. Dietary notes
+separately retain allergies, intolerances, religious restrictions and foods or cuisines
+the traveller wants to try. The planner does not infer either from demographics or the
+destination.
+
+Google Places returns a bounded restaurant candidate set using that stated preference.
+Breakfast is planned at or near the selected stay from Day 2 onward; a Nuitée room offer
+may prove breakfast inclusion, while other stays leave inclusion, menu and price unknown.
+Lunch and dinner become timed restaurant stops in the continuous itinerary. Candidates
+whose regular schedule does not cover the target meal time are skipped. Unknown hours
+remain visible rather than being treated as confirmed.
+
+Meal stops participate in the same Google driving chain and scroll-following map as
+activities. The timeline shows travel, arrival buffer, open time before the meal target,
+meal duration and subsequent movement. Google identity, location, ratings, photos, price
+guidance and regular hours are place evidence only. A text-search match for a
+pure-vegetarian restaurant does not prove menu content, cross-contamination controls,
+allergen handling or kitchen separation; the card tells the traveller to confirm these.
+
+### Route-aware meals and optional evenings
+
+Lunch and dinner discovery uses a bounded number of Google Places Text Searches along the
+Google Routes polyline between the surrounding itinerary anchors. The planner limits
+corridor searches to four meal windows, or fewer for shorter trips, so the complete plan
+stays within the configured live Google call budget. Each selected meal retains whether it
+came from route-corridor search or the destination-wide fallback, the anchor IDs, and the
+direct route duration when returned. After the complete day route is assembled, the
+planner records added driving time only when the selected meal's adjacent legs still
+match those anchors. Unsearched, failed, or inapplicable corridor searches remain explicit
+destination fallbacks and are identified for route review.
+
+The trip brief may retain a traveller-stated day rhythm: early nights, evening
+experiences, nightlife, overnight adventure, or flexible. It is optional and never
+blocks the first plan. Missing preferences are not inferred from destination, age,
+relationship, or demographics. Early-night intent suppresses evening discovery; other
+values shape a bounded Google Places candidate search.
+
+Evening results are optional ideas and are never silently inserted into the itinerary.
+The live workspace invites a chat refinement. Bars, clubs, casinos, and overnight
+activities require expressed interest. Google place results do not prove a dated event,
+ticket, last admission, activity provider, pickup, or overnight availability.
+
+Meals and activities use shared regular-hours interval evidence with `valid`, `invalid`,
+or `unresolved` status. The complete projected start/end interval must be covered,
+including a regular period crossing midnight. Regular hours do not prove holiday
+exceptions or date-specific operation.
+
+Cross-midnight occupancy, overnight intercity journeys, overnight self-drive safeguards,
+provider-verified overnight activities, user-added itinerary items, and complete
+lock-aware recalculation are deferred in
+`.scratch/route-aware-evenings/issues/05-future-cross-midnight-and-user-options.md`.

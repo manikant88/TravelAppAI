@@ -107,6 +107,27 @@ describe("transfer inventory search", () => {
     expect(response.results.map((offer) => offer.mode)).toEqual(["van", "car"]);
   });
 
+  it("preserves passenger-priced ferry transfers from inventory", async () => {
+    const ferry: TransferCatalogOffer = {
+      id: "transfer:hotel-casino-ferry",
+      fromLocationId: "airport:udr",
+      toLocationId: "neighborhood:udaipur-old-city",
+      mode: "shared",
+      transportMode: "ferry",
+      durationMinutes: 20,
+      capacity: 100,
+      priceAmount: 500,
+      currency: "INR",
+      priceUnit: "per_traveller",
+    };
+    const response = await searchTransfers(request(4), createRepository([ferry]));
+
+    expect(response.results[0]).toMatchObject({
+      transportMode: "ferry",
+      price: { amount: 500, currency: "INR", unit: "per_traveller" },
+    });
+  });
+
   it("distinguishes unsupported locations from unsupported routes", async () => {
     const repository = createRepository();
     const unsupportedLocation = await searchTransfers(

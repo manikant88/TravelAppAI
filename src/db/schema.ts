@@ -24,7 +24,7 @@ export const locationTypeEnum = pgEnum("location_type", [
 ]);
 
 export const marketRegionEnum = pgEnum("market_region", ["india", "international"]);
-export const travelModeEnum = pgEnum("travel_mode", ["flight", "train", "bus", "ferry"]);
+export const travelModeEnum = pgEnum("travel_mode", ["flight", "train", "bus", "cab", "self_drive", "ferry", "ship", "cruise"]);
 export const mealPlanEnum = pgEnum("meal_plan", ["none", "breakfast"]);
 export const mobilityLoadEnum = pgEnum("mobility_load", ["low", "medium", "high"]);
 export const transferModeEnum = pgEnum("transfer_mode", ["car", "van", "shared"]);
@@ -262,6 +262,7 @@ export const transfers = pgTable(
       .notNull()
       .references(() => locations.id, { onDelete: "restrict" }),
     mode: transferModeEnum("mode").notNull(),
+    transportMode: travelModeEnum("transport_mode"),
     durationMinutes: integer("duration_minutes").notNull(),
     operatingStartLocalTime: time("operating_start_local_time", { withTimezone: false }),
     operatingEndLocalTime: time("operating_end_local_time", { withTimezone: false }),
@@ -277,6 +278,7 @@ export const transfers = pgTable(
     check("transfers_capacity_check", sql`${table.capacity} > 0`),
     check("transfers_price_check", sql`${table.priceAmount} >= 0`),
     check("transfers_currency_check", sql`${table.currency} = 'INR'`),
+    check("transfers_price_unit_check", sql`${table.priceUnit} in ('per_vehicle', 'per_traveller')`),
   ],
 );
 

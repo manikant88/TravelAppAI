@@ -1,3 +1,4 @@
+import { handleLiveConversation, handleLiveSelection } from "@/live/handler.server";
 import { NextResponse, type NextRequest } from "next/server";
 import { NaturalIntakeError } from "@/agent/natural-intake";
 import { ModifyError } from "@/agent/modify";
@@ -10,6 +11,8 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => undefined);
+  if (body?.phase === "live") return handleLiveConversation(body, request);
+  if (body?.phase === "live-selection") return handleLiveSelection(body, request);
   const parsed = conversationRequestSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(

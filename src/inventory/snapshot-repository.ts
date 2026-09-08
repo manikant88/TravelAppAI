@@ -167,20 +167,21 @@ export function createSnapshotInventoryRepository(
   const transferOffers: TransferCatalogOffer[] = seed.transfers
     .filter((transfer) => active(transfer.active))
     .flatMap((transfer) => {
-      if (transfer.currency !== "INR" || transfer.priceUnit !== "per_vehicle") return [];
+      if (transfer.currency !== "INR" || (transfer.priceUnit !== "per_vehicle" && transfer.priceUnit !== "per_traveller")) return [];
       if (!active(locationById.get(transfer.fromLocationId)?.active) || !active(locationById.get(transfer.toLocationId)?.active)) return [];
       return [{
         id: transfer.id,
         fromLocationId: transfer.fromLocationId,
         toLocationId: transfer.toLocationId,
         mode: transfer.mode,
+        transportMode: transfer.transportMode ?? undefined,
         durationMinutes: transfer.durationMinutes,
         operatingStartLocalTime: transfer.operatingStartLocalTime ?? undefined,
         operatingEndLocalTime: transfer.operatingEndLocalTime ?? undefined,
         capacity: transfer.capacity,
         priceAmount: transfer.priceAmount,
         currency: "INR" as const,
-        priceUnit: "per_vehicle" as const,
+        priceUnit: transfer.priceUnit,
       }];
     })
     .sort((left, right) => left.priceAmount - right.priceAmount || left.durationMinutes - right.durationMinutes || left.id.localeCompare(right.id, "en"));

@@ -34,6 +34,8 @@ describe("activity search API contract", () => {
 
   it("exposes grounded activity facts without recurring catalog fields", () => {
     const offer = {
+      schemaVersion: 1,
+      kind: "supplier_offer",
       id: "offer:activity:example",
       activityId: "activity:udaipur-pichola-boat",
       sessionId: "session:pichola-boat-sunset",
@@ -50,6 +52,9 @@ describe("activity search API contract", () => {
         imageAssetKey: "activity-pichola-boat",
       },
       price: { amount: 900, currency: "INR", unit: "per_participant" },
+      availability: "available",
+      source: { provider: "test-snapshot", providerOfferId: "session:pichola-boat-sunset", evidenceKind: "snapshot" },
+      booking: null,
     };
 
     expect(activityOfferSchema.safeParse(offer).success).toBe(true);

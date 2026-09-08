@@ -24,6 +24,8 @@ describe("transfer search API contract", () => {
 
   it("exposes only grounded transfer facts with explicit per-vehicle pricing", () => {
     const offer = {
+      schemaVersion: 1,
+      kind: "supplier_offer",
       id: "offer:transfer:example",
       transferId: "transfer:udr-old-city",
       from: "airport:udr",
@@ -32,6 +34,9 @@ describe("transfer search API contract", () => {
       durationMinutes: 45,
       capacity: 3,
       price: { amount: 1_200, currency: "INR", unit: "per_vehicle" },
+      availability: "available",
+      source: { provider: "test", providerOfferId: "transfer:udr-old-city", evidenceKind: "snapshot" },
+      booking: null,
     };
 
     expect(transferOfferSchema.safeParse(offer).success).toBe(true);

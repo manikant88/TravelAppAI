@@ -22,6 +22,34 @@
       "when": 1787917200000,
       "tag": "0002_pexels_image_assets",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788617013700,
+      "tag": "0003_clever_robbie_robertson",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788617309677,
+      "tag": "0004_flowery_jack_power",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788672772857,
+      "tag": "0005_narrow_stingray",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788672887903,
+      "tag": "0006_absurd_swarm",
+      "breakpoints": true
     }
   ]
 }

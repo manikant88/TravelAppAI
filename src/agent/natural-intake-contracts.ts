@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { isoDateSchema, tripRequestSchema } from "@/domain/request";
-import type { ConstraintDraft, MissingRequirement, TripRequest } from "@/domain/model";
+import { travelModes, type ConstraintDraft, type MissingRequirement, type TripRequest } from "@/domain/model";
 import { conversationContextSchema } from "@/agent/conversation-contracts";
 
 const nullableTextSchema = z.string().trim().min(1).max(160).nullable();
@@ -59,7 +59,7 @@ const naturalTravelConstraintSchema = z
     priority: z.enum(["hard", "strong", "flexible"]),
     earliestDeparture: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable(),
     latestArrival: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable(),
-    allowedModes: z.array(z.enum(["flight", "train", "bus", "ferry"])).max(4),
+    allowedModes: z.array(z.enum(travelModes)).max(travelModes.length),
     maxStops: z.number().int().nonnegative().nullable(),
   })
   .strict()
