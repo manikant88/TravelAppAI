@@ -505,6 +505,11 @@ Clarification and no-result replies are deliberately brief: they ask for a usefu
 choice and omit explanations of validation, data flow, local-session storage and retained
 screen state.
 
+The final reply now describes the destination through the selected activity set. A
+deterministic narrative identifies supported themes, names up to four highlights and uses
+at most one short observed editorial summary. This adds context and selection trust without
+making unsupported destination claims or adding another model call.
+
 The globe prompt submission is deferred through `src/ui/auto-submit.ts`. This is required
 because React development Strict Mode replays effect setup and cleanup; starting the request
 synchronously allowed the cleanup to abort it while the consumed flag prevented a retry.

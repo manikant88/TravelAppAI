@@ -36,7 +36,21 @@ describe('live conversation planning boundary', () => {
   expect(r.message).toContain('I’m using hotel as your base');
   expect(r.message).toContain('I scheduled 1 activity at a balanced pace');
   expect(r.message).toContain('For travel, I picked the quickest route');
-  expect(r.message).not.toMatch(/Nuitée|Google Places|provider inventory/i);
+ expect(r.message).not.toMatch(/Nuitée|Google Places|provider inventory/i);
+ });
+ it('introduces the destination through the selected activities and observed place descriptions', async () => {
+  const d=setup();
+  const palace={...place('city-palace'),name:'City Palace',editorialSummary:'A historic palace complex overlooking the lake.'};
+  const lake={...place('lake-pichola'),name:'Lake Pichola'};
+  d.model.extract=async()=>({brief:{...brief,destination:'Udaipur',preferences:'heritage, lakes and culture'},question:null});
+  d.model.select=async()=>({hotelId:'hotel',visits:[{placeId:palace.id,day:2,durationMinutes:90},{placeId:lake.id,day:3,durationMinutes:90}]});
+  d.provider.search=vi.fn(async query=>query.startsWith('hotels')?[place('hotel')]:query.startsWith('tourist')?[palace,lake]:query.includes('restaurants')||query.startsWith('evening')?[]:[{...place('origin'),name:'Delhi',utcOffsetMinutes:330}]);
+  d.provider.details=vi.fn(async id=>id===palace.id?palace:lake);
+  const result=await runLivePlan(d.input,d);
+  expect(result.message).toContain('The selected activities give you a feel for Udaipur');
+  expect(result.message).toContain('historic landmarks and waterside scenery');
+  expect(result.message).toContain('Highlights include City Palace and Lake Pichola');
+  expect(result.message).toContain('City Palace: A historic palace complex overlooking the lake.');
  });
  it('describes planning work without exposing supplier names in loading copy', async () => {
   const d=setup(); const progress:string[]=[];

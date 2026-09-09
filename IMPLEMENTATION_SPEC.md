@@ -117,6 +117,12 @@ for the next useful choice without describing internal validation, data flow, se
 storage or retained UI state. Decision explanations state the practical effect on the trip,
 not the mechanics used to calculate it.
 
+The completed-plan reply also introduces the destination through the activities actually
+selected. It names representative highlights, summarizes the mix of experiences from
+their names and observed descriptions, and may quote one short observed place summary.
+It does not invent general destination facts or claim that an interest was satisfied when
+the selected place evidence does not support that claim.
+
 Required facts are destination, origin, traveller count, duration, dated start,
 night-count confirmation, intercity travel preference and a conditional first-mile
 location for flight, cab or self-drive. Travel preference lives inside Preferences and

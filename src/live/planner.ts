@@ -276,7 +276,8 @@ function planCompletionMessage(plan: LivePlan, hotel: LivePlace) {
   const issueCount = blocking + unresolved;
   const paragraphs = [
     `I’ve put together a ${plan.brief.days}-day trip to ${plan.brief.destination} for ${plan.brief.travellers} traveller${plan.brief.travellers === 1 ? '' : 's'}.`,
-    `I’m using ${hotel.name} as your base and planned each day from and back to the stay, so the activities, transfers and meal stops stay connected. I scheduled ${activityCount} activit${activityCount === 1 ? 'y' : 'ies'} at a ${pace} pace, keeping arrival and departure days within the time your travel leaves available.`,
+    destinationActivityMessage(plan),
+    `I’m using ${hotel.name} as your base so the daily routes stay practical. I scheduled ${activityCount} activit${activityCount === 1 ? 'y' : 'ies'} at a ${pace} pace and kept the arrival and departure days lighter when travel reduces the time available.`,
     mealDecisionMessage(restaurantMeals.length, corridorMeals, plan.brief.dietaryPreference),
     travelDecisionMessage(plan),
     issueCount
@@ -285,6 +286,42 @@ function planCompletionMessage(plan: LivePlan, hotel: LivePlace) {
     plan.eveningPrompt,
   ].filter((value): value is string => Boolean(value));
   return paragraphs.join('\n\n');
+}
+
+function destinationActivityMessage(plan: LivePlan) {
+  const activities = [...new Map(plan.days.flatMap(day => day.visits).map(visit => [visit.place.id, visit.place])).values()];
+  if (!activities.length) return `I kept the days open because there weren’t enough suitable activities in ${plan.brief.destination}.`;
+  const themes = [...new Set(activities.flatMap(activityThemes))].slice(0, 3);
+  const themeText = themes.length ? ` The mix leans into ${naturalList(themes)}.` : '';
+  const featured = activities.slice(0, 4).map(place => place.name);
+  const remaining = activities.length - featured.length;
+  const described = activities.find(place => place.editorialSummary);
+  const detail = described?.editorialSummary ? ` ${described.name}: ${sentenceExcerpt(described.editorialSummary)}` : '';
+  return `The selected activities give you a feel for ${plan.brief.destination} rather than repeating the same kind of stop.${themeText} Highlights include ${naturalList(featured)}${remaining > 0 ? `, with ${remaining} more across the trip` : ''}.${detail}`;
+}
+
+function activityThemes(place: LivePlace) {
+  const text = `${place.name} ${place.editorialSummary ?? ''}`.toLowerCase();
+  return [
+    /\b(fort|palace|heritage|historic|monument|temple|architecture)\b/.test(text) ? 'historic landmarks' : '',
+    /\b(lake|beach|river|waterfront|boat|coast)\b/.test(text) ? 'waterside scenery' : '',
+    /\b(museum|gallery|cultural|culture|art|theatre|theater)\b/.test(text) ? 'arts and culture' : '',
+    /\b(market|bazaar|neighbou?rhood|old city|street)\b/.test(text) ? 'local markets' : '',
+    /\b(park|garden|viewpoint|hill|wildlife|zoo|trek|trail)\b/.test(text) ? 'outdoor places' : '',
+    /\b(bar|pub|club|nightlife|live music|concert|show)\b/.test(text) ? 'evening experiences' : '',
+  ].filter(Boolean);
+}
+
+function naturalList(values: string[]) {
+  if (values.length < 2) return values[0] ?? '';
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(', ')}, and ${values.at(-1)}`;
+}
+
+function sentenceExcerpt(value: string) {
+  const sentence = value.trim().split(/(?<=[.!?])\s/, 1)[0];
+  const excerpt = sentence.length > 160 ? `${sentence.slice(0, 157).trimEnd()}…` : sentence;
+  return excerpt.endsWith('.') || excerpt.endsWith('!') || excerpt.endsWith('?') || excerpt.endsWith('…') ? excerpt : `${excerpt}.`;
 }
 
 function mealDecisionMessage(mealCount: number, corridorMeals: number, preference: z.infer<typeof liveBriefSchema>['dietaryPreference']) {
