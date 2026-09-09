@@ -22,7 +22,7 @@ describe('live trip essentials', () => {
   it('requires a first-mile location for flight, self-drive and cab', () => {
     const flight = { ...completeBrief, travelMode: 'flight' as const };
     expect(liveEssentialReadiness(flight)).toEqual({ complete: 7, total: 8, ready: false });
-    expect(missingLiveEssential(flight, { today: '2026-09-08', flightConfigured: true })).toContain('starting area');
+    expect(missingLiveEssential(flight, { today: '2026-09-08', flightConfigured: true })).toContain('airport transfer start');
     expect(liveEssentialReadiness({ ...completeBrief, travelMode: 'cab', pickupLocation: null }).ready).toBe(false);
   });
 

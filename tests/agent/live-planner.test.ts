@@ -123,7 +123,7 @@ it('constrains explicit train and bus preferences to their Google transit modes'
 it('uses cab road evidence and requires an explicit cab pickup point', async () => {
  const missing=setup();missing.model.extract=async()=>({brief:{...brief,travelMode:'cab',pickupLocation:null},question:null});
  const clarification=await runLivePlan(missing.input,missing);
- expect(clarification.message).toContain('cab estimate');
+ expect(clarification.message).toContain('cab pick you up');
  expect(missing.provider.search).not.toHaveBeenCalled();
 
  const d=setup();d.model.extract=async()=>({brief:{...brief,travelMode:'cab',pickupLocation:'India Gate, New Delhi'},question:null});
@@ -164,21 +164,21 @@ it('limits detailed Google enrichment to the scheduled shortlist', async () => {
 it('asks for a transport preference before any provider search', async () => {
  const d=setup();d.model.extract=async()=>({brief:{...brief,travelMode:null},question:null});
  const r=await runLivePlan(d.input,d);
- expect(r.message).toContain('prefer to travel');
+ expect(r.message).toContain('How would you like to travel');
  expect(d.provider.search).not.toHaveBeenCalled();
 });
 
 it('asks self-drivers for a starting location before any provider search', async () => {
  const d=setup();d.model.extract=async()=>({brief:{...brief,travelMode:'self_drive',pickupLocation:null},question:null});
  const r=await runLivePlan(d.input,d);
- expect(r.message).toContain('starting area');
+ expect(r.message).toContain('start driving from');
  expect(d.provider.search).not.toHaveBeenCalled();
 });
 
 it('asks flyers for a starting point before any provider search', async () => {
  const d=setup();d.model.extract=async()=>({brief:{...brief,travelMode:'flight',pickupLocation:null},question:null});
  const r=await runLivePlan(d.input,{...d,flightProvider:{search:vi.fn()} as unknown as FlightProvider});
- expect(r.message).toContain('starting area');
+ expect(r.message).toContain('airport transfer start');
  expect(d.provider.search).not.toHaveBeenCalled();
 });
 

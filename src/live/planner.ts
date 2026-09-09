@@ -92,7 +92,7 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
   emit('Choosing a stay and shaping each day around your pace and travel time…');
   let selection: z.infer<typeof selectionSchema>;
   try { selection = selectionSchema.parse(await deps.model.select(brief, hotels, planningActivities)); }
-  catch { plan.warnings.push('AI could not produce a valid selection. No itinerary was invented.'); return { kind: 'live', brief, plan, message: 'I found places that could work, but I couldn’t arrange them into a reliable day-by-day plan. Please try again and I’ll rebuild the schedule.' }; }
+  catch { plan.warnings.push('AI could not produce a valid selection. No itinerary was invented.'); return { kind: 'live', brief, plan, message: 'I found some promising places, but couldn’t make the days work comfortably. Would you like me to try again?' }; }
   const hotel = hotels.find(h => h.id === selection.hotelId);
   const seen = new Set<string>();
   const counts = new Map<number, number>();
@@ -102,7 +102,7 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
     if (v.day > brief.days! || count > 4 || seen.has(v.placeId) || !planningActivities.some(a => a.id === v.placeId)) return false;
     seen.add(v.placeId); return true;
   });
-  if (!valid || !hotel) { plan.warnings.push('AI selection failed validation. No unverified selections were applied.'); return { kind: 'live', brief, plan, message: 'I found suitable options, but their first arrangement didn’t pass the timing and availability checks. I left the itinerary unchanged so you can retry safely.' }; }
+  if (!valid || !hotel) { plan.warnings.push('AI selection failed validation. No unverified selections were applied.'); return { kind: 'live', brief, plan, message: 'These options don’t fit together comfortably yet. Would you like me to arrange them again?' }; }
   plan.selectedHotelId = hotel.id;
   emit(brief.travelMode === 'flight' ? 'Comparing flights and the transfers to and from each airport…' : `Comparing ${travelModeDescription(brief.travelMode!)} options for the outward and return journeys…`);
   let resolvedRouteOrigin: LivePlace | undefined;
@@ -261,9 +261,9 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
 }
 
 function partialPlanMessage(plan: LivePlan) {
-  if (!plan.hotels.length && !plan.activityOptions?.length) return `I couldn’t find enough stay or activity information for ${plan.brief.destination} to build a useful itinerary. Try the search again, or adjust the destination or dates.`;
-  if (!plan.hotels.length) return `I found activities in ${plan.brief.destination}, but no stay that I could use as a reliable base for these dates. I’ve kept the activity ideas visible so you can review them before trying again.`;
-  return `I found places to stay in ${plan.brief.destination}, but not enough activity information to build dependable days around them. I’ve kept the stays visible and left the schedule open rather than filling it with guesses.`;
+  if (!plan.hotels.length && !plan.activityOptions?.length) return `I couldn’t find enough options in ${plan.brief.destination} for these dates. Would you like me to try again or change the dates?`;
+  if (!plan.hotels.length) return `I found activities in ${plan.brief.destination}, but couldn’t find a stay for these dates. Would you like me to try again or change the dates?`;
+  return `I found places to stay in ${plan.brief.destination}, but not enough activities for a useful day-by-day plan. Would you like me to try again or adjust your interests?`;
 }
 
 function planCompletionMessage(plan: LivePlan, hotel: LivePlace) {
@@ -281,7 +281,7 @@ function planCompletionMessage(plan: LivePlan, hotel: LivePlace) {
     travelDecisionMessage(plan),
     issueCount
       ? `There ${issueCount === 1 ? 'is' : 'are'} still ${issueCount} timing or connection ${issueCount === 1 ? 'detail' : 'details'} to review. I’ve marked them beside the affected items instead of guessing.`
-      : 'The scheduled items fit the current timing checks. Prices and bookable availability can still change, so refresh them before you reserve anything.',
+      : 'The days fit together comfortably. Check the latest prices and availability before booking.',
     plan.eveningPrompt,
   ].filter((value): value is string => Boolean(value));
   return paragraphs.join('\n\n');
@@ -298,11 +298,11 @@ function travelDecisionMessage(plan: LivePlan) {
   const returnFlight = plan.flight?.return.find(option => option.id === plan.flight?.suggestedReturnId);
   if (outboundFlight || returnFlight) {
     const choices = [outboundFlight ? `${flightName(outboundFlight)} outward` : '', returnFlight ? `${flightName(returnFlight)} for the return` : ''].filter(Boolean);
-    return `For travel, I chose ${choices.join(' and ')}. The shortlist first protects useful arrival and departure times, then compares price and journey length; airport transfers and check-in buffers are included in the timeline.`;
+    return `For travel, I chose ${choices.join(' and ')} to preserve useful time on your first and last days. The timeline includes airport transfers and check-in time.`;
   }
   if (plan.brief.travelMode === 'flight' && plan.travel?.context === 'flight_fallback') return 'I couldn’t find a usable flight for one or both journeys, so I left train, bus, cab and self-drive routes available for comparison without choosing one for you.';
-  if (plan.travel) return `For travel, ${plan.travel.selectionReason} The selected route sets the usable time on your first and last days.`;
-  return 'Travel timing is still unresolved, so I kept the first and last days light rather than planning around an assumed arrival or departure.';
+  if (plan.travel) return `For travel, ${plan.travel.selectionReason} This leaves the time shown on your first and last days.`;
+  return 'I kept the first and last days light until your arrival and departure times are known.';
 }
 
 function flightName(offer: import('@/inventory/contracts').TransportOffer) {

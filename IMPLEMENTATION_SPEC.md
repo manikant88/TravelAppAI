@@ -112,6 +112,11 @@ from validated plan facts and deterministic selection rules. Supplier attributio
 on the relevant evidence cards and warnings where the source or freshness matters; it is
 not repeated as an inventory receipt in the conversation.
 
+Conversation stays concise and traveller-facing. Clarification and no-result messages ask
+for the next useful choice without describing internal validation, data flow, session
+storage or retained UI state. Decision explanations state the practical effect on the trip,
+not the mechanics used to calculate it.
+
 Required facts are destination, origin, traveller count, duration, dated start,
 night-count confirmation, intercity travel preference and a conditional first-mile
 location for flight, cab or self-drive. Travel preference lives inside Preferences and

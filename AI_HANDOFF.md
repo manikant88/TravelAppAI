@@ -501,6 +501,9 @@ activities and meals instead of narrating supplier/database calls. The completio
 assembled from validated plan facts and explains why the selected stay, travel option,
 activity load and meal placement work together, along with any unresolved constraints.
 Provider provenance remains visible on inventory cards and relevant evidence warnings.
+Clarification and no-result replies are deliberately brief: they ask for a useful next
+choice and omit explanations of validation, data flow, local-session storage and retained
+screen state.
 
 The globe prompt submission is deferred through `src/ui/auto-submit.ts`. This is required
 because React development Strict Mode replays effect setup and cleanup; starting the request

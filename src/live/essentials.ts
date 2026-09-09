@@ -52,7 +52,7 @@ export function liveEssentialSuggestions(brief: LiveBrief): LiveEssentialSuggest
     { label: 'Bus', message: 'I prefer to travel by bus.' },
     { label: 'Cab', message: 'I prefer a private cab.' },
     { label: 'Self Drive', message: 'I will drive my own vehicle.' },
-    { label: 'Recommend Me', message: 'Recommend the best travel mode using observed route evidence, my budget and group size.' },
+    { label: 'Recommend Me', message: 'Recommend a travel option that suits my budget and group size.' },
   ];
   if ((brief.travelMode === 'flight' || brief.travelMode === 'self_drive' || brief.travelMode === 'cab') && !brief.pickupLocation) return brief.origin ? [
     { label: `${brief.origin} city centre`, message: `Use ${brief.origin} city centre as my starting point.` },
@@ -69,9 +69,13 @@ export function missingLiveEssential(brief: LiveBrief, context: LiveEssentialReq
   if (!brief.startDate) return `Please confirm your start date including the year. Should I treat ${brief.days} days as ${brief.days - 1} nights?`;
   if (brief.startDate < context.today) return 'That start date is in the past. What future date should I use?';
   if (!brief.nightsConfirmed) return `Should I treat ${brief.days} days as ${brief.days - 1} nights, checking out on ${addCalendarDays(brief.startDate, brief.days - 1)}? Please confirm the year too.`;
-  if (!brief.travelMode) return 'How would you prefer to travel for this trip: flight, train, bus, cab, self drive, or should I recommend a route from the available evidence?';
+  if (!brief.travelMode) return 'How would you like to travel: flight, train, bus, cab or self drive? I can recommend an option if you’re unsure.';
   if ((brief.travelMode === 'self_drive' || brief.travelMode === 'flight' || brief.travelMode === 'cab') && !brief.pickupLocation) {
-    return `What starting area or pickup address should I use for your ${brief.travelMode === 'flight' ? 'airport transfer' : brief.travelMode === 'cab' ? 'cab estimate' : 'driving estimate'}? You can use a public meeting point instead of a private address. Your answer is sent to the AI planner and Google Maps for this local session, is not shared with other travellers, and is cleared on refresh.`;
+    return brief.travelMode === 'flight'
+      ? 'Where should your airport transfer start? A neighbourhood, landmark or public meeting point is enough.'
+      : brief.travelMode === 'cab'
+        ? 'Where should the cab pick you up? A neighbourhood, landmark or public meeting point is enough.'
+        : 'Where will you start driving from? A neighbourhood or nearby landmark is enough.';
   }
   if (brief.travelMode === 'flight' && !context.flightConfigured) return 'Flight search is not available in this environment yet. You can choose train, bus, cab, self-drive or Recommend Me, or try flights again after it is configured.';
   return context.modelQuestion ?? null;
@@ -116,7 +120,7 @@ export function liveEssentialsMessage(draft: LiveEssentialsDraft) {
     : draft.travelMode === 'train' ? 'I prefer to travel by train.'
     : draft.travelMode === 'bus' ? 'I prefer to travel by bus.'
     : draft.travelMode === 'cab' ? 'I prefer a private cab.'
-    : draft.travelMode === 'recommend' ? 'Recommend the best travel mode using observed route evidence, my budget and group size.'
+    : draft.travelMode === 'recommend' ? 'Recommend a travel option that suits my budget and group size.'
     : 'I prefer public transport such as trains or buses.';
   const parts = [
     `Plan a ${days}-day trip from ${draft.origin.trim()} to ${draft.destination.trim()} starting ${draft.startDate} for ${travellers} traveller${travellers === 1 ? '' : 's'}.`,

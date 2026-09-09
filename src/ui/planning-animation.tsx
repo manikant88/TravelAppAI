@@ -38,7 +38,7 @@ export function PlanningAnimation({ phase, request, origin: suppliedOrigin, stat
       <div className="planning-lottie" aria-hidden="true">
         {animationData ? <DotLottieReact data={animationData} autoplay loop /> : null}
       </div>
-      <div className="planning-animation-copy" key={phase}><span>{title}</span><strong>{detail}</strong><small>I’m starting from {origin} and checking real options before adding them to your trip.</small></div>
+      <div className="planning-animation-copy" key={phase}><span>{title}</span><strong>{detail}</strong><small>Planning from {origin}.</small></div>
     </div>
   );
 }
