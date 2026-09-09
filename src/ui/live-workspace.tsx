@@ -60,8 +60,8 @@ function MissingFlightCard({ direction, plan, busy, onRetry, onCompare }: { dire
     <div className="live-time-rail"><strong>Time unresolved</strong><span>{dateLabel(date)}</span><b>Unresolved</b></div>
     <article className="itinerary-card itinerary-flight-card live-route-card live-unresolved-flight">
       <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true"><AppIcon name="flight" /></span><strong>{direction === 'outbound' ? 'Outbound' : 'Return'} flight unavailable</strong></header>
-      <div className="live-unresolved-body"><div><h4>{from} → {to}</h4><p>Nuitée did not return a verified flight offer. No flight, fare or arrival time has been assumed.</p></div><div className="live-unresolved-actions"><Button disabled={busy} onClick={onRetry}>Retry flights</Button><Button variant="secondary" disabled={busy || !plan.travel} onClick={onCompare}>Compare train, bus, cab &amp; self-drive</Button><a href={googleFlightsUrl} target="_blank" rel="noreferrer">Search Google Flights <AppIcon name="arrow-right" size={13} /></a></div></div>
-      <footer className="live-route-footer"><span>Flight supplier unavailable · Google route fallbacks are unselected</span></footer>
+      <div className="live-unresolved-body"><div><h4>{from} → {to}</h4><p>The flight search did not return a usable option. No flight, fare or arrival time has been assumed.</p></div><div className="live-unresolved-actions"><Button disabled={busy} onClick={onRetry}>Retry flights</Button><Button variant="secondary" disabled={busy || !plan.travel} onClick={onCompare}>Compare train, bus, cab &amp; self-drive</Button><a href={googleFlightsUrl} target="_blank" rel="noreferrer">Search Google Flights <AppIcon name="arrow-right" size={13} /></a></div></div>
+      <footer className="live-route-footer"><span>No flight selected · Alternative routes remain available</span></footer>
     </article>
   </div>;
 }

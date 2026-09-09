@@ -43,7 +43,7 @@ export async function handleLiveConversation(body: unknown, request: Request): P
         });
         send({ type: 'result', result });
       } catch {
-        send({ type: 'error', message: signal.aborted ? 'Search stopped or timed out. Your previous plan is unchanged.' : 'Live planning failed. Check AI, Google and Nuitée credentials, restrictions and quotas, then retry. No snapshot itinerary was substituted.' });
+        send({ type: 'error', message: signal.aborted ? 'I stopped the search before changing your trip. Your previous plan is still here.' : 'I couldn’t finish checking the stays, travel and activities this time. Please try again; your previous plan is unchanged.' });
       } finally {
         active--;
         if (open) { try { output.close(); } catch { /* Client disconnected. */ } }

@@ -103,6 +103,15 @@ the input for deterministic clarification choices, Enter sends while Shift+Enter
 line, and one icon button inside the composer switches from send to stop while work is in
 progress. The live flow does not restore the example prompt after each response.
 
+Customer-facing progress and chat copy describe the travel task rather than the internal
+supplier workflow. Loading states use plain categories such as stays, travel, activities
+and meals. A completed-plan reply explains the selected stay as the trip base, the pace and
+number of scheduled activities, meal placement, the travel choice and its effect on usable
+day time, plus any unresolved timing or connection details. These explanations are built
+from validated plan facts and deterministic selection rules. Supplier attribution remains
+on the relevant evidence cards and warnings where the source or freshness matters; it is
+not repeated as an inventory receipt in the conversation.
+
 Required facts are destination, origin, traveller count, duration, dated start,
 night-count confirmation, intercity travel preference and a conditional first-mile
 location for flight, cab or self-drive. Travel preference lives inside Preferences and

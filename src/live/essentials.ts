@@ -73,7 +73,7 @@ export function missingLiveEssential(brief: LiveBrief, context: LiveEssentialReq
   if ((brief.travelMode === 'self_drive' || brief.travelMode === 'flight' || brief.travelMode === 'cab') && !brief.pickupLocation) {
     return `What starting area or pickup address should I use for your ${brief.travelMode === 'flight' ? 'airport transfer' : brief.travelMode === 'cab' ? 'cab estimate' : 'driving estimate'}? You can use a public meeting point instead of a private address. Your answer is sent to the AI planner and Google Maps for this local session, is not shared with other travellers, and is cleared on refresh.`;
   }
-  if (brief.travelMode === 'flight' && !context.flightConfigured) return 'Flights sandbox access is not configured on the server yet. Add the Nuitée sandbox key and retry.';
+  if (brief.travelMode === 'flight' && !context.flightConfigured) return 'Flight search is not available in this environment yet. You can choose train, bus, cab, self-drive or Recommend Me, or try flights again after it is configured.';
   return context.modelQuestion ?? null;
 }
 

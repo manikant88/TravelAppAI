@@ -30,8 +30,22 @@ describe('live conversation planning boundary', () => {
   expect(r.plan?.totalCost).toBeNull();expect(r.plan?.selectedHotelId).toBe('hotel');expect(r.plan?.days[1].visits[0].place.id).toBe('attraction');expect(d.provider.route).toHaveBeenCalledTimes(2);
   expect(r.plan?.travel?.outbound.map(option=>option.mode)).toEqual(['transit']);
   expect(r.plan?.travel?.return.map(option=>option.mode)).toEqual(['transit']);
-  expect(r.plan?.travel?.suggestedOutboundId).toBe('outbound-transit');
-  expect(d.provider.travelRoutes).toHaveBeenCalledTimes(2);
+ expect(r.plan?.travel?.suggestedOutboundId).toBe('outbound-transit');
+ expect(d.provider.travelRoutes).toHaveBeenCalledTimes(2);
+  expect(r.message).toContain('I’ve put together a 4-day trip to Jaipur');
+  expect(r.message).toContain('I’m using hotel as your base');
+  expect(r.message).toContain('I scheduled 1 activity at a balanced pace');
+  expect(r.message).toContain('For travel, I picked the quickest route');
+  expect(r.message).not.toMatch(/Nuitée|Google Places|provider inventory/i);
+ });
+ it('describes planning work without exposing supplier names in loading copy', async () => {
+  const d=setup(); const progress:string[]=[];
+  await runLivePlan(d.input,{...d,progress:message=>progress.push(message)});
+  expect(progress).toEqual(expect.arrayContaining([
+   expect.stringContaining('stays, activities, restaurants and evening options'),
+   expect.stringContaining('opening hours, transfers and meal timing'),
+  ]));
+  expect(progress.join(' ')).not.toMatch(/Nuitée|Google|provider|sandbox/i);
  });
  it.each(['invented','hotel'])('rejects unobserved attraction ID %s',async id=>{
   const d=setup();d.model.select=async()=>({hotelId:'hotel',visits:[{placeId:id,day:1,durationMinutes:60}]});
@@ -127,7 +141,7 @@ it('compares transit and cab route evidence for Recommend Me without requiring a
  expect(requests.filter(request => request.mode === 'transit')).toHaveLength(2);
  expect(requests.filter(request => request.mode === 'drive' && request.roadUse === 'cab')).toHaveLength(2);
  expect(result.plan?.travel?.outbound.map(option => option.mode)).toEqual(['transit', 'drive']);
- expect(result.plan?.travel?.selectionReason).toContain('group-size practicality');
+ expect(result.plan?.travel?.selectionReason).toContain('practical for 2 travellers');
  expect(result.plan?.travel?.selectionReason).toContain('budget preference');
  expect(result.plan?.travel?.assumptions.join(' ')).toContain('private-cab price');
 });
@@ -261,8 +275,8 @@ it('reports a failed flight search instead of claiming flight evidence was used'
  expect(r.plan?.travel?.outbound.map(option=>option.label)).toEqual(['Bus','Self-drive','Cab route estimate']);
  expect(r.plan?.warnings).toContain('Cab alternatives use Google road distance and duration only. Cab availability, pickup time and fare are not verified.');
  expect(r.plan?.warnings).toContain('Flight search failed: The operation was aborted due to timeout. No flight offer was added; outbound and return timing remain unresolved.');
-    expect(r.message).toContain('flight offers were unavailable for one or both directions');
- expect(r.message).not.toContain('Nuitée sandbox flights with Google airport transfers');
+ expect(r.message).toContain('I couldn’t find a usable flight');
+ expect(r.message).not.toMatch(/Nuitée|Google Places|provider inventory/i);
 });
 
 import { localClockMinutes, projectLiveDay } from '@/live/timeline';

@@ -13,7 +13,7 @@
 .live-messages .message-user { background:linear-gradient(135deg,#4e8df8,#2876ed); color:white; }
 .live-messages .message-user p { color:white; }
 .live-messages .message-assistant { color:var(--ink); background:var(--surface); padding:0; }
-.live-messages .message-assistant p { color:var(--ink); }
+.live-messages .message-assistant p { color:var(--ink); white-space:pre-line; }
 .live-search-status { color:var(--blue-strong); font-size:12px; line-height:1.6; }
 .live-search-status svg { vertical-align:middle; }
 .live-chat .conversation-actions { flex:0 0 auto; overflow-x:auto; padding:8px 16px 0; scrollbar-width:none; }

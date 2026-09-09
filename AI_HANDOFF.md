@@ -496,6 +496,12 @@ Cancel and example buttons. Deterministic suggestions for the next missing requi
 appear as chips above the composer, and the inline send icon becomes a stop icon while a
 request is active.
 
+Chat and loading copy now speaks in traveller-facing terms such as stays, travel,
+activities and meals instead of narrating supplier/database calls. The completion reply is
+assembled from validated plan facts and explains why the selected stay, travel option,
+activity load and meal placement work together, along with any unresolved constraints.
+Provider provenance remains visible on inventory cards and relevant evidence warnings.
+
 The globe prompt submission is deferred through `src/ui/auto-submit.ts`. This is required
 because React development Strict Mode replays effect setup and cleanup; starting the request
 synchronously allowed the cleanup to abort it while the consumed flag prevented a retry.

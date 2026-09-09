@@ -105,7 +105,7 @@ export function LiveOptionDrawer({ plan, picker, busy, onSelect, onClose }: {
         <label><span className="sr-only">Search {noun}</span><input autoFocus value={query} onChange={event => setQuery(event.target.value)} placeholder={`Search ${noun}`} /></label>
         <IconButton aria-label="Close options" onClick={onClose}><AppIcon name="close" /></IconButton>
       </header>
-      <div className="inventory-drawer-filter">Showing {visible.length} observed {noun} <span>· Current option first, then provider order</span>{picker.kind === 'travel' && plan.travel?.context === 'flight_fallback' && <Button variant="text" size="sm" disabled={busy} onClick={async () => { if (await onSelect({ type: 'retry_flights' })) onClose(); }}>Retry Nuitée flights</Button>}</div>
+      <div className="inventory-drawer-filter">Showing {visible.length} observed {noun} <span>· Current option first, then available alternatives</span>{picker.kind === 'travel' && plan.travel?.context === 'flight_fallback' && <Button variant="text" size="sm" disabled={busy} onClick={async () => { if (await onSelect({ type: 'retry_flights' })) onClose(); }}>Retry flights</Button>}</div>
       <div className="inventory-drawer-list">
         {!visible.length && <p className="inventory-picker-status">No matching alternatives are available in the current live results.</p>}
         {visible.map(option => <OptionRow key={optionId(option)} option={option} picker={picker} plan={plan} currentHotel={selectedHotel} currentVisit={currentVisit} busy={busy} onSelect={() => select(option)} />)}

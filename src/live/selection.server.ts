@@ -22,7 +22,7 @@ export async function applyLiveSelection(input: LiveSelectionRequest, deps: Depe
 
   if (command.type === 'set_lock') {
     plan.locks[command.target] = command.locked;
-    return { kind: 'live-selection', plan, message: `${label(command.target)} ${command.locked ? 'locked' : 'unlocked'} for this session.` };
+    return { kind: 'live-selection', plan, message: command.locked ? `I’ll keep the ${label(command.target).toLowerCase()} fixed while you change the rest of the trip.` : `The ${label(command.target).toLowerCase()} can be changed again.` };
   }
 
   if (command.type === 'set_activity_lock') {
@@ -31,11 +31,11 @@ export async function applyLiveSelection(input: LiveSelectionRequest, deps: Depe
     const ids = new Set(plan.locks.activityIds ?? []);
     if (command.locked) ids.add(command.placeId); else ids.delete(command.placeId);
     plan.locks.activityIds = [...ids];
-    return { kind: 'live-selection', plan, message: `Activity ${command.locked ? 'locked' : 'unlocked'} for this session.` };
+    return { kind: 'live-selection', plan, message: command.locked ? 'I’ll keep this activity fixed while you change the rest of the day.' : 'This activity can be changed again.' };
   }
 
   if (command.type === 'retry_flights') {
-    if (!deps.flightProvider) throw new LiveSelectionError('Nuitée flight sandbox access is not configured.', 409);
+    if (!deps.flightProvider) throw new LiveSelectionError('Flight search is not configured yet.', 409);
     const origin = plan.flight?.origin ?? plan.travel?.origin;
     const hotel = selectedHotel(plan);
     if (!origin || origin.utcOffsetMinutes === undefined || hotel.utcOffsetMinutes === undefined) throw new LiveSelectionError('The origin or destination time zone is unavailable, so flights cannot be normalized.', 409);
@@ -52,11 +52,11 @@ export async function applyLiveSelection(input: LiveSelectionRequest, deps: Depe
       });
     } catch (error) {
       const detail = error instanceof Error && error.message.trim() ? `: ${error.message.trim()}` : '';
-      throw new LiveSelectionError(`Flight search failed again${detail}. The Google route alternatives remain unchanged.`, 502);
+      throw new LiveSelectionError(`I couldn’t complete the flight search${detail}. Your alternative routes are still available.`, 502);
     }
     const outbound = chooseFlight(result.outbound, 'outbound');
     const returning = chooseFlight(result.returning, 'return');
-    if (!outbound && !returning) throw new LiveSelectionError('Nuitée returned no direct flight offers for either direction. The Google route alternatives remain available.', 409);
+    if (!outbound && !returning) throw new LiveSelectionError('I couldn’t find a direct flight for either journey. Your alternative routes are still available.', 409);
     const originAirport = hubPlace(result.originHub, origin.utcOffsetMinutes, result.checkedAt);
     const destinationAirport = hubPlace(result.destinationHub, hotel.utcOffsetMinutes, result.checkedAt);
     plan.flight = {
@@ -84,16 +84,16 @@ export async function applyLiveSelection(input: LiveSelectionRequest, deps: Depe
     if (!returning) addWarning(plan, 'No direct return flight offer was returned. Choose a Google route fallback for the return journey.');
     plan.checkedAt = new Date().toISOString();
     refreshScheduleAssessment(plan, [0, plan.days.length - 1]);
-    return { kind: 'live-selection', plan, message: `Flight search refreshed. ${outbound ? 'An outbound flight is available.' : 'Outbound flights remain unavailable.'} ${returning ? 'A return flight is available.' : 'Return flights remain unavailable.'}` };
+    return { kind: 'live-selection', plan, message: `I checked the flights again. ${outbound ? `I found ${flightName(outbound)} for the outward journey.` : 'The outward journey still needs another option.'} ${returning ? `I found ${flightName(returning)} for the return.` : 'The return journey still needs another option.'} I recalculated the airport transfers and the time available on your first and last days.` };
   }
 
   if (command.type === 'select_travel') {
     const target = command.direction === 'outbound' ? 'outboundTravel' : 'returnTravel';
     if (plan.locks[target]) throw new LiveSelectionError(`Unlock the ${command.direction} travel route before changing it.`, 409);
-    if (!plan.travel) throw new LiveSelectionError('This plan has no Google travel routes to change.');
+    if (!plan.travel) throw new LiveSelectionError('There are no alternative travel routes to choose from yet.');
     const options = command.direction === 'outbound' ? plan.travel.outbound : plan.travel.return;
     const option = options.find(candidate => candidate.id === command.optionId);
-    if (!option) throw new LiveSelectionError('That route is not part of the current Google results.');
+    if (!option) throw new LiveSelectionError('That route is no longer in the available options. Please reopen the list and choose again.');
     if (command.direction === 'outbound') plan.travel.suggestedOutboundId = option.id;
     else plan.travel.suggestedReturnId = option.id;
     if (plan.travel.context === 'flight_fallback' && plan.flight) {
@@ -102,7 +102,7 @@ export async function applyLiveSelection(input: LiveSelectionRequest, deps: Depe
     }
     plan.checkedAt = new Date().toISOString();
     refreshScheduleAssessment(plan, command.direction === 'outbound' ? [0] : [plan.days.length - 1]);
-    return responseForSelection(input.plan, plan, command, `Selected the ${command.direction} ${option.label} route. The itinerary timing and map now use that route evidence.`);
+    return responseForSelection(input.plan, plan, command, `I switched the ${command.direction} journey to ${option.label}. Its arrival or departure time can change how much of that day is usable, so I recalculated the timeline and map around it.`);
   }
 
   if (command.type === 'select_flight') {
@@ -112,7 +112,7 @@ export async function applyLiveSelection(input: LiveSelectionRequest, deps: Depe
     if (!flight) throw new LiveSelectionError('This plan has no flight journey to change.');
     const offers = command.direction === 'outbound' ? flight.outbound : flight.return;
     const offer = offers.find(candidate => candidate.id === command.offerId);
-    if (!offer) throw new LiveSelectionError('That flight is not part of the current supplier results.');
+    if (!offer) throw new LiveSelectionError('That flight is no longer in the available options. Please reopen the list and choose again.');
     assertSelectable(offer.availability, offer.source.expiresAt, deps.now);
     if (command.direction === 'outbound') {
       flight.suggestedOutboundId = offer.id;
@@ -136,7 +136,7 @@ export async function applyLiveSelection(input: LiveSelectionRequest, deps: Depe
     plan.checkedAt = new Date().toISOString();
     refreshScheduleAssessment(plan, command.direction === 'outbound' ? [0] : [plan.days.length - 1]);
     addWarning(plan, `You selected ${offer.operator} ${offer.segments[0]?.number ?? ''} for the ${command.direction} journey. Its fare and availability still require refresh before booking.`);
-    return responseForSelection(input.plan, plan, command, `Selected the ${command.direction} flight and refreshed its airport road transfers and timeline.`);
+    return responseForSelection(input.plan, plan, command, `I switched the ${command.direction} journey to ${flightName(offer)}. I also recalculated the airport transfers and the time available on that travel day.`);
   }
 
   if (command.type === 'select_activity') {
@@ -145,7 +145,7 @@ export async function applyLiveSelection(input: LiveSelectionRequest, deps: Depe
     if (!day || !current) throw new LiveSelectionError('That itinerary activity no longer exists.');
     if ((plan.locks.activityIds ?? []).includes(current.place.id)) throw new LiveSelectionError('Unlock the activity before changing it.', 409);
     const candidate = plan.activityOptions?.find(place => place.id === command.placeId);
-    if (!candidate) throw new LiveSelectionError('That activity is not part of the current Google results.');
+    if (!candidate) throw new LiveSelectionError('That activity is no longer in the available options. Please reopen the list and choose again.');
     const usedElsewhere = plan.days.some((value, dayIndex) => value.visits.some((visit, visitIndex) => visit.place.id === candidate.id && (dayIndex !== command.dayIndex || visitIndex !== command.visitIndex)));
     if (usedElsewhere) throw new LiveSelectionError('That activity is already included elsewhere in the itinerary.', 409);
     let place = candidate;
@@ -160,7 +160,7 @@ export async function applyLiveSelection(input: LiveSelectionRequest, deps: Depe
     await refreshDayRoutes(day, selectedHotel(plan), deps);
     refreshScheduleAssessment(plan, [command.dayIndex]);
     plan.checkedAt = new Date().toISOString();
-    return responseForSelection(input.plan, plan, command, `Selected ${place.name} and refreshed the affected day routes and timeline.`);
+    return responseForSelection(input.plan, plan, command, `I replaced ${current.place.name} with ${place.name}. I checked its regular hours, recalculated the surrounding transfers and moved later items only where the day still fits.`);
   }
 
   if (command.type !== 'select_hotel') throw new LiveSelectionError('Unsupported live selection.');
@@ -172,8 +172,8 @@ export async function applyLiveSelection(input: LiveSelectionRequest, deps: Depe
   await refreshHotelDependencies(plan, hotel, deps);
   refreshScheduleAssessment(plan, plan.days.map((_, index) => index));
   plan.checkedAt = new Date().toISOString();
-  addWarning(plan, `You selected ${hotel.name}. Dependent Google routes were refreshed; supplier price and availability must still be refreshed before booking.`);
-  return responseForSelection(input.plan, plan, command, `Selected ${hotel.name} and refreshed the affected travel, airport-transfer and daily driving routes.`);
+  addWarning(plan, `You selected ${hotel.name}. The connected routes were refreshed; its price and availability still need a final check before booking.`);
+  return responseForSelection(input.plan, plan, command, `I switched your stay to ${hotel.name}. Because this changes the base for the trip, I recalculated airport or intercity travel, daily transfers and meal routes before keeping the new schedule.`);
 }
 
 async function refreshHotelDependencies(plan: LivePlan, hotel: LivePlan['hotels'][number], deps: Dependencies) {
@@ -233,14 +233,14 @@ function responseForSelection(original: LivePlan, plan: LivePlan, command: Confi
   const impact = selectionImpact(original, plan, command);
   const nonOverridable = impact.findings.filter(finding => finding.severity === 'blocking' && !finding.overridable);
   if (nonOverridable.length) {
-    return { kind: 'live-selection', plan: original, message: 'This change cannot be applied because it creates a fixed scheduling conflict. Choose one of the valid alternatives.', impact };
+    return { kind: 'live-selection', plan: original, message: `I couldn’t make this change because it would overlap an item whose time cannot move. I’ve left your itinerary unchanged and shown alternatives that fit the day.`, impact };
   }
   const confirmable = impact.findings.filter(finding => finding.overridable && (finding.severity === 'warning' || finding.severity === 'blocking'));
   if (confirmable.length && !command.confirmConstraints) {
     return {
       kind: 'live-selection',
       plan: original,
-      message: 'This change needs confirmation. Review its timing, meal and transfer effects before applying it.',
+      message: `This option can work, but it introduces ${confirmable.length} timing ${confirmable.length === 1 ? 'warning' : 'warnings'} and may move nearby meals or transfers. I haven’t applied it yet; review what changes before you confirm.`,
       impact,
       confirmation: { command: { ...command, confirmConstraints: true }, findings: confirmable, impact },
     };
@@ -450,8 +450,13 @@ function refreshedSelectionId(options: LiveTravelOption[], previous: LiveTravelO
 }
 
 function assertSelectable(availability: 'available' | 'unavailable' | 'unknown', expiresAt?: string, now = new Date().toISOString()) {
-  if (availability === 'unavailable') throw new LiveSelectionError('That supplier option is unavailable.', 409);
-  if (expiresAt && Date.parse(expiresAt) <= Date.parse(now)) throw new LiveSelectionError('That supplier option has expired. Rebuild the plan to refresh the results.', 409);
+  if (availability === 'unavailable') throw new LiveSelectionError('That option is no longer available. Choose another one from the current list.', 409);
+  if (expiresAt && Date.parse(expiresAt) <= Date.parse(now)) throw new LiveSelectionError('That option has expired. Rebuild the plan to check current availability.', 409);
+}
+
+function flightName(offer: TransportOffer) {
+  const number = offer.segments[0]?.number;
+  return `${offer.operator}${number ? ` ${number}` : ''}`;
 }
 function minutesBefore(value: string, minutes: number) { return new Date(Date.parse(value) - minutes * 60_000).toISOString(); }
 function departureTime(date: string, hour: number, offsetMinutes = 0) {

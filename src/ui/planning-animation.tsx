@@ -29,8 +29,8 @@ export function PlanningAnimation({ phase, request, origin: suppliedOrigin, stat
       });
     return () => { mounted = false; };
   }, []);
-  const title = phase === "scanning_route" ? "Scanning the route" : phase === "searching_stays" ? "Checking stays" : phase === "searching_activities" ? "Finding activities" : "Validating the trip";
-  const detail = status || (phase === "scanning_route" ? "Understanding the places, dates, travellers, and preferences you shared" : phase === "searching_stays" ? "Matching stays to your dates, guests, and budget" : phase === "searching_activities" ? "Looking for experiences that fit your interests" : "Checking timing, prices, and availability");
+  const title = phase === "scanning_route" ? "Understanding your trip" : phase === "searching_stays" ? "Finding a place to stay" : phase === "searching_activities" ? "Shaping your days" : "Making sure the plan works";
+  const detail = status || (phase === "scanning_route" ? "Reading the places, dates, travellers and preferences you shared" : phase === "searching_stays" ? "Looking for stays that suit your dates, group and budget" : phase === "searching_activities" ? "Balancing activities, meals and travel time around your interests" : "Checking timing, opening hours and connections");
   const rawOrigin = suppliedOrigin ?? request?.origin;
   const origin = rawOrigin ? rawOrigin.replace(/^(city|airport):/, "").replaceAll("-", " ") : "your request";
   return (
@@ -38,7 +38,7 @@ export function PlanningAnimation({ phase, request, origin: suppliedOrigin, stat
       <div className="planning-lottie" aria-hidden="true">
         {animationData ? <DotLottieReact data={animationData} autoplay loop /> : null}
       </div>
-      <div className="planning-animation-copy" key={phase}><span>{title}</span><strong>{detail}</strong><small>Searching from {origin}. Grounded inventory is checked before anything becomes your trip.</small></div>
+      <div className="planning-animation-copy" key={phase}><span>{title}</span><strong>{detail}</strong><small>I’m starting from {origin} and checking real options before adding them to your trip.</small></div>
     </div>
   );
 }
