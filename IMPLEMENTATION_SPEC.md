@@ -2132,7 +2132,10 @@ actual rail/bus modes. Self-drive and cab cards share the validated Google road 
 the cab card explicitly leaves provider availability, pickup ETA and fare unresolved.
 Choosing a fallback updates the timeline and map. Retrying flights is a server-validated
 selection action that preserves the current stay and activities and refreshes airport
-transfers only when supplier offers return.
+transfers only when supplier offers return. If the selected-stay reference is missing or
+stale, retry may recover the canonical stay from the existing fallback journey destination
+when that destination is still present in the plan's stay candidates; it restores the
+reference before searching rather than failing before the provider call.
 
 ### Live option selection and locks
 

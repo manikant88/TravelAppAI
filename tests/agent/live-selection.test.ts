@@ -103,6 +103,28 @@ describe('live session selections', () => {
     expect(d.provider.travelRoutes).toHaveBeenCalledTimes(4);
   });
 
+  it('retries flights using the fallback journey destination when the selected stay reference is stale', async () => {
+    const d = setup();
+    const destination = d.plan.hotels[0];
+    const originalFlight = d.plan.flight!;
+    d.plan.selectedHotelId = null;
+    d.plan.flight = undefined;
+    d.plan.travel = { origin: place('origin'), destination, outbound: [], return: [], suggestedOutboundId: null, suggestedReturnId: null, selectionReason: 'Flight fallback', assumptions: [], context: 'flight_fallback' };
+    const flightProvider: FlightProvider = { search: vi.fn(async () => ({
+      originHub: { code: 'DEL', name: 'Delhi Airport', latitude: 28.56, longitude: 77.1, countryCode: 'IN' },
+      destinationHub: { code: 'JAI', name: 'Jaipur Airport', latitude: 26.82, longitude: 75.8, countryCode: 'IN' },
+      outbound: originalFlight.outbound,
+      returning: originalFlight.return,
+      checkedAt: '2026-09-07T00:00:00Z',
+      environment: 'sandbox' as const,
+      warnings: [],
+    })) };
+    const result = await applyLiveSelection({ phase: 'live-selection', plan: d.plan, command: { type: 'retry_flights' } }, { ...d, flightProvider });
+    expect(result.plan.flight?.destination.id).toBe(destination.id);
+    expect(result.plan.selectedHotelId).toBe(destination.id);
+    expect(result.plan.flight?.suggestedOutboundId).toBe('flight-outbound-a');
+  });
+
   it('replaces an activity only from observed candidates and refreshes that day routes', async () => {
     const d = setup();
     const result = await applyLiveSelection({ phase: 'live-selection', plan: d.plan, command: { type: 'select_activity', dayIndex: 0, visitIndex: 0, placeId: 'activity-b' } }, d);

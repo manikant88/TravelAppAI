@@ -385,6 +385,11 @@ open the fallback drawer, or hand the user to Google Flights. Selecting a route 
 updates the existing timeline and map. The drawer retains a Nuitée retry action after a
 fallback is selected.
 
+Flight retry now tolerates a null or stale `selectedHotelId` when the existing fallback
+journey still points to a canonical stay candidate. It restores that stay reference and
+continues the flight search. This fixes retries that previously stopped before the provider
+call with “The selected stay is unavailable.”
+
 The configured Uber values currently include the sandbox base URL and client secret only.
 There is no client ID, access token or granted estimate scope, so no Uber estimate call is
 made and Google road evidence remains the cab-planning source.

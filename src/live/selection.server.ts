@@ -1,5 +1,5 @@
 import type { LiveProvider } from './google.server';
-import type { LivePlan, LiveSelectionImpact, LiveSelectionRequest, LiveSelectionResponse, LiveTravelOption } from './contracts';
+import type { LivePlace, LivePlan, LiveSelectionImpact, LiveSelectionRequest, LiveSelectionResponse, LiveTravelOption } from './contracts';
 import { hoursValidationNote, regularHoursStatus } from './opening-hours';
 import type { FlightHub, FlightProvider } from '@/transport/providers/nuitee-flight.server';
 import type { TransportOffer } from '@/inventory/contracts';
@@ -37,7 +37,7 @@ export async function applyLiveSelection(input: LiveSelectionRequest, deps: Depe
   if (command.type === 'retry_flights') {
     if (!deps.flightProvider) throw new LiveSelectionError('Flight search is not configured yet.', 409);
     const origin = plan.flight?.origin ?? plan.travel?.origin;
-    const hotel = selectedHotel(plan);
+    const hotel = selectedHotel(plan, plan.flight?.destination ?? plan.travel?.destination);
     if (!origin || origin.utcOffsetMinutes === undefined || hotel.utcOffsetMinutes === undefined) throw new LiveSelectionError('The origin or destination time zone is unavailable, so flights cannot be normalized.', 409);
     let result;
     try {
@@ -408,9 +408,11 @@ async function refreshDayRoutes(day: LivePlan['days'][number], hotel: LivePlan['
   }
 }
 
-function selectedHotel(plan: LivePlan) {
-  const hotel = plan.hotels.find(candidate => candidate.id === plan.selectedHotelId);
+function selectedHotel(plan: LivePlan, journeyDestination?: LivePlace) {
+  const hotel = plan.hotels.find(candidate => candidate.id === plan.selectedHotelId)
+    ?? (journeyDestination ? plan.hotels.find(candidate => candidate.id === journeyDestination.id) : undefined);
   if (!hotel) throw new LiveSelectionError('The selected stay is unavailable, so activity routes cannot be refreshed.', 409);
+  plan.selectedHotelId = hotel.id;
   return hotel;
 }
 
