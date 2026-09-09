@@ -5,5 +5,5 @@ export default async function PlanPage({ searchParams }: { searchParams: Promise
   const { prompt: rawPrompt, mode } = await searchParams;
   const prompt = rawPrompt?.trim().slice(0, 1_200) ?? "";
   if (mode === "snapshot") return <TravelWorkspace initialPrompt={prompt} autoSubmitInitialPrompt={Boolean(prompt)} />;
-  return <LiveWorkspace initialPrompt={prompt} />;
+  return <LiveWorkspace initialPrompt={prompt} autoSubmitInitialPrompt={Boolean(prompt)} />;
 }

@@ -7,10 +7,17 @@ import { createNuiteeFlightProvider } from '@/transport/providers/nuitee-flight.
 import { applyLiveSelection, LiveSelectionError } from './selection.server';
 
 let active = 0;
+
+function livePlanningIsBlocked() {
+  const vercelEnvironment = process.env.VERCEL_TARGET_ENV?.trim() || process.env.VERCEL_ENV?.trim();
+  if (vercelEnvironment) return vercelEnvironment === 'production';
+  return process.env.NODE_ENV === 'production' && process.env.LIVE_PLANNING_ENABLED !== 'true';
+}
+
 export async function handleLiveConversation(body: unknown, request: Request): Promise<Response> {
-  // This first experiment has no authentication or durable task store. Never
-  // expose a paid provider proxy in a production deployment by accident.
-  if (process.env.NODE_ENV === 'production') return Response.json({ message: 'Live planning is currently available in local development only.' }, { status: 403 });
+  // Vercel Preview and custom staging builds also use NODE_ENV=production.
+  // Keep the public production deployment closed while allowing those test environments.
+  if (livePlanningIsBlocked()) return Response.json({ message: 'Live planning is disabled in this production deployment.' }, { status: 403 });
   const origin = request.headers.get('origin');
   if (origin && origin !== new URL(request.url).origin) return Response.json({ message: 'Cross-origin live requests are not allowed.' }, { status: 403 });
   const parsed = liveRequestSchema.safeParse(body);
@@ -48,7 +55,7 @@ export async function handleLiveConversation(body: unknown, request: Request): P
 }
 
 export async function handleLiveSelection(body: unknown, request: Request): Promise<Response> {
-  if (process.env.NODE_ENV === 'production') return Response.json({ message: 'Live planning is currently available in local development only.' }, { status: 403 });
+  if (livePlanningIsBlocked()) return Response.json({ message: 'Live planning is disabled in this production deployment.' }, { status: 403 });
   const origin = request.headers.get('origin');
   if (origin && origin !== new URL(request.url).origin) return Response.json({ message: 'Cross-origin live requests are not allowed.' }, { status: 403 });
   const parsed = liveSelectionRequestSchema.safeParse(body);

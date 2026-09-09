@@ -1,6 +1,6 @@
 # AI implementation handoff
 
-Last updated: 6 September 2026
+Last updated: 8 September 2026
 
 This file records the current implementation boundaries that are easy to lose
 when iterating on the UI. `PROJECT_CONTEXT.md` remains the product source of
@@ -432,3 +432,84 @@ or provider availability.
 Final verification on 7 September 2026: TypeScript, repository-wide ESLint, all 312
 Vitest tests, and the Next.js production build passed. No automated browser tests were
 run for this change.
+
+## Capacity-aware live scheduling — 8 September 2026
+
+`src/live/scheduler.ts` now owns the live day policy. The model ranks observed places;
+the scheduler applies a visible balanced default (or an explicitly stated relaxed/packed
+pace), usable arrival/departure bounds, duration profiles, group-sensitive adjustments,
+meal windows, combined-meal evidence and warning/blocking/unresolved findings. Balanced
+full days can contain up to three activities instead of the former two-place ceiling.
+Destination activity discovery spans six bounded category searches for heritage,
+culture, neighbourhoods, viewpoints, outdoor/adventure and family options, plus the
+existing conditional evening search. Only the scheduled shortlist receives Google
+detail/photo calls.
+
+The continuous timeline orders all activities and meals by schedule position, explains
+duration ranges and shifted meals, and labels genuine gaps as flexible time. Explicitly
+requested evening or nightlife exploration may add one observed candidate; unrequested
+nightlife remains an optional chat refinement. Overnight activities are still deferred.
+
+Stay, flight, Google route and activity selections rerun the same schedule assessment.
+Each proposed change returns moved items, transfer and meal changes, usable-time change,
+new findings and valid observed alternatives. Overridable warnings use the typed
+confirmation action. A non-overridable fixed-time conflict returns the unchanged plan and
+cannot be confirmed through. Regular-hours closure is rejected outright. Locks remain
+authoritative.
+
+Provider/manual fixed times remain exact, outdoor profiles retain difficulty/daylight
+planning constraints, and combined meal experiences retain provider, manual or Google
+description provenance. Lunch and dinner use the accepted preferred/extended windows;
+explicit medical timing is enforced and underspecified medical timing remains unresolved.
+The timeline exposes exact versus estimated timing, capacity explanations and concrete
+edit impacts.
+
+Final Phase 6 verification: TypeScript, repository-wide ESLint, 54 Vitest files / 325
+tests, the Next.js production build, and five Playwright desktop/mobile scenarios passed.
+The browser run found and fixed a drawer/confirmation stacking defect before the final
+pass.
+
+## Globe handoff and live Trip Brief — 8 September 2026
+
+The destination globe remains the primary entry point. Its prompt query is submitted once
+when `/plan` opens. The live workspace keeps chat on the left. During the first prompt
+interpretation, the right side shows the existing travel-planning Lottie and live progress;
+the Trip Brief is deliberately hidden until the server returns a validated brief.
+
+After interpretation, the live workspace reuses the main branch's original five-field
+Trip Brief bar, compact field editor popovers and Trip Essentials checklist. Validated
+facts are populated, missing facts are highlighted, and checklist chips or Add manually
+actions send natural-language corrections through `requestLivePlan`. They never mutate
+`LiveBrief` directly, so chat and all visible controls share the same model extraction,
+validation and provider-planning boundary.
+
+Trip Brief popovers close on outside click and stage their edits locally. They have no
+per-popover Close or Apply buttons; the header always presents a single Update button,
+which submits all staged fields together. Travel mode is part of Preferences with Flight,
+Train, Bus, Cab, Self Drive and Recommend Me. The recommendation path compares Google
+transit and cab-route evidence using duration, group-size practicality, and explicit
+budget-conscious or comfort/accessibility preference signals while explicitly
+leaving private-cab price, vehicle capacity and total budget fit unresolved.
+
+The live chat now uses the main workspace's compact composer rather than separate Send,
+Cancel and example buttons. Deterministic suggestions for the next missing requirement
+appear as chips above the composer, and the inline send icon becomes a stop icon while a
+request is active.
+
+The globe prompt submission is deferred through `src/ui/auto-submit.ts`. This is required
+because React development Strict Mode replays effect setup and cleanup; starting the request
+synchronously allowed the cleanup to abort it while the consumed flag prevented a retry.
+The deferred setup is covered by `tests/ui/auto-submit.test.ts`.
+
+Origin, destination, dates, duration, travellers, night-count confirmation and transport
+are required. Flight, cab and self-drive additionally require a first-mile starting point.
+Dining preference and pace are optional; an omitted dining preference triggers generic
+restaurant discovery with an explicit menu and dietary-fit confirmation note. Once an
+itinerary exists, the same Trip Brief editors remain available and retain the single
+mutation path used by the existing live workspace.
+
+The live handler distinguishes deployment environment from build optimization. Vercel
+Preview and custom staging deployments are allowed even though Next sets
+`NODE_ENV=production`; actual Vercel Production remains blocked. Non-Vercel optimized
+staging can opt in with `LIVE_PLANNING_ENABLED=true`. Preview credentials must be configured
+in Vercel and the deployment must be rebuilt after environment changes.

@@ -3,7 +3,7 @@ import type { StayOffer, TransportOffer } from '@/inventory/contracts';
 import type { LiveBrief, LiveDay, LivePlace, LivePlan, LiveSelectionRequest, LiveTravelOption } from '@/live/contracts';
 
 const checkedAt = '2026-09-07T03:00:00.000Z';
-const brief: LiveBrief = { origin: 'Delhi', destination: 'Jaipur', startDate: '2027-09-08', days: 4, travellers: 2, travelMode: 'flight', pickupLocation: 'India Gate', dietaryPreference: 'both', dietaryNotes: '', dayRhythm: null, nightsConfirmed: true, preferences: '', constraints: [] };
+const brief: LiveBrief = { origin: 'Delhi', destination: 'Jaipur', startDate: '2027-09-08', days: 4, travellers: 2, travelMode: 'flight', pickupLocation: 'India Gate', dietaryPreference: 'both', dietaryNotes: '', dayRhythm: null, pace: null, nightsConfirmed: true, preferences: '', constraints: [] };
 
 function place(id: string, name: string, kind: 'hotel' | 'activity', index: number): LivePlace {
   return {
@@ -49,6 +49,7 @@ const hotelB = stay('hotel-b', 'Jaipur City Hotel', 1, 14_500);
 const activityA = place('activity-a', 'Amber Fort', 'activity', 0);
 const activityB = place('activity-b', 'City Palace', 'activity', 1);
 const activityC = place('activity-c', 'Jal Mahal', 'activity', 2);
+const activityD = place('activity-d', 'Evening Hill Trek', 'activity', 4);
 const restaurantA = place('restaurant-a', 'Jaipur Dining House', 'activity', 3);
 const origin = { ...place('origin', 'India Gate', 'activity', 0), utcOffsetMinutes: 330 };
 const destination = { ...hotelA, utcOffsetMinutes: 330 };
@@ -62,7 +63,7 @@ const localLeg = (fromId: string, toId: string, minutes: number) => ({ fromId, t
 function days(): LiveDay[] {
   return [
     { date: '2027-09-08', visits: [{ place: activityA, durationMinutes: 90, hoursStatus: 'open', hoursNote: 'Regular schedule shows open' }], meals: [{ type: 'lunch', place: restaurantA, durationMinutes: 60, targetStartMinutes: 780, location: 'restaurant', dietaryNote: 'Vegetarian and non-vegetarian preference used for this Google restaurant search.', hoursStatus: 'open', hoursNote: 'Regular schedule covers the planned lunch time' }], legs: [localLeg('hotel-a', 'activity-a', 20), localLeg('activity-a', 'restaurant-a', 15), localLeg('restaurant-a', 'hotel-a', 25)] },
-    { date: '2027-09-09', visits: [{ place: activityC, durationMinutes: 60, hoursStatus: 'unknown', hoursNote: 'Opening hours unavailable' }], legs: [localLeg('hotel-a', 'activity-c', 15), localLeg('activity-c', 'hotel-a', 15)] },
+    { date: '2027-09-09', visits: [{ place: activityC, durationMinutes: 60, timingKind: 'fixed', fixedStartMinutes: 600, timingEvidence: { kind: 'provider_slot', durationMinutes: 60, startMinutes: 600, source: 'provider', label: 'Provider ticket time' }, durationProfile: { kind: 'provider_slot', minimumMinutes: 60, preferredMinutes: 60, maximumMinutes: 60, groupSensitivity: 'none', evidence: 'provider' }, mealCoverage: { type: 'lunch', evidence: 'provider', sourceLabel: 'Experience provider', note: 'The ticket includes lunch.' }, hoursStatus: 'unknown', hoursNote: 'Opening hours unavailable' }], legs: [localLeg('hotel-a', 'activity-c', 15), localLeg('activity-c', 'hotel-a', 15)], capacityNote: '4 hr remains flexible after scheduled activities, meals and travel; no additional validated candidate was placed.' },
     { date: '2027-09-10', visits: [], legs: [] },
     { date: '2027-09-11', visits: [], legs: [] },
   ];
@@ -71,7 +72,7 @@ function days(): LiveDay[] {
 function flightPlan(): LivePlan {
   const transfer = route('airport-transfer', 'outbound', 'Drive', 25, '2027-09-08T05:15:00Z', '2027-09-08T05:40:00Z');
   return {
-    brief, hotels: [hotelA, hotelB], selectedHotelId: hotelA.id, activityOptions: [activityA, activityB, activityC], mealOptions: [restaurantA], days: days(),
+    brief, hotels: [hotelA, hotelB], selectedHotelId: hotelA.id, activityOptions: [activityA, activityB, activityC, activityD], mealOptions: [restaurantA], days: days(),
     flight: { origin, destination, originAirport, destinationAirport, outbound: [flightA, flightB], return: [returnFlight], suggestedOutboundId: flightA.id, suggestedReturnId: returnFlight.id, outboundFirstMile: transfer, outboundLastMile: transfer, returnFirstMile: { ...transfer, direction: 'return' }, returnLastMile: { ...transfer, direction: 'return' }, assumptions: [] },
     warnings: ['Sandbox prices require refresh.'], checkedAt, status: 'provisional', totalCost: null,
     locks: { hotel: false, outboundFlight: false, returnFlight: false, outboundTravel: false, returnTravel: false, activityIds: [] },
@@ -107,6 +108,11 @@ async function mockPlanner(page: Page, initialPlan: LivePlan) {
     const command = body.command as LiveSelectionRequest['command'];
     current.locks ??= { hotel: false, outboundFlight: false, returnFlight: false, outboundTravel: false, returnTravel: false, activityIds: [] };
     current.locks.activityIds ??= [];
+    if (command.type === 'select_activity' && command.placeId === activityD.id && !command.confirmConstraints) {
+      const finding = { id: 'day-0-daylight-activity-d', severity: 'warning' as const, dayIndex: 0, itemId: activityD.id, message: 'Evening Hill Trek falls outside the conservative daylight planning window.', overridable: true };
+      const impact = { status: 'warning' as const, requiresConfirmation: true, affectedDays: [0], movedItems: [{ dayIndex: 0, itemId: restaurantA.id, label: restaurantA.name, kind: 'meal' as const, previousStartMinutes: 780, nextStartMinutes: 840, deltaMinutes: 60 }], transferChanges: [{ dayIndex: 0, previousFromId: hotelA.id, previousToId: activityA.id, nextFromId: hotelA.id, nextToId: activityD.id, previousMinutes: 20, nextMinutes: 35 }], mealChanges: [{ dayIndex: 0, type: 'lunch' as const, previousStartMinutes: 780, nextStartMinutes: 840, deltaMinutes: 60 }], usableTimeDeltaMinutes: -60, findings: [finding], alternatives: [{ id: activityB.id, label: activityB.name }] };
+      return routeHandler.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ kind: 'live-selection', plan: current, message: 'This change needs confirmation.', impact, confirmation: { command: { ...command, confirmConstraints: true }, findings: [finding], impact } }) });
+    }
     if (command.type === 'set_lock') current.locks[command.target] = command.locked;
     if (command.type === 'set_activity_lock') current.locks.activityIds = command.locked ? [...new Set([...current.locks.activityIds, command.placeId])] : current.locks.activityIds.filter(id => id !== command.placeId);
     if (command.type === 'select_hotel') current.selectedHotelId = command.hotelId;
@@ -123,7 +129,8 @@ async function mockPlanner(page: Page, initialPlan: LivePlan) {
       const visit = current.days[command.dayIndex]?.visits[command.visitIndex];
       if (candidate && visit) visit.place = candidate;
     }
-    await routeHandler.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ kind: 'live-selection', plan: current, message: 'Selection applied in browser test.' }) });
+    const impact = command.type.startsWith('select_') ? { status: command.type === 'select_activity' && command.placeId === activityD.id ? 'warning' as const : 'safe' as const, requiresConfirmation: false, affectedDays: [0], movedItems: [], transferChanges: [], mealChanges: [], usableTimeDeltaMinutes: 0, findings: [], alternatives: [] } : undefined;
+    await routeHandler.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ kind: 'live-selection', plan: current, message: 'Selection applied in browser test.', impact }) });
   });
 }
 
@@ -174,8 +181,8 @@ test('flight, stay and activity alternatives reuse timeline cards and apply sele
   const activity = page.locator('.live-card-column .live-place-card').filter({ hasText: 'Amber Fort' });
   await activity.getByRole('button', { name: 'Change' }).click();
   const activityDrawer = page.getByRole('dialog', { name: 'Change activity' });
-  await expect(activityDrawer.locator('.live-place-card .activity-card-body')).toHaveCount(2);
-  await expect(activityDrawer.locator('.live-place-about')).toHaveCount(2);
+  await expect(activityDrawer.locator('.live-place-card .activity-card-body')).toHaveCount(3);
+  await expect(activityDrawer.locator('.live-place-about')).toHaveCount(3);
   await expect(activityDrawer.locator('.live-place-card .live-card-footer').first()).toBeVisible();
   expect(await activityDrawer.locator('.live-place-card').evaluateAll(cards => cards.every(card => card.scrollHeight <= card.clientHeight))).toBe(true);
   await activityDrawer.locator('.live-place-card').filter({ hasText: 'City Palace' }).getByRole('button', { name: 'Select activity' }).click();
@@ -206,6 +213,27 @@ test('meal stops render in the timed route chain with dietary provenance', async
   await expect(meal).toContainText('Vegetarian and non-vegetarian preference');
   await expect(page.locator('.live-day-summary').first()).toContainText('60 min meals');
   await expect(page.locator('.live-transfer').filter({ hasText: 'Drive to Jaipur Dining House' })).toBeVisible();
+});
+
+test('fixed activity evidence, capacity explanations and edit impacts are visible', async ({ page }) => {
+  await createPlan(page, flightPlan());
+  const fixed = page.locator('.live-card-column .live-place-card').filter({ hasText: 'Jal Mahal' });
+  await expect(fixed).toContainText('Provider ticket time');
+  await expect(fixed).toContainText('Includes lunch');
+  await expect(page.getByText(/4 hr remains flexible/)).toBeVisible();
+
+  const activity = page.locator('.live-card-column .live-place-card').filter({ hasText: 'Amber Fort' });
+  await activity.getByRole('button', { name: 'Change' }).click();
+  const drawer = page.getByRole('dialog', { name: 'Change activity' });
+  await drawer.locator('.live-place-card').filter({ hasText: 'Evening Hill Trek' }).getByRole('button', { name: 'Select activity' }).click();
+  const confirmation = page.getByRole('alertdialog', { name: 'Review schedule conflict' });
+  await expect(confirmation).toContainText('1 item moved');
+  await expect(confirmation).toContainText('1 transfer changed');
+  await expect(confirmation).toContainText('1 meal time changed');
+  await expect(confirmation).toContainText('60 min usable time lost');
+  await confirmation.getByRole('button', { name: 'Apply anyway' }).click();
+  await expect(page.locator('.live-card-column .live-place-card').filter({ hasText: 'Evening Hill Trek' })).toBeVisible();
+  await expect(page.locator('.live-impact-summary')).toContainText('warning');
 });
 
 test('drawer supports keyboard dismissal and mobile layout without horizontal overflow', async ({ page }) => {

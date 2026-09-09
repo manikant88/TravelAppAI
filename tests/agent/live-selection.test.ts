@@ -98,7 +98,7 @@ describe('live session selections', () => {
     expect(result.plan.flight?.suggestedReturnId).toBe('flight-return-a');
     expect(result.plan.travel?.suggestedOutboundId).toBeNull();
     expect(result.plan.travel?.suggestedReturnId).toBeNull();
-    expect(result.plan.days).toEqual(originalDays);
+    expect(result.plan.days.map(day => day.visits.map(visit => visit.place.id))).toEqual(originalDays.map(day => day.visits.map(visit => visit.place.id)));
     expect(flightProvider.search).toHaveBeenCalledOnce();
     expect(d.provider.travelRoutes).toHaveBeenCalledTimes(4);
   });
@@ -109,6 +109,48 @@ describe('live session selections', () => {
     expect(result.plan.days[0].visits[0].place.id).toBe('activity-b');
     expect(result.plan.days[0].legs.map(leg => [leg.fromId, leg.toId])).toEqual([['hotel-a', 'activity-b'], ['activity-b', 'hotel-a']]);
     expect(d.provider.details).toHaveBeenCalledWith('activity-b');
+    expect(result.impact).toMatchObject({ status: 'unresolved', requiresConfirmation: false, affectedDays: [0] });
+    expect(result.impact?.transferChanges).toHaveLength(2);
+  });
+
+  it('rejects a new non-overridable blocking conflict and returns alternatives', async () => {
+    const d = setup();
+    const replacement = { ...place('activity-b'), name: 'Fort trek' };
+    d.provider.details = vi.fn(async () => replacement);
+    d.plan.days[0].visits = [];
+    d.plan.days[3].visits = [{ place: place('activity'), durationMinutes: 60 }];
+    d.plan.travel = {
+      origin: place('origin'), destination: d.plan.hotels[0], outbound: [],
+      return: [{ ...routeOption('return', d.plan.hotels[0], place('origin')), id: 'early-return', departureAt: '2027-09-11T09:00:00+05:30', arrivalAt: '2027-09-11T09:20:00+05:30' }],
+      suggestedOutboundId: null, suggestedReturnId: 'early-return', selectionReason: 'Test return', assumptions: [],
+    };
+    const command = { type: 'select_activity' as const, dayIndex: 3, visitIndex: 0, placeId: 'activity-b' };
+    const preview = await applyLiveSelection({ phase: 'live-selection', plan: d.plan, command }, d);
+    expect(preview.plan.days[3].visits[0].place.id).toBe('activity');
+    expect(preview.impact?.findings).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'blocking', overridable: false })]));
+    expect(preview.impact?.alternatives).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'activity' })]));
+    expect(preview.confirmation).toBeUndefined();
+    const applied = await applyLiveSelection({ phase: 'live-selection', plan: d.plan, command: { ...command, confirmConstraints: true } }, d);
+    expect(applied.plan.days[3].visits[0].place.id).toBe('activity');
+    expect(applied.confirmation).toBeUndefined();
+  });
+
+  it('requires confirmation for an overridable daylight warning and reports moved time', async () => {
+    const d = setup();
+    const replacement = { ...place('activity-b'), name: 'Evening hill trek' };
+    d.provider.details = vi.fn(async () => replacement);
+    d.plan.travel = {
+      origin: place('origin'), destination: d.plan.hotels[0],
+      outbound: [{ ...routeOption('outbound', place('origin'), d.plan.hotels[0]), arrivalAt: '2027-09-08T17:00:00+05:30' }], return: [],
+      suggestedOutboundId: 'outbound:origin:hotel-a', suggestedReturnId: null, selectionReason: 'Test arrival', assumptions: [],
+    };
+    const command = { type: 'select_activity' as const, dayIndex: 0, visitIndex: 0, placeId: 'activity-b' };
+    const preview = await applyLiveSelection({ phase: 'live-selection', plan: d.plan, command }, d);
+    expect(preview.plan.days[0].visits[0].place.id).toBe('activity');
+    expect(preview.confirmation?.findings).toEqual(expect.arrayContaining([expect.objectContaining({ id: expect.stringContaining('daylight'), severity: 'warning' })]));
+    expect(preview.confirmation?.impact.status).toBe('warning');
+    const applied = await applyLiveSelection({ phase: 'live-selection', plan: d.plan, command: { ...command, confirmConstraints: true } }, d);
+    expect(applied.plan.days[0].visits[0].place.id).toBe('activity-b');
   });
 
   it('invalidates stale meal corridor evidence when an adjacent activity changes', async () => {

@@ -68,10 +68,54 @@ boundary and cannot write directly to trip state.
 
 Each turn permits two AI calls and at most 60 Google calls with no automatic retries,
 a two-minute overall deadline, two concurrent live turns per process, cancellation,
-streamed actual progress and partial provider results. Production requests are blocked
-until authentication, durable state and production quotas are designed. IPv4 preference
+streamed actual progress and partial provider results. Vercel Preview and custom staging
+deployments are test surfaces even though their optimized build sets `NODE_ENV=production`;
+the gate uses `VERCEL_TARGET_ENV`/`VERCEL_ENV` instead. Non-Vercel optimized staging must
+opt in with `LIVE_PLANNING_ENABLED=true`. Actual production requests remain blocked until
+authentication, durable state and production quotas are designed. IPv4 preference
 is an explicit local environment setting. Both server-side Google calls and AI calls
 keep credentials outside responses and browser bundles.
+
+### Live Trip Brief and essentials
+
+The destination globe remains the primary starting surface. Its destination prompts open
+`/plan` and submit once automatically. The live workspace keeps conversation beside the
+trip after the first prompt has been interpreted and uses the original five-field Trip
+Brief pattern as the durable summary of origin, destination, dates, travellers and
+optional preferences.
+
+While the first prompt is being interpreted, the Trip Brief stays hidden and the existing
+travel-planning Lottie presents the current extraction or provider-search phase. Once the
+response is validated, the Trip Brief appears with extracted facts populated and missing
+facts highlighted. Each Trip Brief field opens the existing compact editor popover. Editor
+changes remain staged when the popover closes on an outside click; the one header Update
+button submits all staged facts through the conversational validation path. Popovers do not
+have their own Close or Apply actions.
+
+Before generation, the original Trip Essentials checklist shows which facts were added and
+which remain missing. Missing rows offer bounded recommendation chips and an Add manually
+path through the Trip Brief editor. Every chip and editor submission creates a
+natural-language request and re-enters the same extraction, validation and planning
+boundary as typed chat; UI controls do not write directly to `LiveBrief`.
+
+The chat mirrors the established workspace composer: suggested answer chips appear above
+the input for deterministic clarification choices, Enter sends while Shift+Enter adds a
+line, and one icon button inside the composer switches from send to stop while work is in
+progress. The live flow does not restore the example prompt after each response.
+
+Required facts are destination, origin, traveller count, duration, dated start,
+night-count confirmation, intercity travel preference and a conditional first-mile
+location for flight, cab or self-drive. Travel preference lives inside Preferences and
+offers Flight, Train, Bus, Cab, Self Drive and Recommend Me. Exact train and bus choices
+constrain Google transit modes; Cab requests road evidence with cab provenance. Recommend
+Me compares returned transit and cab-route duration plus group-size practicality, applies
+explicit budget-conscious and comfort/accessibility preference signals, displays returned
+transit fares when present, and keeps cab price, capacity and total budget fit
+unresolved until commercial evidence exists. Past dates and missing flight configuration remain
+explicit blockers. Dining preference and pace are optional. When dining is omitted,
+restaurant discovery stays generic and the plan tells the traveller to confirm menu and
+dietary fit. The same Trip Brief editors remain available after a plan exists, and all
+changes continue through one conversational mutation path.
 
 
 The first customer implementation slice is specified for review in `.scratch/cheaper-stay/spec.md`: compare alternative stays with dependent transfer costs, then safely apply the organizer's selection. It includes logical operations, persistent state, authority, concurrency, freshness and acceptance cases. Its technical proposals are draft decisions; use it to review and plan this slice before revising the baseline sections or writing application code.
@@ -2112,13 +2156,15 @@ schedule and map evidence replace the selected direction atomically.
 
 ### Live meal planning
 
-The live intake requires an explicit dining preference before provider searches:
-vegetarian, pure-vegetarian restaurants only, non-vegetarian, or both. Dietary notes
+The live intake may record a dining preference before provider searches: vegetarian,
+pure-vegetarian restaurants only, non-vegetarian, or both. Dietary notes
 separately retain allergies, intolerances, religious restrictions and foods or cuisines
 the traveller wants to try. The planner does not infer either from demographics or the
 destination.
 
-Google Places returns a bounded restaurant candidate set using that stated preference.
+Google Places returns a bounded restaurant candidate set using the stated preference, or
+a generic restaurant search when no preference was supplied. The generic path is labelled
+for menu and dietary confirmation rather than blocking itinerary generation.
 Breakfast is planned at or near the selected stay from Day 2 onward; a Nuitée room offer
 may prove breakfast inclusion, while other stays leave inclusion, menu and price unknown.
 Lunch and dinner become timed restaurant stops in the continuous itinerary. Candidates
@@ -2150,10 +2196,14 @@ blocks the first plan. Missing preferences are not inferred from destination, ag
 relationship, or demographics. Early-night intent suppresses evening discovery; other
 values shape a bounded Google Places candidate search.
 
-Evening results are optional ideas and are never silently inserted into the itinerary.
-The live workspace invites a chat refinement. Bars, clubs, casinos, and overnight
-activities require expressed interest. Google place results do not prove a dated event,
-ticket, last admission, activity provider, pickup, or overnight availability.
+Evening results remain optional ideas when the traveller has not expressed an evening
+preference. The live workspace invites a chat refinement instead of inferring nightlife
+from the destination or demographics. When the traveller explicitly asks for cultural
+evenings or nightlife, one observed candidate may enter a capacity-checked day; its full
+planned interval still passes regular-hours validation. Overnight activities remain
+unselected until dated provider evidence and cross-midnight occupancy are supported.
+Google place results do not prove a dated event, ticket, last admission, activity
+provider, pickup, or overnight availability.
 
 Meals and activities use shared regular-hours interval evidence with `valid`, `invalid`,
 or `unresolved` status. The complete projected start/end interval must be covered,
@@ -2164,3 +2214,54 @@ Cross-midnight occupancy, overnight intercity journeys, overnight self-drive saf
 provider-verified overnight activities, user-added itinerary items, and complete
 lock-aware recalculation are deferred in
 `.scratch/route-aware-evenings/issues/05-future-cross-midnight-and-user-options.md`.
+
+### Capacity-aware live scheduling
+
+The live planner uses `src/live/scheduler.ts` as the deterministic scheduling boundary.
+The planning model ranks observed place IDs and may suggest a duration, while application
+code owns pace, daily capacity, ordering, group adjustments, meal windows, route-time
+arithmetic and constraint findings. Unexpressed pace is stored as a visible balanced
+product default. Relaxed, balanced and packed full days target at most two, three and four
+activities respectively; arrival and departure days reduce that target from their known
+travel bounds. An unresolved boundary keeps the affected travel day light.
+
+Activity duration profiles distinguish provider slots, elastic visits, pace-sensitive
+visits and open-ended evening experiences. Group size changes only sensitive planning
+estimates; it never stretches a provider or fixed-time slot. These classifications are
+planning policy unless the provider supplied timing evidence, and the card shows the
+range as an estimate. Provider/manual fixed commitments retain their exact start and
+duration. Outdoor and adventure profiles retain inferred difficulty and a visible
+daylight planning window; these remain planning policy unless a provider supplies them.
+
+Breakfast, lunch and dinner retain preferred and extended windows. Lunch prefers
+12:30–14:30 and may move within 11:30–15:30. Dinner prefers 19:00–22:00 and may move
+within 18:00–23:00. The scheduler chooses the actual start after surrounding activities
+and routes are placed, and group size modestly affects meal duration. Explicit medical
+meal timing is treated as a constraint; a medical timing requirement without a usable
+time remains unresolved. A combined activity suppresses lunch or dinner only when the
+provider, a manual entry, or the retained Google place description explicitly supports
+that inclusion. A bar, club or generic evening venue is not treated as dinner evidence.
+
+Every day records warning, blocking and unresolved constraint findings. The timeline
+renders them alongside the affected day and labels substantial unused time as flexible
+time rather than meal preparation. Stay, flight, route and activity replacements run
+through the same scheduler and return a structured edit impact: affected days, moved
+items, changed transfers, moved meals, usable-time change, new findings and observed
+valid alternatives. New overridable warnings require explicit confirmation. A
+non-overridable fixed-time conflict returns the unchanged itinerary and cannot be applied.
+Confirmed closure on the selected day is rejected before assessment. Locks continue to
+prevent replacement.
+
+Activity discovery uses six bounded destination searches covering heritage/landmarks,
+museums/culture, markets/neighbourhoods, parks/viewpoints, outdoor/adventure and family
+activities, plus the existing conditional evening search. Results are deduplicated by
+Google place ID. Photo/detail calls are limited to at most six scheduled candidates so
+route and meal checks remain under the live Google request budget. Google Places may
+surface trekking, camping, sports or adventure businesses, but it does not establish
+dated slots, capacity, equipment, pickup or bookability; those facts remain unresolved
+until an activity supplier is integrated.
+
+The timeline identifies fixed commitments and estimated ranges, shifted meals, combined
+meal provenance, affected constraints and genuine free time. A day-level capacity note
+explains when an additional activity would make the day unreliable. The adjacent map
+continues following the final projected order.

@@ -135,10 +135,13 @@ public/          Lottie animation, logos, seeded/local visual assets and Figma r
 4. “Update day 3 with two activities: one outdoor adventure and one food and market experience.”
 5. “Plan a trip to Bali for two adults next weekend.” Verify origin guidance appears rather than a blocking erro
 
-## Test the live AI planning flow locally
+## Test the live AI planning flow locally or in Preview
 
 The default `/plan` page now uses live Google Places and Routes, independently of
 snapshot market coverage. With the dev server running, open http://localhost:3000/plan.
+Vercel Preview and custom staging deployments can use the same flow; the Vercel
+Production environment remains disabled. A non-Vercel optimized staging deployment must
+set `LIVE_PLANNING_ENABLED=true` explicitly.
 Send: “I'm planning a trip to Jaipur with my wife for 3 nights and 4 days, starting from 8th September 2027, travelling from Delhi.” Use a future date when running this smoke test, then confirm the requested year and nights in the next chat turn.
 A prompt entered on the homepage is carried into this chat; press Send to planner.
 The earlier snapshot workspace is available at `/plan?mode=snapshot`.
@@ -154,10 +157,14 @@ NUITEE_API_BASE_URL=https://api.liteapi.travel
 NUITEE_GUEST_NATIONALITY=IN
 ```
 
-The existing `OPENAI_API_KEY` and `OPENAI_MODEL` are also required. Restrict the browser
-key to Maps JavaScript API and `http://localhost:3000/*`; restrict the server key to
-Places API (New), Routes API and your public outbound IP. Restart development after
-changing environment values. Production live requests are intentionally disabled.
+The existing `OPENAI_API_KEY` and `OPENAI_MODEL` are also required. For a Vercel test,
+add these credentials to the Preview environment and redeploy; local `.env.local` values
+are not uploaded. Restrict the browser key to Maps JavaScript API and the exact localhost
+and Preview host patterns you use. Restrict the server key to Places API (New) and Routes
+API, and ensure its application restrictions permit requests from the Preview server
+runtime. Restart or redeploy after changing environment values. Vercel supplies
+`VERCEL_ENV`/`VERCEL_TARGET_ENV`; do not add them manually. Production live requests are
+intentionally disabled.
 The Google map uses the demonstration map style ID; use your own map ID before launch.
 
 This is a provisional, in-memory live plan. When `NUITEE_API_KEY` is configured, hotel

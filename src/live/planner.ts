@@ -7,6 +7,8 @@ import type { StayOffer } from '@/inventory/contracts';
 import { hoursValidationNote, regularHoursStatus, validateRegularHoursInterval } from './opening-hours';
 import { dayStops, localClockMinutes, projectLiveDay } from './timeline';
 import type { FlightHub, FlightProvider } from '@/transport/providers/nuitee-flight.server';
+import { allocateActivities, mealDuration, mealWindow, prepareDaySchedule, reflowAndAssessDay, resolvedPace, targetActivityCount, type DayBounds } from './scheduler';
+import { missingLiveEssential } from './essentials';
 
 export const extractionSchema = z.object({ brief: liveBriefSchema, question: z.string().max(500).nullable() }).strict();
 export const selectionSchema = z.object({
@@ -30,18 +32,7 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
     brief.startDate = null;
     brief.nightsConfirmed = false;
   }
-  let missing = question;
-  if (!brief.destination) missing = 'Which destination would you like to explore?';
-  else if (!brief.origin) missing = 'Which city are you travelling from?';
-  else if (!brief.travellers) missing = 'How many travellers are going?';
-  else if (!brief.days) missing = 'How many calendar days will you travel? This first live flow supports 2–7 days.';
-  else if (!brief.startDate) missing = `Please confirm your start date including the year. Should I treat ${brief.days} days as ${brief.days - 1} nights?`;
-  else if (brief.startDate < today) missing = 'That start date is in the past. What future date should I use?';
-  else if (!brief.nightsConfirmed) missing = `Should I treat ${brief.days} days as ${brief.days - 1} nights, checking out on ${addCalendarDays(brief.startDate, brief.days - 1)}? Please confirm the year too.`;
-  else if (!brief.travelMode) missing = 'How would you prefer to travel for this trip: fly, drive your own vehicle, or use public transport such as buses and trains?';
-  else if ((brief.travelMode === 'self_drive' || brief.travelMode === 'flight') && !brief.pickupLocation) missing = `What starting area or pickup address should I use for your ${brief.travelMode === 'flight' ? 'airport transfer' : 'driving estimate'}? You can use a public meeting point instead of a private address. Your answer is sent to the AI planner and Google Maps for this local session, is not shared with other travellers, and is cleared on refresh.`;
-  else if (!brief.dietaryPreference) missing = 'What dining preference should I plan around: vegetarian, pure-vegetarian restaurants only, non-vegetarian, or both? Also mention allergies or foods you especially want to try, such as seafood.';
-  else if (brief.travelMode === 'flight' && !deps.flightProvider) missing = 'Flights sandbox access is not configured on the server yet. Add the Nuitée sandbox key and retry.';
+  const missing = missingLiveEssential(brief, { today, modelQuestion: question, flightConfigured: Boolean(deps.flightProvider) });
   if (missing) return { kind: 'live', brief, message: missing };
   deps.signal.throwIfAborted();
   emit(deps.stayProvider ? 'Searching Nuitée for dated stays and Google Places for attractions…' : 'Searching Google Places for hotels and attractions…');
@@ -61,9 +52,7 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
           return result.offers.map(stayOfferToLivePlace);
         })
       : deps.provider.search(`hotels in ${brief.destination}`, 4, true),
-    // Keep a bounded, visual candidate set for the Change drawer. Selected
-    // candidates still receive a fresh details check before entering the plan.
-    deps.provider.search(`tourist attractions in ${brief.destination} ${brief.preferences.slice(0, 150)}`, 10, true),
+    searchActivityCandidates(deps.provider, brief),
     deps.provider.search(restaurantQuery(brief), Math.min(14, brief.days! * 2)),
     brief.dayRhythm === 'early_nights' ? Promise.resolve([]) : deps.provider.search(eveningQuery(brief), 5),
   ]);
@@ -71,13 +60,15 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
   const activities = searches[1].status === 'fulfilled' ? searches[1].value : [];
   const restaurants = searches[2].status === 'fulfilled' ? searches[2].value : [];
   const eveningOptions = searches[3].status === 'fulfilled' ? searches[3].value : [];
+  const explicitlyRequestedEvening = brief.dayRhythm === 'evening_experiences' || brief.dayRhythm === 'nightlife';
+  const planningActivities = explicitlyRequestedEvening ? mergePlaces(activities, eveningOptions) : activities;
   const warnings: string[] = [
     supplierStaySearch
       ? `${supplierStaySearch.environment === 'sandbox' ? 'Sandbox' : 'Live'} supplier stay prices and availability were checked for the stated dates. Entry fees, meal prices, dietary handling and transfer fares remain unresolved, so total cost and budget compliance are unknown.`
       : 'Provisional plan: hotel room prices, availability, entry fees, meal prices, dietary handling and transfer fares are not checked. Total cost and budget compliance are unknown.',
     brief.travelMode === 'flight'
       ? 'Nuitée Flights is checking separate one-way sandbox offers; Google Routes is checking the road transfers to and from each airport. No booking is made.'
-      : `Google Routes is checking ${brief.travelMode === 'self_drive' ? 'self-driving' : 'public-transit'} directions based on your stated preference. It does not prove seats, tickets, bookable fares or private-cab quotes.`,
+      : `Google Routes is checking ${travelModeDescription(brief.travelMode!)} directions based on your stated preference. It does not prove seats, tickets, bookable fares or private-cab quotes.`,
     'Local driving durations reflect traffic at the time of this search. Activity durations and the 15-minute connection buffers are planning assumptions.',
     'Regular opening hours are reference information, not confirmed opening on your travel dates. Review each visit before booking.',
     'Restaurant identity, location, ratings and regular hours come from Google Places. Menu, allergens, kitchen separation and pure-vegetarian status require confirmation with the restaurant.',
@@ -86,20 +77,21 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
   ];
   if (searches.some(r => r.status === 'rejected')) warnings.push('One live provider search failed. Showing the results that were available; no snapshot fallback was used.');
   if (!hotels.length) warnings.push('No hotel candidates returned; stay and hotel transfers remain unresolved.');
-  if (!activities.length) warnings.push('No attraction candidates returned; days remain unplanned.');
+  if (!planningActivities.length) warnings.push('No attraction candidates returned; days remain unplanned.');
   if (!restaurants.length) warnings.push('No restaurant candidates returned; meal locations remain incomplete.');
   const plan: LivePlan = {
-    brief, hotels, selectedHotelId: null, activityOptions: activities, mealOptions: restaurants,
+    brief, hotels, selectedHotelId: null, activityOptions: planningActivities, mealOptions: restaurants,
     eveningOptions,
-    eveningPrompt: eveningOptions.length ? eveningPrompt(brief, eveningOptions) : undefined,
+    eveningPrompt: eveningOptions.length && !explicitlyRequestedEvening ? eveningPrompt(brief, eveningOptions) : undefined,
     days: Array.from({ length: brief.days! }, (_, i) => ({ date: addCalendarDays(brief.startDate!, i), visits: [], meals: [], legs: [] })),
     warnings, checkedAt: new Date().toISOString(), status: 'provisional', totalCost: null,
+    scheduling: { pace: resolvedPace(brief), paceDefaulted: brief.pace === null, findings: [] },
     locks: { hotel: false, outboundFlight: false, returnFlight: false, outboundTravel: false, returnTravel: false, activityIds: [] },
   };
-  if (!hotels.length || !activities.length) return { kind: 'live', brief, plan, message: 'I could only gather part of the live information. Review the available candidates and retry the search.' };
+  if (!hotels.length || !planningActivities.length) return { kind: 'live', brief, plan, message: 'I could only gather part of the live information. Review the available candidates and retry the search.' };
   emit('Choosing a provisional stay and grouping observed places by day…');
   let selection: z.infer<typeof selectionSchema>;
-  try { selection = selectionSchema.parse(await deps.model.select(brief, hotels, activities)); }
+  try { selection = selectionSchema.parse(await deps.model.select(brief, hotels, planningActivities)); }
   catch { plan.warnings.push('AI could not produce a valid selection. No itinerary was invented.'); return { kind: 'live', brief, plan, message: 'The live hotel candidates are available, but I could not assemble a valid day plan. Please retry.' }; }
   const hotel = hotels.find(h => h.id === selection.hotelId);
   const seen = new Set<string>();
@@ -107,15 +99,16 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
   // Reject the whole selection if the model references unobserved IDs or repeats a place.
   const valid = hotel && selection.visits.length > 0 && selection.visits.every(v => {
     const count = (counts.get(v.day) ?? 0) + 1; counts.set(v.day, count);
-    if (v.day > brief.days! || count > 2 || seen.has(v.placeId) || !activities.some(a => a.id === v.placeId)) return false;
+    if (v.day > brief.days! || count > 4 || seen.has(v.placeId) || !planningActivities.some(a => a.id === v.placeId)) return false;
     seen.add(v.placeId); return true;
   });
   if (!valid || !hotel) { plan.warnings.push('AI selection failed validation. No unverified selections were applied.'); return { kind: 'live', brief, plan, message: 'The live candidates are available, but the proposed itinerary did not pass validation. Please retry.' }; }
   plan.selectedHotelId = hotel.id;
-  emit(brief.travelMode === 'flight' ? 'Finding direct sandbox flights and airport transfers…' : `Finding a suggested ${brief.travelMode === 'self_drive' ? 'driving' : 'public-transit'} route…`);
+  emit(brief.travelMode === 'flight' ? 'Finding direct sandbox flights and airport transfers…' : `Finding suggested ${travelModeDescription(brief.travelMode!)} routes…`);
   let resolvedRouteOrigin: LivePlace | undefined;
   try {
-    const routeOriginQuery = brief.travelMode === 'public_transit' ? brief.origin! : brief.pickupLocation!;
+    const cityOriginModes = ['public_transit', 'train', 'bus', 'recommend'];
+    const routeOriginQuery = cityOriginModes.includes(brief.travelMode!) ? brief.origin! : brief.pickupLocation!;
     const [origin] = await deps.provider.search(routeOriginQuery, 1);
     resolvedRouteOrigin = origin;
     if (!origin) {
@@ -149,14 +142,15 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
       const returnDate = plan.days.at(-1)!.date;
       const outboundDeparture = departureTime(brief.startDate!, 8, origin.utcOffsetMinutes);
       const returnDeparture = departureTime(returnDate, 17, hotel.utcOffsetMinutes);
-      const routeMode = brief.travelMode === 'self_drive' ? 'drive' : 'transit';
-      const results = await Promise.allSettled([
-        deps.provider.travelRoutes(origin, hotel, { direction: 'outbound', mode: routeMode, departureTime: outboundDeparture }),
-        deps.provider.travelRoutes(hotel, origin, { direction: 'return', mode: routeMode, departureTime: returnDeparture }),
+      const profile = routeSearchProfile(brief.travelMode!);
+      const requests = profile.flatMap(request => [
+        deps.provider.travelRoutes(origin, hotel, { direction: 'outbound', departureTime: outboundDeparture, ...request }),
+        deps.provider.travelRoutes(hotel, origin, { direction: 'return', departureTime: returnDeparture, ...request }),
       ]);
+      const results = await Promise.allSettled(requests);
       const available = results.map(result => result.status === 'fulfilled' ? result.value : []);
-      const outbound = [...available[0]].sort((a, b) => a.minutes - b.minutes);
-      const returning = [...available[1]].sort((a, b) => a.minutes - b.minutes);
+      const outbound = available.filter((_, index) => index % 2 === 0).flat().sort(recommendedRouteComparator(brief));
+      const returning = available.filter((_, index) => index % 2 === 1).flat().sort(recommendedRouteComparator(brief));
       plan.travel = {
         origin,
         destination: hotel,
@@ -164,11 +158,12 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
         return: returning,
         suggestedOutboundId: outbound[0]?.id ?? null,
         suggestedReturnId: returning[0]?.id ?? null,
-        selectionReason: `Shortest-duration route returned for your ${brief.travelMode === 'self_drive' ? 'self-driving' : 'public-transport'} preference.`,
+        selectionReason: routeSelectionReason(brief, [...outbound, ...returning]),
         assumptions: [
-          brief.travelMode === 'self_drive' ? `${origin.name} is Google's match for the starting location you provided.` : `${origin.name} is a city-level route origin, not a confirmed station or stop.`,
+          brief.travelMode === 'self_drive' || brief.travelMode === 'cab' ? `${origin.name} is Google's match for the starting location you provided.` : `${origin.name} is a city-level route origin, not a confirmed station or stop.`,
           `Outbound alternatives were requested for 08:00 on ${brief.startDate}; return alternatives for 17:00 on ${returnDate}.`,
           'Transit modes, lines and times are shown only when Google Routes returned them. A route is not evidence of ticket or seat availability.',
+          ...(brief.travelMode === 'recommend' ? ['The recommendation compares observed route duration and group-size practicality. Returned transit fares are displayed when available; private-cab price, vehicle capacity and total budget fit remain unresolved.'] : []),
         ],
         context: 'preferred',
       };
@@ -187,34 +182,55 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
     }
   }
   emit('Checking opening hours and driving connections…');
-  // Sequential batches keep provider concurrency bounded; failed facts stay unknown.
-  const enrichedVisits: { place: LivePlace; durationMinutes: number; requestedDay: number }[] = [];
-  for (const visit of selection.visits) {
+  const bounds = plan.days.map((_, index): DayBounds => ({ startMinutes: plannerDayStart(plan, index), endMinutes: plannerDayEnd(plan, index) }));
+  const allocated = allocateActivities({
+    brief,
+    candidates: planningActivities,
+    hints: [
+      ...(explicitlyRequestedEvening && eveningOptions[0] ? [{ placeId: eveningOptions[0].id, dayIndex: Math.min(1, plan.days.length - 1), durationMinutes: 120 }] : []),
+      ...selection.visits.map(visit => ({ placeId: visit.placeId, dayIndex: visit.day - 1, durationMinutes: visit.durationMinutes })),
+    ],
+    bounds,
+  });
+  const detailed = new Map<string, LivePlace>();
+  let detailCalls = 0;
+  for (const visit of allocated.flat()) {
     deps.signal.throwIfAborted();
-    const place = activities.find(a => a.id === visit.placeId)!;
-    plan.activityOptions = plan.activityOptions?.map(candidate => candidate.id === place.id ? place : candidate);
-    enrichedVisits.push({ place, durationMinutes: visit.durationMinutes, requestedDay: visit.day - 1 });
+    if (detailed.has(visit.place.id)) continue;
+    try {
+      if (detailCalls >= 6) { detailed.set(visit.place.id, visit.place); continue; }
+      detailCalls++;
+      const result = await deps.provider.details(visit.place.id);
+      detailed.set(visit.place.id, { ...visit.place, ...result, regularHours: result.regularHours ?? visit.place.regularHours, openingHours: result.openingHours ?? visit.place.openingHours, editorialSummary: result.editorialSummary ?? visit.place.editorialSummary });
+    } catch {
+      detailed.set(visit.place.id, visit.place);
+      warnings.push(`${visit.place.name}: detailed place information was unavailable; the observed search result is retained.`);
+    }
   }
-  for (const visit of enrichedVisits) {
-    const requested = plan.days[visit.requestedDay];
-    let target = visit.requestedDay;
-    let status = regularHoursStatus(visit.place, requested.date);
+  plan.activityOptions = plan.activityOptions?.map(candidate => detailed.get(candidate.id) ?? candidate);
+  for (let sourceDayIndex = 0; sourceDayIndex < allocated.length; sourceDayIndex++) for (const visit of allocated[sourceDayIndex]) {
+    const place = detailed.get(visit.place.id) ?? visit.place;
+    const requested = plan.days[sourceDayIndex];
+    let target = sourceDayIndex;
+    let status = regularHoursStatus(place, requested.date);
     if (status === 'closed') {
       const alternatives = plan.days
-        .map((candidate, index) => ({ index, distance: Math.abs(index - visit.requestedDay), status: regularHoursStatus(visit.place, candidate.date) }))
-        .filter(candidate => candidate.status === 'open' && plan.days[candidate.index].visits.length < 2)
+        .map((candidate, index) => ({ index, distance: Math.abs(index - sourceDayIndex), status: regularHoursStatus(place, candidate.date) }))
+        .filter(candidate => candidate.status === 'open' && plan.days[candidate.index].visits.length < targetActivityCount(brief, candidate.index, bounds[candidate.index]))
         .sort((a, b) => a.distance - b.distance || a.index - b.index);
       if (!alternatives.length) {
-        warnings.push(`${visit.place.name} was omitted because it is usually closed on the proposed day and no open trip day had capacity.`);
+        warnings.push(`${place.name} was omitted because it is usually closed on the proposed day and no open trip day had capacity.`);
         continue;
       }
       target = alternatives[0].index;
       status = 'open';
-      warnings.push(`${visit.place.name} moved from ${requested.date} to ${plan.days[target].date} because its regular hours show it closed on the proposed day.`);
+      warnings.push(`${place.name} moved from ${requested.date} to ${plan.days[target].date} because its regular hours show it closed on the proposed day.`);
     }
-    plan.days[target].visits.push({ place: visit.place, durationMinutes: visit.durationMinutes, hoursStatus: status === 'open' ? 'open' : 'unknown', hoursNote: hoursValidationNote(status, plan.days[target].date) });
+    plan.days[target].visits.push({ ...visit, place, hoursStatus: status === 'open' ? 'open' : 'unknown', hoursNote: hoursValidationNote(status, plan.days[target].date) });
   }
+  plan.days.forEach((day, index) => prepareDaySchedule(day, brief.travellers!, bounds[index], brief));
   await scheduleMeals(plan, hotel, restaurants, deps.provider, deps.signal, warnings);
+  plan.days.forEach((day, index) => prepareDaySchedule(day, brief.travellers!, bounds[index], brief));
   for (const day of plan.days) {
     deps.signal.throwIfAborted();
     if (!day.visits.length) warnings.push(`${day.date}: no activities planned; needs review.`);
@@ -230,23 +246,94 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
       try { day.legs.push(await deps.provider.route(chain[i - 1], chain[i])); }
       catch { day.legs.push({ fromId: chain[i - 1].id, toId: chain[i].id, meters: null, minutes: null, path: [], checkedAt: new Date().toISOString(), error: 'Driving connection unavailable; timing needs review.' }); }
     }
-    applyScheduleValidations(plan, day, plan.days.indexOf(day), warnings);
+    const dayIndex = plan.days.indexOf(day);
+    reflowAndAssessDay(day, dayIndex, bounds[dayIndex].startMinutes, bounds[dayIndex].endMinutes, brief);
+    applyScheduleValidations(plan, day, dayIndex, warnings);
+    const findings = reflowAndAssessDay(day, dayIndex, bounds[dayIndex].startMinutes, bounds[dayIndex].endMinutes, brief);
+    plan.scheduling!.findings.push(...findings);
   }
+  const blocking = plan.scheduling!.findings.filter(finding => finding.severity === 'blocking');
+  const unresolved = plan.scheduling!.findings.filter(finding => finding.severity === 'unresolved');
+  if (blocking.length) warnings.push(`${blocking.length} schedule constraint${blocking.length === 1 ? '' : 's'} need changes before this itinerary can be relied on.`);
+  if (unresolved.length) warnings.push(`${unresolved.length} schedule connection${unresolved.length === 1 ? '' : 's'} remain unresolved.`);
   deps.signal.throwIfAborted();
   const hasSelectedFlight = Boolean(plan.flight?.suggestedOutboundId || plan.flight?.suggestedReturnId);
   const travelEvidence = brief.travelMode === 'flight'
     ? hasSelectedFlight
       ? 'Nuitée sandbox flights with Google airport transfers'
       : 'live Google places; flight offers were unavailable for one or both directions, with unselected Google route alternatives where available'
-    : `suggested ${brief.travelMode === 'self_drive' ? 'driving' : 'public-transit'} routes`;
+    : `suggested ${travelModeDescription(brief.travelMode!)} routes`;
   return { kind: 'live', brief, plan, message: `I built a provisional ${brief.days}-day plan from ${supplierStaySearch ? `${supplierStaySearch.environment} Nuitée stay offers, ` : ''}live Google places and ${travelEvidence}. Review the timing assumptions and unresolved costs before making bookings.${plan.eveningPrompt ? ` ${plan.eveningPrompt}` : ''}` };
+}
+
+type RouteSearchInput = Pick<Parameters<LiveProvider['travelRoutes']>[2], 'mode' | 'transitModes' | 'roadUse'>;
+
+function routeSearchProfile(mode: NonNullable<z.infer<typeof liveBriefSchema>['travelMode']>): RouteSearchInput[] {
+  if (mode === 'self_drive') return [{ mode: 'drive', roadUse: 'self_drive' }];
+  if (mode === 'cab') return [{ mode: 'drive', roadUse: 'cab' }];
+  if (mode === 'train') return [{ mode: 'transit', transitModes: ['TRAIN', 'LIGHT_RAIL', 'RAIL', 'SUBWAY'] }];
+  if (mode === 'bus') return [{ mode: 'transit', transitModes: ['BUS'] }];
+  if (mode === 'recommend') return [{ mode: 'transit' }, { mode: 'drive', roadUse: 'cab' }];
+  return [{ mode: 'transit' }];
+}
+
+function recommendedRouteComparator(brief: z.infer<typeof liveBriefSchema>) {
+  return (left: LiveTravelOption, right: LiveTravelOption) => routeRecommendationScore(left, brief) - routeRecommendationScore(right, brief);
+}
+
+function routeRecommendationScore(option: LiveTravelOption, brief: z.infer<typeof liveBriefSchema>) {
+  if (brief.travelMode !== 'recommend') return option.minutes;
+  const preferenceText = `${brief.preferences} ${brief.constraints.join(' ')}`.toLowerCase();
+  const budgetConscious = /budget|afford|econom|low[ -]?cost|save money/.test(preferenceText);
+  const comfortFocused = /comfort|convenien|accessib|senior|young child|toddler/.test(preferenceText);
+  const coordinationPenalty = option.mode === 'transit' && brief.travellers! >= 5 ? 45 : option.mode === 'drive' && brief.travellers! <= 2 ? 30 : 0;
+  const budgetAdjustment = budgetConscious ? option.mode === 'transit' ? -25 : 25 : 0;
+  const comfortAdjustment = comfortFocused ? option.mode === 'drive' ? -20 : 20 : 0;
+  return option.minutes + coordinationPenalty + budgetAdjustment + comfortAdjustment;
+}
+
+function routeSelectionReason(brief: z.infer<typeof liveBriefSchema>, options: LiveTravelOption[]) {
+  if (brief.travelMode !== 'recommend') return `Shortest-duration route returned for your ${travelModeDescription(brief.travelMode!)} preference.`;
+  const hasFare = options.some(option => option.fare);
+  const preferenceText = `${brief.preferences} ${brief.constraints.join(' ')}`.toLowerCase();
+  const signals = [
+    /budget|afford|econom|low[ -]?cost|save money/.test(preferenceText) ? 'budget preference' : '',
+    /comfort|convenien|accessib|senior|young child|toddler/.test(preferenceText) ? 'comfort or accessibility preference' : '',
+  ].filter(Boolean);
+  return `Suggested from observed duration, group-size practicality for ${brief.travellers} traveller${brief.travellers === 1 ? '' : 's'}${signals.length ? `, and your stated ${signals.join(' and ')}` : ''}.${hasFare ? ' Returned transit fares remain visible for comparison.' : ' No provider returned a comparable fare.'}`;
+}
+
+function travelModeDescription(mode: NonNullable<z.infer<typeof liveBriefSchema>['travelMode']>) {
+  if (mode === 'self_drive') return 'self-drive';
+  if (mode === 'cab') return 'private-cab';
+  if (mode === 'train') return 'train';
+  if (mode === 'bus') return 'bus';
+  if (mode === 'recommend') return 'transit and cab comparison';
+  return 'public-transit';
+}
+
+async function searchActivityCandidates(provider: LiveProvider, brief: z.infer<typeof liveBriefSchema>) {
+  const preference = brief.preferences.slice(0, 120);
+  const queries = [
+    `tourist heritage landmarks attractions in ${brief.destination} ${preference}`,
+    `tourist museums arts culture experiences in ${brief.destination} ${preference}`,
+    `tourist local markets neighbourhoods walking areas in ${brief.destination} ${preference}`,
+    `tourist parks gardens viewpoints scenic places in ${brief.destination} ${preference}`,
+    `tourist outdoor adventure trekking sports experiences in ${brief.destination} ${preference}`,
+    `tourist family activities family attractions in ${brief.destination} ${preference}`,
+  ];
+  const results = await Promise.allSettled(queries.map(query => provider.search(query.trim(), 4)));
+  const places = results.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+  if (!places.length && results.some(result => result.status === 'rejected')) throw new Error('Activity discovery failed.');
+  return mergePlaces([], places);
 }
 
 function restaurantQuery(brief: z.infer<typeof liveBriefSchema>) {
   const dining = brief.dietaryPreference === 'pure_vegetarian' ? 'pure vegetarian restaurants'
     : brief.dietaryPreference === 'vegetarian' ? 'vegetarian restaurants'
     : brief.dietaryPreference === 'non_vegetarian' ? 'non vegetarian restaurants'
-    : 'restaurants with vegetarian and non vegetarian food';
+    : brief.dietaryPreference === 'both' ? 'restaurants with vegetarian and non vegetarian food'
+    : 'restaurants';
   return `${dining} in ${brief.destination} ${brief.dietaryNotes.slice(0, 120)}`.trim();
 }
 
@@ -269,17 +356,26 @@ async function scheduleMeals(plan: LivePlan, hotel: LivePlace, candidates: LiveP
   const corridorLimit = Math.min(plan.days.length, 4);
   const dietaryNote = plan.brief.dietaryPreference === 'pure_vegetarian'
     ? 'Matched by a Google search for pure-vegetarian restaurants; confirm that the kitchen serves only vegetarian food.'
-    : `${plan.brief.dietaryPreference === 'both' ? 'Vegetarian and non-vegetarian' : plan.brief.dietaryPreference?.replace('_', '-')} preference used for this Google restaurant search${plan.brief.dietaryNotes ? ` · ${plan.brief.dietaryNotes}` : ''}.`;
+    : plan.brief.dietaryPreference
+      ? `${plan.brief.dietaryPreference === 'both' ? 'Vegetarian and non-vegetarian' : plan.brief.dietaryPreference.replace('_', '-')} preference used for this Google restaurant search${plan.brief.dietaryNotes ? ` · ${plan.brief.dietaryNotes}` : ''}.`
+      : `No dining preference was stated; confirm menu and dietary fit${plan.brief.dietaryNotes ? ` · ${plan.brief.dietaryNotes}` : ''}.`;
   for (let dayIndex = 0; dayIndex < plan.days.length; dayIndex++) {
     const day = plan.days[dayIndex];
-    if (dayIndex > 0) day.meals!.push({ type: 'breakfast', place: hotel, durationMinutes: 60, targetStartMinutes: 480, location: 'stay', dietaryNote: hotel.stayOffer?.roomFacts.mealPlan === 'breakfast' ? 'Breakfast is included in the selected sandbox room offer; menu and dietary fit require confirmation.' : 'Breakfast is planned at or near the stay; inclusion, menu and price are unverified.' });
-    for (const slot of [{ type: 'lunch' as const, target: 780, duration: 60 }, { type: 'dinner' as const, target: 1170, duration: 90 }]) {
+    if (dayIndex > 0) {
+      const window = mealWindow('breakfast', plan.brief);
+      day.meals!.push({ type: 'breakfast', place: hotel, durationMinutes: mealDuration('breakfast', plan.brief.travellers ?? 1), targetStartMinutes: window.preferredStartMinutes, window, location: 'stay', dietaryNote: hotel.stayOffer?.roomFacts.mealPlan === 'breakfast' ? 'Breakfast is included in the selected sandbox room offer; menu and dietary fit require confirmation.' : 'Breakfast is planned at or near the stay; inclusion, menu and price are unverified.' });
+    }
+    for (const type of ['lunch', 'dinner'] as const) {
+      const window = mealWindow(type, plan.brief);
+      const slot = { type, target: window.preferredStartMinutes, duration: mealDuration(type, plan.brief.travellers ?? 1), window };
       let selected: LivePlace | undefined;
       const selectedLunch = day.meals?.find(meal => meal.type === 'lunch')?.place;
+      const morning = day.visits.filter(visit => (visit.sequenceOrder ?? 40) < 30);
+      const later = day.visits.filter(visit => (visit.sequenceOrder ?? 40) > 30 && (visit.sequenceOrder ?? 40) < 70);
       const from = slot.type === 'lunch'
-        ? day.visits[0]?.place ?? hotel
-        : day.visits.length > 1 ? day.visits.at(-1)!.place : selectedLunch ?? day.visits.at(-1)?.place ?? hotel;
-      const to = slot.type === 'lunch' ? day.visits[1]?.place ?? hotel : hotel;
+        ? morning.at(-1)?.place ?? hotel
+        : later.at(-1)?.place ?? selectedLunch ?? morning.at(-1)?.place ?? hotel;
+      const to = slot.type === 'lunch' ? later[0]?.place ?? hotel : hotel;
       let directMinutes: number | null = null;
       let basis: 'route_corridor' | 'destination_fallback' = 'destination_fallback';
       let ranked = nearestUnused(candidates, used, from);
@@ -314,7 +410,7 @@ async function scheduleMeals(plan: LivePlan, hotel: LivePlace, candidates: LiveP
       }
       used.add(selected.id);
       day.meals!.push({
-        type: slot.type, place: selected, durationMinutes: slot.duration, targetStartMinutes: slot.target, location: 'restaurant', dietaryNote,
+        type: slot.type, place: selected, durationMinutes: slot.duration, targetStartMinutes: slot.target, window: slot.window, location: 'restaurant', dietaryNote,
         hoursStatus: validation?.status === 'valid' ? 'open' : 'unknown',
         hoursNote: validation?.note ?? `Opening hours for the planned ${slot.type} interval are unavailable`,
         scheduleValidation: validation,
@@ -355,7 +451,7 @@ export function applyScheduleValidations(plan: LivePlan, day: LivePlan['days'][n
 }
 
 export function plannerDayStart(plan: LivePlan, dayIndex: number) {
-  if (dayIndex > 0) return plan.days[dayIndex].meals?.some(meal => meal.type === 'breakfast') ? 480 : 600;
+  if (dayIndex > 0) return 480;
   const outboundFlight = plan.flight?.outbound.find(offer => offer.id === plan.flight?.suggestedOutboundId);
   if (outboundFlight && plan.flight?.destinationAirport.utcOffsetMinutes !== undefined && plan.flight.outboundLastMile) {
     const arrival = localClockMinutes(outboundFlight.arrivalAt, plan.flight.destinationAirport.utcOffsetMinutes, plan.days[0].date);
@@ -365,6 +461,21 @@ export function plannerDayStart(plan: LivePlan, dayIndex: number) {
   if (outbound) {
     const arrival = localClockMinutes(outbound.arrivalAt, plan.travel?.destination.utcOffsetMinutes, plan.days[0].date);
     return arrival === null ? null : arrival + 30;
+  }
+  return null;
+}
+
+export function plannerDayEnd(plan: LivePlan, dayIndex: number) {
+  if (dayIndex < plan.days.length - 1) return 22 * 60;
+  const returnFlight = plan.flight?.return.find(offer => offer.id === plan.flight?.suggestedReturnId);
+  if (returnFlight && plan.flight?.destinationAirport.utcOffsetMinutes !== undefined && plan.flight.returnFirstMile) {
+    const departure = localClockMinutes(returnFlight.departureAt, plan.flight.destinationAirport.utcOffsetMinutes, plan.days[dayIndex].date);
+    return departure === null ? null : departure - plan.flight.returnFirstMile.minutes - 120;
+  }
+  const returning = plan.travel?.return.find(option => option.id === plan.travel?.suggestedReturnId);
+  if (returning) {
+    const departure = localClockMinutes(returning.departureAt, plan.travel?.destination.utcOffsetMinutes, plan.days[dayIndex].date);
+    return departure ?? 17 * 60;
   }
   return null;
 }

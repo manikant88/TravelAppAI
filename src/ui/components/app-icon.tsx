@@ -14,6 +14,7 @@ import {
   Plus,
   Sparkles,
   Star,
+  Square,
   TrainFront,
   UtensilsCrossed,
   X,
@@ -38,6 +39,7 @@ const iconSet = {
   plus: Plus,
   sparkles: Sparkles,
   star: Star,
+  stop: Square,
   train: TrainFront,
   close: X,
 } satisfies Record<string, LucideIcon>;

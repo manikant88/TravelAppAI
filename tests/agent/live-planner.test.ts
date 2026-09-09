@@ -94,6 +94,59 @@ it('keeps the itinerary when one travel mode fails and does not invent its fare'
  expect(r.plan?.warnings.some(w=>w.includes('route searches failed'))).toBe(true);
 });
 
+it('constrains explicit train and bus preferences to their Google transit modes', async () => {
+ for (const [travelMode, expectedModes] of [['train', ['TRAIN', 'LIGHT_RAIL', 'RAIL', 'SUBWAY']], ['bus', ['BUS']]] as const) {
+  const d=setup();
+  d.model.extract=async()=>({brief:{...brief,travelMode},question:null});
+  await runLivePlan(d.input,d);
+  const requests = vi.mocked(d.provider.travelRoutes).mock.calls.map(call => call[2]);
+  expect(requests).toHaveLength(2);
+  expect(requests.every(request => request.mode === 'transit')).toBe(true);
+  expect(requests.every(request => JSON.stringify(request.transitModes) === JSON.stringify(expectedModes))).toBe(true);
+ }
+});
+
+it('uses cab road evidence and requires an explicit cab pickup point', async () => {
+ const missing=setup();missing.model.extract=async()=>({brief:{...brief,travelMode:'cab',pickupLocation:null},question:null});
+ const clarification=await runLivePlan(missing.input,missing);
+ expect(clarification.message).toContain('cab estimate');
+ expect(missing.provider.search).not.toHaveBeenCalled();
+
+ const d=setup();d.model.extract=async()=>({brief:{...brief,travelMode:'cab',pickupLocation:'India Gate, New Delhi'},question:null});
+ await runLivePlan(d.input,d);
+ const requests = vi.mocked(d.provider.travelRoutes).mock.calls.map(call => call[2]);
+ expect(requests).toHaveLength(2);
+ expect(requests.every(request => request.mode === 'drive' && request.roadUse === 'cab')).toBe(true);
+});
+
+it('compares transit and cab route evidence for Recommend Me without requiring a pickup point', async () => {
+ const d=setup();d.model.extract=async()=>({brief:{...brief,travelMode:'recommend',pickupLocation:null,preferences:'budget-friendly travel'},question:null});
+ const result=await runLivePlan(d.input,d);
+ const requests = vi.mocked(d.provider.travelRoutes).mock.calls.map(call => call[2]);
+ expect(requests).toHaveLength(4);
+ expect(requests.filter(request => request.mode === 'transit')).toHaveLength(2);
+ expect(requests.filter(request => request.mode === 'drive' && request.roadUse === 'cab')).toHaveLength(2);
+ expect(result.plan?.travel?.outbound.map(option => option.mode)).toEqual(['transit', 'drive']);
+ expect(result.plan?.travel?.selectionReason).toContain('group-size practicality');
+ expect(result.plan?.travel?.selectionReason).toContain('budget preference');
+ expect(result.plan?.travel?.assumptions.join(' ')).toContain('private-cab price');
+});
+
+it('limits detailed Google enrichment to the scheduled shortlist', async () => {
+ const d=setup();
+ const candidates=Array.from({length:10},(_,index)=>place(`attraction-${index}`));
+ d.provider.search=vi.fn(async q=>q.startsWith('hotels')?[place('hotel')]:q.startsWith('tourist')?candidates:q.includes('restaurants')||q.startsWith('evening')?[]:[{...place('origin'),name:'Delhi',utcOffsetMinutes:330}]);
+ d.model.select=async()=>({hotelId:'hotel',visits:[{placeId:'attraction-0',day:2,durationMinutes:90}]});
+ const result=await runLivePlan(d.input,d);
+ expect(result.plan?.days.flatMap(day=>day.visits).length).toBeGreaterThan(6);
+ expect(d.provider.details).toHaveBeenCalledTimes(6);
+ const discoveryQueries = vi.mocked(d.provider.search).mock.calls.map(call => String(call[0])).filter(query => query.startsWith('tourist'));
+ expect(discoveryQueries).toHaveLength(6);
+ expect(discoveryQueries.join(' ')).toMatch(/heritage.*museums.*markets.*parks.*adventure.*family/);
+ const googleCalls = vi.mocked(d.provider.search).mock.calls.length + vi.mocked(d.provider.details).mock.calls.length + vi.mocked(d.provider.route).mock.calls.length + vi.mocked(d.provider.travelRoutes!).mock.calls.length;
+ expect(googleCalls).toBeLessThanOrEqual(60);
+});
+
 it('asks for a transport preference before any provider search', async () => {
  const d=setup();d.model.extract=async()=>({brief:{...brief,travelMode:null},question:null});
  const r=await runLivePlan(d.input,d);
@@ -104,22 +157,22 @@ it('asks for a transport preference before any provider search', async () => {
 it('asks self-drivers for a starting location before any provider search', async () => {
  const d=setup();d.model.extract=async()=>({brief:{...brief,travelMode:'self_drive',pickupLocation:null},question:null});
  const r=await runLivePlan(d.input,d);
- expect(r.message).toContain('pickup address');
+ expect(r.message).toContain('starting area');
  expect(d.provider.search).not.toHaveBeenCalled();
 });
 
 it('asks flyers for a starting point before any provider search', async () => {
  const d=setup();d.model.extract=async()=>({brief:{...brief,travelMode:'flight',pickupLocation:null},question:null});
  const r=await runLivePlan(d.input,{...d,flightProvider:{search:vi.fn()} as unknown as FlightProvider});
- expect(r.message).toContain('airport transfer');
+ expect(r.message).toContain('starting area');
  expect(d.provider.search).not.toHaveBeenCalled();
 });
 
-it('asks for dining preferences before provider searches', async () => {
+it('continues with generic restaurant discovery when dining preferences are omitted', async () => {
  const d=setup();d.model.extract=async()=>({brief:{...brief,dietaryPreference:null},question:null});
  const r=await runLivePlan(d.input,d);
- expect(r.message).toContain('pure-vegetarian restaurants only');
- expect(d.provider.search).not.toHaveBeenCalled();
+ expect(r.plan).toBeDefined();
+ expect(d.provider.search).toHaveBeenCalledWith('restaurants in Jaipur',8);
 });
 
 it('adds restaurant meals to daily routes with explicit pure-vegetarian provenance', async () => {
@@ -138,7 +191,7 @@ it('adds restaurant meals to daily routes with explicit pure-vegetarian provenan
 
 it('searches meals along their surrounding Google route and records the added drive', async () => {
  const d=setup();
- d.model.select=async()=>({hotelId:'hotel',visits:[{placeId:'attraction-a',day:1,durationMinutes:60},{placeId:'attraction-b',day:1,durationMinutes:60}]});
+ d.model.select=async()=>({hotelId:'hotel',visits:[{placeId:'attraction-a',day:2,durationMinutes:60},{placeId:'attraction-b',day:2,durationMinutes:60}]});
  d.provider.search=vi.fn(async q=>q.startsWith('hotels')?[place('hotel')]:q.startsWith('tourist')?[place('attraction-a'),place('attraction-b')]:q.includes('restaurants')?[place('fallback-restaurant')]:q.startsWith('evening')?[]:[{...place('origin'),name:'Delhi',utcOffsetMinutes:330}]);
  let corridorIndex=0;
  d.provider.searchAlongRoute=vi.fn(async (_query,from,to)=>({
@@ -147,7 +200,7 @@ it('searches meals along their surrounding Google route and records the added dr
  }));
  d.provider.details=vi.fn(async id=>({...place(id),regularHours:[{open:{day:0,hour:0,minute:0}}],utcOffsetMinutes:330}));
  const result=await runLivePlan(d.input,d);
- const lunch=result.plan?.days[0].meals?.find(meal=>meal.type==='lunch');
+ const lunch=result.plan?.days[1].meals?.find(meal=>meal.type==='lunch');
  expect(d.provider.searchAlongRoute).toHaveBeenCalledWith(expect.stringContaining('restaurants'),expect.objectContaining({id:'attraction-a'}),expect.objectContaining({id:'attraction-b'}),5);
  expect(lunch?.routeFit).toMatchObject({basis:'route_corridor',fromId:'attraction-a',toId:'attraction-b',directMinutes:10,addedMinutes:30});
  expect(lunch?.scheduleValidation).toMatchObject({status:'valid',evidence:'regular_hours'});
@@ -168,6 +221,17 @@ it('discovers evening ideas without inserting them into the itinerary', async ()
  expect(result.plan?.eveningOptions).toEqual([evening]);
  expect(result.plan?.eveningPrompt).toContain('optional evening ideas');
  expect(result.plan?.days.flatMap(day=>day.visits).some(visit=>visit.place.id===evening.id)).toBe(false);
+});
+
+it('schedules one validated evening candidate when the traveller explicitly requests nightlife', async () => {
+ const d=setup();
+ const nightlife=place('night-market');
+ d.model.extract=async()=>({brief:{...brief,dayRhythm:'nightlife'},question:null});
+ d.provider.search=vi.fn(async q=>q.startsWith('hotels')?[place('hotel')]:q.startsWith('tourist')?[place('attraction')]:q.includes('restaurants')?[]:q.startsWith('night clubs')?[nightlife]:[{...place('origin'),name:'Delhi',utcOffsetMinutes:330}]);
+ const result=await runLivePlan(d.input,d);
+ const scheduled=result.plan?.days.flatMap(day=>day.visits).find(visit=>visit.place.id===nightlife.id);
+ expect(scheduled).toMatchObject({period:'evening',sequenceOrder:60});
+ expect(result.plan?.eveningPrompt).toBeUndefined();
 });
 
 it('builds a flight journey with four airport road transfers', async () => {

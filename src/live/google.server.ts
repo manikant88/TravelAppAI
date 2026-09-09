@@ -36,7 +36,7 @@ export interface LiveProvider {
   searchAlongRoute?(query: string, from: LivePlace, to: LivePlace, limit: number): Promise<{ places: LivePlace[]; directLeg: LiveLeg }>;
   details(id: string): Promise<LivePlace>;
   route(from: LivePlace, to: LivePlace): Promise<LiveLeg>;
-  travelRoutes(from: LivePlace, to: LivePlace, input: { direction: 'outbound' | 'return'; mode: 'drive' | 'transit'; departureTime: string }): Promise<LiveTravelOption[]>;
+  travelRoutes(from: LivePlace, to: LivePlace, input: { direction: 'outbound' | 'return'; mode: 'drive' | 'transit'; departureTime: string; transitModes?: ('BUS' | 'TRAIN' | 'LIGHT_RAIL' | 'RAIL' | 'SUBWAY')[]; roadUse?: 'self_drive' | 'cab' }): Promise<LiveTravelOption[]>;
 }
 export class LiveProviderError extends Error {}
 export function createGoogleProvider(signal: AbortSignal): LiveProvider {
@@ -163,7 +163,7 @@ export function createGoogleProvider(signal: AbortSignal): LiveProvider {
           origin: { location: { latLng: { latitude: from.lat, longitude: from.lng } } },
           destination: { location: { latLng: { latitude: to.lat, longitude: to.lng } } },
           travelMode: input.mode === 'drive' ? 'DRIVE' : 'TRANSIT',
-          ...(input.mode === 'drive' ? { routingPreference: 'TRAFFIC_AWARE' } : { transitPreferences: { allowedTravelModes: ['BUS', 'TRAIN', 'LIGHT_RAIL', 'RAIL', 'SUBWAY'] } }),
+          ...(input.mode === 'drive' ? { routingPreference: 'TRAFFIC_AWARE' } : { transitPreferences: { allowedTravelModes: input.transitModes ?? ['BUS', 'TRAIN', 'LIGHT_RAIL', 'RAIL', 'SUBWAY'] } }),
           departureTime: input.departureTime,
           computeAlternativeRoutes: true,
           polylineEncoding: 'GEO_JSON_LINESTRING',
@@ -192,7 +192,8 @@ export function createGoogleProvider(signal: AbortSignal): LiveProvider {
           providerRouteId: null,
           direction: input.direction,
           mode: input.mode,
-          label: input.mode === 'drive' ? 'Drive' : readableModes.length ? readableModes.join(' + ') : 'Public transit',
+          ...(input.mode === 'drive' && input.roadUse ? { roadUse: input.roadUse } : {}),
+          label: input.mode === 'drive' ? input.roadUse === 'cab' ? 'Cab route estimate' : 'Self-drive' : readableModes.length ? readableModes.join(' + ') : 'Public transit',
           minutes,
           meters: route.distanceMeters ?? null,
           path: route.polyline?.geoJsonLinestring.coordinates.map(([lng, lat]) => ({ lat, lng })) ?? [],
