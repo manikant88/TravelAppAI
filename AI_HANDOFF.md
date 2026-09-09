@@ -515,6 +515,13 @@ deterministic narrative identifies supported themes, names up to four highlights
 at most one short observed editorial summary. This adds context and selection trust without
 making unsupported destination claims or adding another model call.
 
+The live itinerary keeps the continuous timeline and evidence needed for decisions while
+reducing repeated card copy. Start/end/duration live on the time rail, secondary timing and
+activity constraints are disclosed on demand, and place cards initially show five amenity
+tags with Show more/Show less controls. Timeline flight and route cards rely on their source
+footer for provenance; comparative reasoning remains visible in option drawers where it
+helps the traveller choose.
+
 The globe prompt submission is deferred through `src/ui/auto-submit.ts`. This is required
 because React development Strict Mode replays effect setup and cleanup; starting the request
 synchronously allowed the cleanup to abort it while the consumed flag prevented a retry.

@@ -2288,3 +2288,11 @@ The timeline identifies fixed commitments and estimated ranges, shifted meals, c
 meal provenance, affected constraints and genuine free time. A day-level capacity note
 explains when an additional activity would make the day unreliable. The adjacent map
 continues following the final projected order.
+
+Timeline cards use progressive disclosure to keep multi-day plans scannable. The time
+rail is the single visible source for start, end and scheduled duration; cards do not
+repeat that interval in their headings. Secondary duration rules, meal-window shifts,
+difficulty and daylight constraints remain available under a compact timing-details
+disclosure. Place summaries stay visible, while amenity lists show at most five items
+until the traveller chooses Show more. Provider attribution, checked-at evidence,
+prices, warnings and external route or place links remain present once per card.

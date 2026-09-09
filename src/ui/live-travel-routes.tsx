@@ -51,7 +51,7 @@ export function LiveTravelCard({ travel, direction, date, optionId, selected = t
       <dl className="flight-facts"><div><dt>Duration</dt><dd>{duration(option.minutes)}</dd></div>{option.meters !== null && <div><dt>Distance</dt><dd>{(option.meters / 1000).toFixed(0)} km</dd></div>}{!!option.transitLines.length && <div><dt>Lines</dt><dd>{option.transitLines.join(' · ')}</dd></div>}</dl>
       <div className="card-price"><strong>{option.fare ? money(option.fare.amount, option.fare.currency) : option.roadUse === 'cab' ? 'Cab fare unavailable' : option.mode === 'drive' ? 'Cost not estimated' : 'Fare not provided'}</strong><span>{option.fare ? 'Google-returned fare' : option.roadUse === 'cab' ? 'route duration only; cab availability unverified' : option.mode === 'drive' ? 'fuel, tolls and parking excluded' : 'ticket price unavailable'}</span></div>
     </div>
-    <div className="card-grounding"><i aria-hidden="true"><AppIcon name="sparkles" size={17} /></i><div><span>{decisionNote ?? `${travel.selectionReason} ${option.timingKind === 'estimated' ? 'Departure and arrival are planning estimates.' : 'Times are from the returned public-transit schedule.'} This does not confirm a ticket or seat.`}</span></div></div>
+    {decisionNote && <div className="card-grounding"><i aria-hidden="true"><AppIcon name="sparkles" size={17} /></i><div><span>{decisionNote}</span></div></div>}
     <footer className="live-route-footer"><span>Google Routes · checked {new Date(option.checkedAt).toLocaleString()}</span><a href={directionsUrl(travel, option)} target="_blank" rel="noreferrer">View route <AppIcon name="arrow-right" size={13} /></a></footer>
   </article>;
 }

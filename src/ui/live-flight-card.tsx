@@ -27,7 +27,7 @@ export function LiveFlightCard({ offer, direction, from, to, travellers, selecte
       <dl className="flight-facts"><div><dt>Duration</dt><dd>{duration(offer.durationMinutes)}</dd></div><div><dt>Stops</dt><dd>Direct</dd></div><div><dt>Operator</dt><dd>{offer.operator}</dd></div></dl>
       <div className="card-price"><strong>{money(offer.price.amount, offer.price.currency)}</strong><span>per adult · {money(offer.price.amount * travellers, offer.price.currency)} for {travellers}</span></div>
     </div>
-    <div className="card-grounding"><i aria-hidden="true"><AppIcon name="sparkles" size={17} /></i><div><span>{decisionNote ?? `${selected ? 'Current itinerary selection.' : 'Available supplier alternative.'} Schedule, fare and remaining-seat evidence came from Nuitée; refresh before relying on it.`}</span></div></div>
+    {decisionNote && <div className="card-grounding"><i aria-hidden="true"><AppIcon name="sparkles" size={17} /></i><div><span>{decisionNote}</span></div></div>}
     <footer className="live-route-footer"><span>Nuitée Connect Flights · checked {new Date(offer.source.checkedAt!).toLocaleString()}</span><span>{offer.cancellationTerms?.summary}</span></footer>
   </article>;
 }

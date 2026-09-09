@@ -94,6 +94,10 @@
 .live-place-card .hotel-details { min-width:0; }
 .live-place-card .hotel-details h3 { font-size:17px; line-height:1.3; margin:0 0 8px; }
 .live-place-card .hotel-details p { font-size:12px; line-height:1.5; margin-bottom:8px; }
+.live-card-details { margin:6px 0 2px; color:var(--muted); font-size:10px; line-height:1.5; }
+.live-card-details summary { cursor:pointer; color:var(--blue-strong); font-weight:700; }
+.live-card-details ul { margin:5px 0 0; padding-left:16px; }
+.live-card-details li+li { margin-top:2px; }
 .live-place-card .hotel-rating { gap:5px; margin-bottom:10px; flex-wrap:wrap; }
 .live-place-card .hotel-rating strong { font-size:11px; border-radius:3px; padding:4px 6px; }
 .live-place-card .hotel-rating span { font-size:10px; display:flex; gap:3px; align-items:center; }
@@ -115,12 +119,13 @@
 .live-card-footer details { margin-bottom:4px; }
 .live-card-footer summary { cursor:pointer; color:var(--blue-strong); }
 .live-card-footer p { margin:4px 0; }
-.live-place-about { margin:-10px -14px 10px; padding:13px 14px; background:var(--surface); border-bottom:1px solid var(--line); }
+.live-place-about { margin:-10px -14px 8px; padding:11px 14px 9px; background:var(--surface); border-bottom:1px solid var(--line); }
 .live-place-about>strong { display:block; margin-bottom:6px; font-size:12px; color:var(--ink); }
 .live-place-about>p { color:var(--ink); font-size:11px; line-height:1.65; }
 .live-place-about ul { display:flex; flex-wrap:wrap; gap:6px 12px; list-style:none; padding:5px 0 3px; margin:0; }
 .live-place-about li { display:flex; gap:4px; align-items:center; color:var(--ink); font-size:10px; }
 .live-place-about li svg { color:var(--blue-strong); }
+.live-place-about .live-about-toggle { min-height:24px; margin-top:2px; padding:2px 0; font-size:10px; }
 .live-card-meta-row { display:flex; flex-direction: row; align-items:center; justify-content:space-between; gap:16px; min-width:0; }
 .live-card-source-note { display:flex; align-items:center; gap:8px; min-width:0; color:var(--muted); }
 .live-card-source-note>span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
