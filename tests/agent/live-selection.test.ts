@@ -28,6 +28,12 @@ describe('live session selections', () => {
     expect(liveSelectionRequestSchema.safeParse({ phase: 'live-selection', plan: d.plan, command: { type: 'set_lock', target: 'hotel', locked: true } }).success).toBe(true);
   });
 
+  it('accepts day-specific meal lock and replacement commands', () => {
+    const d = setup();
+    expect(liveSelectionRequestSchema.safeParse({ phase: 'live-selection', plan: d.plan, command: { type: 'set_meal_lock', dayIndex: 0, mealType: 'lunch', locked: true } }).success).toBe(true);
+    expect(liveSelectionRequestSchema.safeParse({ phase: 'live-selection', plan: d.plan, command: { type: 'select_meal', dayIndex: 0, mealType: 'lunch', placeId: 'restaurant-b' } }).success).toBe(true);
+  });
+
   it('refreshes hotel-dependent airport and daily routes', async () => {
     const d = setup();
     const result = await applyLiveSelection({ phase: 'live-selection', plan: d.plan, command: { type: 'select_hotel', hotelId: 'hotel-b' } }, d);
@@ -133,6 +139,31 @@ describe('live session selections', () => {
     expect(d.provider.details).toHaveBeenCalledWith('activity-b');
     expect(result.impact).toMatchObject({ status: 'unresolved', requiresConfirmation: false, affectedDays: [0] });
     expect(result.impact?.transferChanges).toHaveLength(2);
+  });
+
+  it('replaces an unlocked meal from observed restaurant candidates and refreshes the day route', async () => {
+    const d = setup();
+    const current = place('restaurant-a');
+    const alternative = place('restaurant-b');
+    d.plan.mealOptions = [current, alternative];
+    d.plan.days[0].meals = [{ type: 'lunch', place: current, durationMinutes: 60, targetStartMinutes: 780, location: 'restaurant', dietaryNote: 'Both' }];
+    const result = await applyLiveSelection({ phase: 'live-selection', plan: d.plan, command: { type: 'select_meal', dayIndex: 0, mealType: 'lunch', placeId: alternative.id } }, d);
+    expect(result.plan.days[0].meals?.[0].place.id).toBe('restaurant-b');
+    expect(result.plan.days[0].legs.map(leg => [leg.fromId, leg.toId])).toEqual([['hotel-a', 'activity'], ['activity', 'restaurant-b'], ['restaurant-b', 'hotel-a']]);
+    expect(d.provider.details).toHaveBeenCalledWith('restaurant-b');
+    expect(result.impact?.affectedDays).toEqual([0]);
+  });
+
+  it('keeps a locked meal unchanged', async () => {
+    const d = setup();
+    const current = place('restaurant-a');
+    const alternative = place('restaurant-b');
+    d.plan.mealOptions = [current, alternative];
+    d.plan.days[0].meals = [{ type: 'lunch', place: current, durationMinutes: 60, targetStartMinutes: 780, location: 'restaurant', dietaryNote: 'Both' }];
+    const locked = await applyLiveSelection({ phase: 'live-selection', plan: d.plan, command: { type: 'set_meal_lock', dayIndex: 0, mealType: 'lunch', locked: true } }, d);
+    expect(locked.plan.locks?.mealKeys).toEqual(['0:lunch']);
+    await expect(applyLiveSelection({ phase: 'live-selection', plan: locked.plan, command: { type: 'select_meal', dayIndex: 0, mealType: 'lunch', placeId: alternative.id } }, d)).rejects.toThrow('Unlock the meal');
+    expect(d.provider.details).not.toHaveBeenCalled();
   });
 
   it('rejects a new non-overridable blocking conflict and returns alternatives', async () => {

@@ -12,7 +12,7 @@ export class LiveSelectionError extends Error {
 }
 
 type Dependencies = { provider: LiveProvider; flightProvider?: FlightProvider; guestNationality?: string; signal: AbortSignal; now?: string };
-const unlocked = { hotel: false, outboundFlight: false, returnFlight: false, outboundTravel: false, returnTravel: false, activityIds: [] as string[] };
+const unlocked = { hotel: false, outboundFlight: false, returnFlight: false, outboundTravel: false, returnTravel: false, activityIds: [] as string[], mealKeys: [] as string[] };
 
 export async function applyLiveSelection(input: LiveSelectionRequest, deps: Dependencies): Promise<LiveSelectionResponse> {
   deps.signal.throwIfAborted();
@@ -32,6 +32,16 @@ export async function applyLiveSelection(input: LiveSelectionRequest, deps: Depe
     if (command.locked) ids.add(command.placeId); else ids.delete(command.placeId);
     plan.locks.activityIds = [...ids];
     return { kind: 'live-selection', plan, message: command.locked ? 'I’ll keep this activity fixed while you change the rest of the day.' : 'This activity can be changed again.' };
+  }
+
+  if (command.type === 'set_meal_lock') {
+    const key = mealKey(command.dayIndex, command.mealType);
+    const selected = plan.days[command.dayIndex]?.meals?.some(meal => meal.type === command.mealType);
+    if (!selected) throw new LiveSelectionError('That meal is not selected in the current itinerary.');
+    const keys = new Set(plan.locks.mealKeys ?? []);
+    if (command.locked) keys.add(key); else keys.delete(key);
+    plan.locks.mealKeys = [...keys];
+    return { kind: 'live-selection', plan, message: command.locked ? `I’ll keep this ${command.mealType} fixed while you change the rest of the day.` : `This ${command.mealType} can be changed again.` };
   }
 
   if (command.type === 'retry_flights') {
@@ -163,6 +173,29 @@ export async function applyLiveSelection(input: LiveSelectionRequest, deps: Depe
     return responseForSelection(input.plan, plan, command, `I replaced ${current.place.name} with ${place.name}. I checked its regular hours, recalculated the surrounding transfers and moved later items only where the day still fits.`);
   }
 
+  if (command.type === 'select_meal') {
+    const day = plan.days[command.dayIndex];
+    const current = day?.meals?.find(meal => meal.type === command.mealType);
+    if (!day || !current) throw new LiveSelectionError('That itinerary meal no longer exists.');
+    if ((plan.locks.mealKeys ?? []).includes(mealKey(command.dayIndex, command.mealType))) throw new LiveSelectionError('Unlock the meal before changing it.', 409);
+    const candidate = plan.mealOptions?.find(place => place.id === command.placeId);
+    if (!candidate) throw new LiveSelectionError('That restaurant is no longer in the available options. Please reopen the list and choose again.');
+    const usedElsewhereToday = day.meals?.some(meal => meal.type !== command.mealType && meal.location === 'restaurant' && meal.place.id === candidate.id);
+    if (usedElsewhereToday) throw new LiveSelectionError('That restaurant is already used for another meal on this day.', 409);
+    let place = candidate;
+    try { place = await deps.provider.details(candidate.id); }
+    catch { /* The observed search result remains usable, with its missing facts explicit. */ }
+    const status = regularHoursStatus(place, day.date);
+    if (status === 'closed') throw new LiveSelectionError(`${place.name} is usually closed on ${day.date}. Choose another valid option.`, 409);
+    const index = day.meals!.findIndex(meal => meal.type === command.mealType);
+    day.meals![index] = { ...current, place, location: 'restaurant', routeFit: undefined, hoursStatus: status === 'open' ? 'open' : 'unknown', hoursNote: hoursValidationNote(status, day.date) };
+    plan.mealOptions = plan.mealOptions?.map(option => option.id === place.id ? place : option);
+    await refreshDayRoutes(day, selectedHotel(plan), deps);
+    refreshScheduleAssessment(plan, [command.dayIndex]);
+    plan.checkedAt = new Date().toISOString();
+    return responseForSelection(input.plan, plan, command, `I changed ${command.mealType} from ${current.place.name} to ${place.name}. I checked its regular hours, refreshed the surrounding drives and adjusted the day only where the schedule still fits.`);
+  }
+
   if (command.type !== 'select_hotel') throw new LiveSelectionError('Unsupported live selection.');
   if (plan.locks.hotel) throw new LiveSelectionError('Unlock the stay before changing it.', 409);
   const hotel = plan.hotels.find(candidate => candidate.id === command.hotelId);
@@ -227,7 +260,7 @@ async function refreshHotelDependencies(plan: LivePlan, hotel: LivePlan['hotels'
   }
 }
 
-type ConfirmableCommand = Extract<LiveSelectionRequest['command'], { type: 'select_hotel' | 'select_flight' | 'select_travel' | 'select_activity' }>;
+type ConfirmableCommand = Extract<LiveSelectionRequest['command'], { type: 'select_hotel' | 'select_flight' | 'select_travel' | 'select_activity' | 'select_meal' }>;
 
 function responseForSelection(original: LivePlan, plan: LivePlan, command: ConfirmableCommand, message: string): LiveSelectionResponse {
   const impact = selectionImpact(original, plan, command);
@@ -320,6 +353,14 @@ function selectionAlternatives(plan: LivePlan, command: ConfirmableCommand) {
       .slice(0, 3)
       .map(place => ({ id: place.id, label: place.name }));
   }
+  if (command.type === 'select_meal') {
+    const day = plan.days[command.dayIndex];
+    const usedByOtherMeals = new Set(day?.meals?.filter(meal => meal.type !== command.mealType && meal.location === 'restaurant').map(meal => meal.place.id) ?? []);
+    return (plan.mealOptions ?? [])
+      .filter(place => place.id !== command.placeId && !usedByOtherMeals.has(place.id) && (!day || regularHoursStatus(place, day.date) !== 'closed'))
+      .slice(0, 3)
+      .map(place => ({ id: place.id, label: place.name }));
+  }
   if (command.type === 'select_hotel') return plan.hotels
     .filter(hotel => hotel.id !== command.hotelId && hotel.stayOffer?.availability !== 'unavailable')
     .slice(0, 3)
@@ -330,6 +371,8 @@ function selectionAlternatives(plan: LivePlan, command: ConfirmableCommand) {
     .map(offer => ({ id: offer.id, label: `${offer.operator} ${offer.segments[0]?.number ?? ''}`.trim() })) ?? [];
   return (command.direction === 'outbound' ? plan.travel?.outbound : plan.travel?.return)?.filter(option => option.id !== command.optionId).slice(0, 3).map(option => ({ id: option.id, label: option.label })) ?? [];
 }
+
+function mealKey(dayIndex: number, type: 'breakfast' | 'lunch' | 'dinner') { return `${dayIndex}:${type}`; }
 
 function journeyTransferChanges(original: LivePlan, plan: LivePlan): LiveSelectionImpact['transferChanges'] {
   const before = journeyLegs(original);

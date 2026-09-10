@@ -170,7 +170,7 @@ export type LivePlan = {
   days: LiveDay[]; travel?: LiveTravel; flight?: LiveFlightJourney; warnings: string[]; checkedAt: string;
   status: 'provisional'; totalCost: null;
   scheduling?: { pace: 'relaxed' | 'balanced' | 'packed'; paceDefaulted: boolean; findings: ConstraintFinding[] };
-  locks?: { hotel: boolean; outboundFlight: boolean; returnFlight: boolean; outboundTravel?: boolean; returnTravel?: boolean; activityIds?: string[] };
+  locks?: { hotel: boolean; outboundFlight: boolean; returnFlight: boolean; outboundTravel?: boolean; returnTravel?: boolean; activityIds?: string[]; mealKeys?: string[] };
 };
 export type LiveResponse = { kind: 'live'; brief: LiveBrief; message: string; plan?: LivePlan };
 
@@ -194,7 +194,7 @@ const constraintFindingSchema = z.object({ id: z.string(), severity: z.enum(['wa
 const liveVisitSchema = z.object({ place: livePlaceSchema, durationMinutes: z.number().int().positive(), durationProfile: durationProfileSchema.optional(), timingKind: z.enum(['fixed', 'estimated']).optional(), fixedStartMinutes: z.number().int().optional(), timingEvidence: activityTimingEvidenceSchema.optional(), sequenceOrder: z.number().int().optional(), period: z.enum(['morning', 'afternoon', 'evening']).optional(), mealCoverage: z.object({ type: z.enum(['lunch', 'dinner']), evidence: z.enum(['provider', 'manual', 'place_description']), sourceLabel: z.string().min(1), note: z.string() }).strict().optional(), hoursStatus: z.enum(['open', 'unknown']).optional(), hoursNote: z.string().optional(), scheduleValidation: scheduleValidationSchema.optional() }).strict();
 const liveMealSchema = z.object({ type: z.enum(['breakfast', 'lunch', 'dinner']), place: livePlaceSchema, durationMinutes: z.number().int().positive(), targetStartMinutes: z.number().int(), window: mealWindowSchema.optional(), shiftedByMinutes: z.number().int().optional(), sequenceOrder: z.number().int().optional(), location: z.enum(['stay', 'restaurant']), dietaryNote: z.string(), hoursStatus: z.enum(['open', 'unknown']).optional(), hoursNote: z.string().optional(), scheduleValidation: scheduleValidationSchema.optional(), routeFit: mealRouteFitSchema.optional() }).strict();
 const liveDaySchema = z.object({ date: z.string().date(), visits: z.array(liveVisitSchema), meals: z.array(liveMealSchema).optional(), legs: z.array(liveLegSchema), availableStartMinutes: z.number().int().nullable().optional(), availableEndMinutes: z.number().int().nullable().optional(), findings: z.array(constraintFindingSchema).optional(), capacityNote: z.string().optional() }).strict();
-export const livePlanSchema = z.object({ brief: liveBriefSchema, hotels: z.array(livePlaceSchema), selectedHotelId: z.string().nullable(), activityOptions: z.array(livePlaceSchema).optional(), mealOptions: z.array(livePlaceSchema).optional(), eveningOptions: z.array(livePlaceSchema).optional(), eveningPrompt: z.string().optional(), days: z.array(liveDaySchema).min(2).max(7), travel: liveTravelSchema.optional(), flight: liveFlightJourneySchema.optional(), warnings: z.array(z.string()), checkedAt: z.string(), status: z.literal('provisional'), totalCost: z.null(), scheduling: z.object({ pace: z.enum(['relaxed', 'balanced', 'packed']), paceDefaulted: z.boolean(), findings: z.array(constraintFindingSchema) }).strict().optional(), locks: z.object({ hotel: z.boolean(), outboundFlight: z.boolean(), returnFlight: z.boolean(), outboundTravel: z.boolean().optional(), returnTravel: z.boolean().optional(), activityIds: z.array(z.string()).optional() }).strict().optional() }).strict();
+export const livePlanSchema = z.object({ brief: liveBriefSchema, hotels: z.array(livePlaceSchema), selectedHotelId: z.string().nullable(), activityOptions: z.array(livePlaceSchema).optional(), mealOptions: z.array(livePlaceSchema).optional(), eveningOptions: z.array(livePlaceSchema).optional(), eveningPrompt: z.string().optional(), days: z.array(liveDaySchema).min(2).max(7), travel: liveTravelSchema.optional(), flight: liveFlightJourneySchema.optional(), warnings: z.array(z.string()), checkedAt: z.string(), status: z.literal('provisional'), totalCost: z.null(), scheduling: z.object({ pace: z.enum(['relaxed', 'balanced', 'packed']), paceDefaulted: z.boolean(), findings: z.array(constraintFindingSchema) }).strict().optional(), locks: z.object({ hotel: z.boolean(), outboundFlight: z.boolean(), returnFlight: z.boolean(), outboundTravel: z.boolean().optional(), returnTravel: z.boolean().optional(), activityIds: z.array(z.string()).optional(), mealKeys: z.array(z.string()).optional() }).strict().optional() }).strict();
 
 export const liveSelectionRequestSchema = z.object({
   phase: z.literal('live-selection'),
@@ -202,11 +202,13 @@ export const liveSelectionRequestSchema = z.object({
   command: z.discriminatedUnion('type', [
     z.object({ type: z.literal('set_lock'), target: z.enum(['hotel', 'outboundFlight', 'returnFlight', 'outboundTravel', 'returnTravel']), locked: z.boolean() }).strict(),
     z.object({ type: z.literal('set_activity_lock'), placeId: z.string().min(1), locked: z.boolean() }).strict(),
+    z.object({ type: z.literal('set_meal_lock'), dayIndex: z.number().int().nonnegative().max(6), mealType: z.enum(['breakfast', 'lunch', 'dinner']), locked: z.boolean() }).strict(),
     z.object({ type: z.literal('select_hotel'), hotelId: z.string().min(1), confirmConstraints: z.boolean().optional() }).strict(),
     z.object({ type: z.literal('select_flight'), direction: z.enum(['outbound', 'return']), offerId: z.string().min(1), confirmConstraints: z.boolean().optional() }).strict(),
     z.object({ type: z.literal('select_travel'), direction: z.enum(['outbound', 'return']), optionId: z.string().min(1), confirmConstraints: z.boolean().optional() }).strict(),
     z.object({ type: z.literal('retry_flights') }).strict(),
     z.object({ type: z.literal('select_activity'), dayIndex: z.number().int().nonnegative().max(6), visitIndex: z.number().int().nonnegative().max(3), placeId: z.string().min(1), confirmConstraints: z.boolean().optional() }).strict(),
+    z.object({ type: z.literal('select_meal'), dayIndex: z.number().int().nonnegative().max(6), mealType: z.enum(['breakfast', 'lunch', 'dinner']), placeId: z.string().min(1), confirmConstraints: z.boolean().optional() }).strict(),
   ]),
 }).strict();
 export type LiveSelectionRequest = {
@@ -215,11 +217,13 @@ export type LiveSelectionRequest = {
   command:
     | { type: 'set_lock'; target: 'hotel' | 'outboundFlight' | 'returnFlight' | 'outboundTravel' | 'returnTravel'; locked: boolean }
     | { type: 'set_activity_lock'; placeId: string; locked: boolean }
+    | { type: 'set_meal_lock'; dayIndex: number; mealType: 'breakfast' | 'lunch' | 'dinner'; locked: boolean }
     | { type: 'select_hotel'; hotelId: string; confirmConstraints?: boolean }
     | { type: 'select_flight'; direction: 'outbound' | 'return'; offerId: string; confirmConstraints?: boolean }
     | { type: 'select_travel'; direction: 'outbound' | 'return'; optionId: string; confirmConstraints?: boolean }
     | { type: 'retry_flights' }
-    | { type: 'select_activity'; dayIndex: number; visitIndex: number; placeId: string; confirmConstraints?: boolean };
+    | { type: 'select_activity'; dayIndex: number; visitIndex: number; placeId: string; confirmConstraints?: boolean }
+    | { type: 'select_meal'; dayIndex: number; mealType: 'breakfast' | 'lunch' | 'dinner'; placeId: string; confirmConstraints?: boolean };
 };
 export type LiveSelectionImpact = {
   status: 'safe' | 'warning' | 'blocking' | 'unresolved';

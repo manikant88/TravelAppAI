@@ -86,7 +86,7 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
     days: Array.from({ length: brief.days! }, (_, i) => ({ date: addCalendarDays(brief.startDate!, i), visits: [], meals: [], legs: [] })),
     warnings, checkedAt: new Date().toISOString(), status: 'provisional', totalCost: null,
     scheduling: { pace: resolvedPace(brief), paceDefaulted: brief.pace === null, findings: [] },
-    locks: { hotel: false, outboundFlight: false, returnFlight: false, outboundTravel: false, returnTravel: false, activityIds: [] },
+    locks: { hotel: false, outboundFlight: false, returnFlight: false, outboundTravel: false, returnTravel: false, activityIds: [], mealKeys: [] },
   };
   if (!hotels.length || !planningActivities.length) return { kind: 'live', brief, plan, message: partialPlanMessage(plan) };
   emit('Choosing a stay and shaping each day around your pace and travel time…');

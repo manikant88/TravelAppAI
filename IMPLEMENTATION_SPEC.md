@@ -2296,3 +2296,10 @@ difficulty and daylight constraints remain available under a compact timing-deta
 disclosure. Place summaries stay visible, while amenity lists show at most five items
 until the traveller chooses Show more. Provider attribution, checked-at evidence,
 prices, warnings and external route or place links remain present once per card.
+
+Meal stops use the same constraint-aware edit flow as activities. Locks identify a
+specific day and meal type, so locking Tuesday lunch does not lock the same restaurant
+elsewhere. Changing a meal is limited to observed restaurant candidates, validates the
+new place's regular hours, refreshes both adjacent driving legs, reruns the flexible meal
+window and day-capacity checks, and returns the standard impact preview before applying
+an overridable conflict.

@@ -522,6 +522,11 @@ tags with Show more/Show less controls. Timeline flight and route cards rely on 
 footer for provenance; comparative reasoning remains visible in option drawers where it
 helps the traveller choose.
 
+Breakfast, lunch and dinner cards expose Lock and Change actions. A meal lock is keyed by
+day index and meal type. The restaurant drawer uses `mealOptions`, excludes a restaurant
+already used for another meal on that day, and sends `select_meal`; the server refreshes
+place details, regular hours, the day route and the shared schedule-impact preview.
+
 The globe prompt submission is deferred through `src/ui/auto-submit.ts`. This is required
 because React development Strict Mode replays effect setup and cleanup; starting the request
 synchronously allowed the cleanup to abort it while the consumed flag prevented a retry.
