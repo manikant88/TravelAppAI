@@ -25,11 +25,11 @@ export function LiveTripBriefBar({ brief, busy, editing, onEditingChange, onSubm
     return () => document.removeEventListener('pointerdown', outside);
   }, [editing, onEditingChange]);
   const facts = [
-    { field: 'origin' as const, label: 'From city', value: draft.origin || 'Select origin', present: Boolean(draft.origin) },
-    { field: 'destination' as const, label: 'To city / country', value: draft.destination || 'Select destination', present: Boolean(draft.destination) },
-    { field: 'dates' as const, label: 'Travel dates', value: draft.start && draft.end ? `${formatDate(draft.start)} – ${formatDate(draft.end)}` : 'Select dates', present: Boolean(draft.start && draft.end && brief.nightsConfirmed) },
-    { field: 'guests' as const, label: 'Guests', value: guestLabel(draft), present: draft.adults + draft.children + draft.seniors > 0 },
-    { field: 'preferences' as const, label: 'Preferences', value: preferenceLabel(draft), present: true },
+    { field: 'origin' as const, label: 'From city', value: draft.origin || 'Select origin', present: Boolean(brief.origin) },
+    { field: 'destination' as const, label: 'To city / country', value: draft.destination || 'Select destination', present: Boolean(brief.destination) },
+    { field: 'dates' as const, label: 'Travel dates', value: draft.start && draft.end ? `${formatDate(draft.start)} – ${formatDate(draft.end)}` : 'Select dates', present: Boolean(brief.startDate && brief.days && brief.nightsConfirmed) },
+    { field: 'guests' as const, label: 'Guests', value: guestLabel(draft), present: Boolean(brief.travellers) },
+    { field: 'preferences' as const, label: 'Preferences', value: preferenceLabel(draft), present: requiredPreferencesPresent(brief) },
   ];
   return <section className={`trip-brief-bar${editing ? ` fact-editing-${editing}` : ''}`} aria-label="Current Trip Brief">
     {facts.map(fact => <button data-trip-fact key={fact.field} type="button" className={`trip-fact${fact.present ? '' : ' trip-fact-empty essential-missing'}`} onClick={() => onEditingChange(editing === fact.field ? undefined : fact.field)}><span>{fact.label}</span><strong>{fact.value}</strong></button>)}
@@ -65,17 +65,23 @@ export function LiveTripEssentials({ brief, busy, onEdit, onSubmit }: { brief: L
     { field: 'transport', label: 'Travel preference', complete: Boolean(brief.travelMode), recommendations: [{ label: 'Flight', message: 'I prefer to fly.' }, { label: 'Train', message: 'I prefer to travel by train.' }, { label: 'Bus', message: 'I prefer to travel by bus.' }, { label: 'Cab', message: 'I prefer a private cab.' }, { label: 'Self Drive', message: 'I will drive my own vehicle.' }, { label: 'Recommend Me', message: 'Recommend the best travel mode using observed route evidence, my budget and group size.' }] },
     ...(pickupRequired ? [{ field: 'pickup' as const, label: brief.travelMode === 'flight' ? 'Airport transfer starting point' : brief.travelMode === 'cab' ? 'Cab pickup point' : 'Driving starting point', complete: Boolean(brief.pickupLocation), recommendations: brief.origin ? [{ label: `${brief.origin} city centre`, message: `Use ${brief.origin} city centre as my starting point.` }] : undefined }] : []),
   ];
-  const missing = items.filter(item => !item.complete).length;
+  const pendingItems = items.filter(item => !item.complete);
+  const missing = pendingItems.length;
   return <section className="brief-setup-workspace" aria-labelledby="live-essentials-title">
     <div className="brief-setup-icon">{missing}</div><p className="eyebrow">Trip essentials</p>
     <h2 id="live-essentials-title">{missing ? `Complete ${missing} detail${missing === 1 ? '' : 's'} to start planning` : 'Your trip brief is ready'}</h2>
     <p>{missing ? 'The highlighted fields in the Trip Brief are required. Add them in any order; this checklist updates after the AI validates each reply.' : 'Review the Trip Brief, then build your itinerary. You can change any detail through the fields or chat.'}</p>
-    <div className="brief-setup-list">{items.map(item => <div className={`brief-setup-item ${item.complete ? 'is-complete' : 'is-missing'}`} key={item.field}><button className="brief-setup-row" type="button" onClick={() => onEdit(item.field)}><i>{item.complete ? '✓' : ''}</i><span>{item.label}</span><strong>{item.complete ? 'Added' : 'Add manually'}</strong></button>{!item.complete && item.recommendations?.length ? <div className="brief-setup-recommendations"><small>Recommended</small><div>{item.recommendations.map(option => <Chip key={option.label} disabled={busy} onClick={() => onSubmit(option.message)}>{option.label}</Chip>)}</div></div> : null}</div>)}</div>
+    <div className="brief-setup-list">{pendingItems.map(item => <div className="brief-setup-item is-missing" key={item.field}><button className="brief-setup-row" type="button" onClick={() => onEdit(item.field)}><i /><span>{item.label}</span><strong>Add manually</strong></button>{item.recommendations?.length ? <div className="brief-setup-recommendations"><small>Recommended</small><div>{item.recommendations.map(option => <Chip key={option.label} disabled={busy} onClick={() => onSubmit(option.message)}>{option.label}</Chip>)}</div></div> : null}</div>)}</div>
     {!missing ? <div className="live-essentials-ready"><Button disabled={busy || !readiness.ready} onClick={() => onSubmit('Build my itinerary using the validated Trip Brief.')}>Build my trip <AppIcon name="arrow-right" size={14} /></Button></div> : null}
   </section>;
 }
 
 function draftFromBrief(brief: LiveBrief): BriefDraft { return { origin: brief.origin ?? '', destination: brief.destination ?? '', start: brief.startDate ?? '', end: brief.startDate && brief.days ? addDays(brief.startDate, brief.days - 1) : '', adults: brief.travellers ?? 0, children: 0, seniors: 0, budget: '', pace: brief.pace ?? '', interests: brief.preferences, travel: brief.travelMode === 'public_transit' ? 'recommend' : brief.travelMode ?? '' }; }
+function requiredPreferencesPresent(brief: LiveBrief) {
+  if (!brief.travelMode) return false;
+  const pickupRequired = brief.travelMode === 'flight' || brief.travelMode === 'self_drive' || brief.travelMode === 'cab';
+  return !pickupRequired || Boolean(brief.pickupLocation);
+}
 function messageFromDraft(draft: BriefDraft) {
   const messages: string[] = [];
   if (draft.origin.trim()) messages.push(`My starting city is ${draft.origin.trim()}`);
