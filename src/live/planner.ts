@@ -5,7 +5,7 @@ import type { LiveProvider } from './google.server';
 import type { StayProvider, SupplierStaySearchResult } from '@/inventory/providers/stay-provider';
 import type { StayOffer } from '@/inventory/contracts';
 import { hoursValidationNote, regularHoursStatus, validateRegularHoursInterval } from './opening-hours';
-import { dayStops, localClockMinutes, projectLiveDay } from './timeline';
+import { dayStops, localClockMinutes, projectLiveDay, travelOptionInstant } from './timeline';
 import type { FlightHub, FlightProvider } from '@/transport/providers/nuitee-flight.server';
 import { allocateActivities, mealDuration, mealWindow, prepareDaySchedule, reflowAndAssessDay, resolvedPace, targetActivityCount, type DayBounds } from './scheduler';
 import { missingLiveEssential } from './essentials';
@@ -540,7 +540,7 @@ export function plannerDayStart(plan: LivePlan, dayIndex: number) {
   }
   const outbound = plan.travel?.outbound.find(option => option.id === plan.travel?.suggestedOutboundId);
   if (outbound) {
-    const arrival = localClockMinutes(outbound.arrivalAt, plan.travel?.destination.utcOffsetMinutes, plan.days[0].date);
+    const arrival = localClockMinutes(travelOptionInstant(outbound, 'arrival'), plan.travel?.destination.utcOffsetMinutes, plan.days[0].date);
     return arrival === null ? null : arrival + 30;
   }
   return null;
@@ -555,7 +555,7 @@ export function plannerDayEnd(plan: LivePlan, dayIndex: number) {
   }
   const returning = plan.travel?.return.find(option => option.id === plan.travel?.suggestedReturnId);
   if (returning) {
-    const departure = localClockMinutes(returning.departureAt, plan.travel?.destination.utcOffsetMinutes, plan.days[dayIndex].date);
+    const departure = localClockMinutes(travelOptionInstant(returning, 'departure'), plan.travel?.destination.utcOffsetMinutes, plan.days[dayIndex].date);
     return departure ?? 17 * 60;
   }
   return null;

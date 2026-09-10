@@ -52,8 +52,10 @@
 .live-tabs .ui-button { padding:12px 2px 14px; border-radius:0; color:var(--muted); border-bottom:3px solid transparent; }
 .live-tabs .ui-button[aria-pressed=true] { color:var(--blue-strong); border-bottom-color:var(--blue-strong); }
 .live-content-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(280px,34%); gap:22px; align-items:start; }
+.live-content-grid.is-map-hidden { grid-template-columns:minmax(0,1120px); justify-content:center; }
 .live-card-column { min-width:0; }
 .live-days { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
+.live-map-toggle { margin-left:auto; gap:6px; }
 .live-days .ui-chip[aria-pressed=true] { color:var(--blue-strong); border-color:var(--blue); background:var(--blue-soft); }
 .live-section-heading { display:flex; align-items:baseline; flex-wrap:wrap; gap:6px 16px; margin-bottom:16px; }
 .live-section-heading h3 { font-size:18px; font-weight:900; margin:0; }
@@ -233,6 +235,7 @@
  .live-time-rail { padding-right:9px; }
  .live-days { gap:6px; }
  .live-days .ui-chip { padding:6px 9px; font-size:11px; }
+ .live-map-toggle { width:100%; justify-content:flex-end; }
  .live-map-panel { position:static; }
  .live-map { height:380px; min-height:0; }
  .live-card-meta-row { align-items:flex-start; flex-direction:column; gap:8px; }

@@ -7,9 +7,10 @@ import { requestLivePlan, requestLiveSelection } from './services/live-client';
 import { LiveMap } from './live-map';
 import { LivePlaceCard } from './live-place-card';
 import { LiveTravelCard } from './live-travel-routes';
+import { itineraryGridClass, MapVisibilityToggle } from './map-visibility-toggle';
 import { LiveFlightCard } from './live-flight-card';
 import { LiveOptionDrawer, type LiveOptionPicker } from './live-option-drawer';
-import { localClockMinutes, projectLiveDay } from '@/live/timeline';
+import { localClockMinutes, projectLiveDay, travelOptionInstant } from '@/live/timeline';
 import { Badge, Button, Chip, IconButton } from './components/primitives';
 import { AppIcon } from './components/app-icon';
 import { liveEssentialSuggestions, type LiveEssentialField } from '@/live/essentials';
@@ -109,6 +110,7 @@ export default function LiveWorkspace({ initialPrompt = '', autoSubmitInitialPro
   const [day, setDay] = useState(0);
   const [focus, setFocus] = useState('hotel');
   const [followMap, setFollowMap] = useState(true);
+  const [mapVisible, setMapVisible] = useState(true);
   const results = useRef<HTMLElement>(null);
   const daysNav = useRef<HTMLElement>(null);
   const [estimates, setEstimates] = useState<Record<string, string>>({});
@@ -285,8 +287,8 @@ export default function LiveWorkspace({ initialPrompt = '', autoSubmitInitialPro
           {planNeedsRefresh ? <p className="live-plan-stale" role="status"><AppIcon name="alert-circle" size={16} /> Your request has changed. This is the previous plan until you answer the clarification and a new plan is built.</p> : null}
           {plan.eveningPrompt && plan.eveningOptions?.length ? <section className="live-evening-suggestion" aria-label="Optional evening ideas"><div><AppIcon name="sparkles" size={17} /><p><strong>Optional evening ideas</strong><span>{plan.eveningOptions.slice(0, 3).map(option => option.name).join(' · ')}</span><small>Add one in chat to see where it fits in your itinerary.</small></p></div><Button variant="secondary" onClick={() => setText(plan.brief.dayRhythm === 'nightlife' ? 'Add a nightlife option to one suitable evening and recalculate the return to my stay.' : 'Show me suitable evening experiences and how they would affect the itinerary.')}>Explore in chat</Button></section> : null}
           <details className="live-review"><summary><AppIcon name="alert-circle" size={16} /> A few details still to confirm <span>Travel, prices &amp; timing</span></summary><ul>{plan.warnings.map(w => <li key={w}>{w}</li>)}</ul></details>
-          <nav className="live-days" ref={daysNav} aria-label="Jump to itinerary day">{plan.days.map((d, i) => <Chip key={d.date} aria-pressed={day === i} onClick={() => jumpToDay(i)}>Day {i + 1} · {dateLabel(d.date)}</Chip>)}</nav>
-          <div className="live-content-grid">
+          <nav className="live-days" ref={daysNav} aria-label="Jump to itinerary day">{plan.days.map((d, i) => <Chip key={d.date} aria-pressed={day === i} onClick={() => jumpToDay(i)}>Day {i + 1} · {dateLabel(d.date)}</Chip>)}<MapVisibilityToggle visible={mapVisible} onToggle={() => setMapVisible(value => !value)} /></nav>
+          <div className={itineraryGridClass(mapVisible)}>
             <div className="live-card-column">
               {plan.days.map((itineraryDay, index) => <section className="live-day-section" data-day={index} key={itineraryDay.date} aria-label={`Day ${index + 1}, ${dateLabel(itineraryDay.date)}`}>
                 <div className="live-section-heading"><h3>Day {index + 1} in {plan.brief.destination}</h3><span>{dateLabel(itineraryDay.date)}</span></div>
@@ -300,7 +302,7 @@ export default function LiveWorkspace({ initialPrompt = '', autoSubmitInitialPro
                 {flight && returnFlight && index === plan.days.length - 1 && <><TransferEvent option={flight.returnFirstMile} label={`Drive from your stay to ${flight.destinationAirport.name}`} start={returnHotelDeparture} end={returnAirportArrival} focus="flight:return-first" /><div className="live-timeline-event live-buffer" data-focus="flight:return"><div className="live-time-rail"><strong>{time(returnAirportArrival)}</strong><span>{time(returnFlightDeparture)}</span><b>120 min</b></div><p><strong>Airport check-in buffer</strong><span>Planning assumption; confirm airline requirements</span></p></div><div className="live-timeline-event" data-focus="flight:return"><div className="live-time-rail"><strong>{time(returnFlightDeparture)}</strong><span>{time(returnFlightArrival)}</span><b>{returnFlight.durationMinutes} min</b></div><LiveFlightCard offer={returnFlight} direction="return" from={flight.destinationAirport} to={flight.originAirport} travellers={plan.brief.travellers!} locked={plan.locks?.returnFlight} selectionBusy={busy} onLock={() => applySelection({ type:'set_lock', target:'returnFlight', locked:!plan.locks?.returnFlight })} onChange={() => setPicker({ kind:'flight', direction:'return' })} /></div><TransferEvent option={flight.returnLastMile} label={`Drive from ${flight.originAirport.name} to your starting point`} start={returnFlightArrival} end={homeArrival} focus="flight:return-last" /></>}
               </section>)}
             </div>
-            <aside className="live-map-panel" aria-label="Map beside itinerary"><header><div><AppIcon name="map-pin" size={18} /><strong>Your route on the map</strong></div><Badge tone="neutral">Day {day + 1}</Badge></header><div className="live-map-follow"><Button variant="text" aria-pressed={followMap} onClick={() => setFollowMap(value => !value)}>{followMap ? 'Following timeline · Pause' : 'Follow timeline'}</Button></div><LiveMap hotel={hotel} day={plan.days[day]} travel={plan.travel} flight={plan.flight} focus={focus} follow={followMap} /><p>Google Maps · route and local driving estimates</p><small>Checked {new Date(plan.checkedAt).toLocaleString()} · traffic and schedules depend on lookup assumptions</small></aside>
+            {mapVisible ? <aside className="live-map-panel" aria-label="Map beside itinerary"><header><div><AppIcon name="map-pin" size={18} /><strong>Your route on the map</strong></div><Badge tone="neutral">Day {day + 1}</Badge></header><div className="live-map-follow"><Button variant="text" aria-pressed={followMap} onClick={() => setFollowMap(value => !value)}>{followMap ? 'Following timeline · Pause' : 'Follow timeline'}</Button></div><LiveMap hotel={hotel} day={plan.days[day]} travel={plan.travel} flight={plan.flight} focus={focus} follow={followMap} /><p>Google Maps · route and local driving estimates</p><small>Checked {new Date(plan.checkedAt).toLocaleString()} · traffic and schedules depend on lookup assumptions</small></aside> : null}
           </div>
         </>}
       </section>
@@ -328,5 +330,5 @@ function flightMinutes(value: string | undefined, offsetMinutes: number | undefi
 
 function travelMinutes(option: LiveTravelOption | undefined, offsetMinutes: number | undefined, date: string | undefined, arrival = false) {
   if (!option || !date) return null;
-  return localClockMinutes(arrival ? option.arrivalAt : option.departureAt, offsetMinutes, date);
+  return localClockMinutes(travelOptionInstant(option, arrival ? 'arrival' : 'departure'), offsetMinutes, date);
 }

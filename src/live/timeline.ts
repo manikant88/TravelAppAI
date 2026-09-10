@@ -1,4 +1,4 @@
-import type { LiveDay } from './contracts';
+import type { LiveDay, LiveTravelOption } from './contracts';
 
 export type LiveDayStop =
   | (LiveDay['visits'][number] & { kind: 'activity'; sourceIndex: number; targetStartMinutes?: never })
@@ -45,4 +45,14 @@ export function localClockMinutes(value: string | undefined, offsetMinutes: numb
   const local = new Date(instant.getTime() + offsetMinutes * 60_000);
   const midnight = new Date(`${relativeDate}T00:00:00Z`);
   return Math.round((local.getTime() - midnight.getTime()) / 60_000);
+}
+
+/** Completes estimated road timing from observed departure and duration. */
+export function travelOptionInstant(option: LiveTravelOption, point: 'departure' | 'arrival') {
+  if (point === 'departure') return option.departureAt;
+  if (option.arrivalAt) return option.arrivalAt;
+  if (option.mode !== 'drive' || option.timingKind !== 'estimated' || !option.departureAt) return undefined;
+  const departure = Date.parse(option.departureAt);
+  if (!Number.isFinite(departure)) return undefined;
+  return new Date(departure + option.minutes * 60_000).toISOString();
 }

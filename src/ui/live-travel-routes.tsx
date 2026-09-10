@@ -2,6 +2,7 @@ import type { AppIconName } from './components/app-icon';
 import { AppIcon } from './components/app-icon';
 import { Button } from './components/primitives';
 import type { LiveTravel, LiveTravelOption } from '@/live/contracts';
+import { travelOptionInstant } from '@/live/timeline';
 
 function duration(minutes: number) {
   const hours = Math.floor(minutes / 60);
@@ -45,9 +46,9 @@ export function LiveTravelCard({ travel, direction, date, optionId, selected = t
     <header className="itinerary-card-header"><span className="card-kind-icon" aria-hidden="true"><AppIcon name={icon} /></span><strong>{selected ? 'Suggested' : 'Alternative'} {direction} travel · {option.label} · {duration(option.minutes)}</strong><div className="live-card-actions">{onLock && <Button variant="text" size="sm" aria-pressed={locked} disabled={busy} onClick={onLock}>{locked ? 'Unlock' : 'Lock'}</Button>}{onLock && (onChange || onSelect) && <span aria-hidden="true">·</span>}{onChange && <Button variant="text" size="sm" disabled={busy || locked} onClick={onChange}>Change</Button>}{onSelect && <Button size="sm" disabled={busy} onClick={onSelect}>Select travel</Button>}</div></header>
     <div className="flight-card-body">
       <div className="airline-mark"><AppIcon name={icon} size={28} aria-label={option.label} /></div>
-      <div className="flight-stop"><strong>{localTime(option.departureAt, from.utcOffsetMinutes)}</strong><span>{date}</span><small>{from.name}</small></div>
+      <div className="flight-stop"><strong>{localTime(travelOptionInstant(option, 'departure'), from.utcOffsetMinutes)}</strong><span>{date}</span><small>{from.name}</small></div>
       <div className="flight-line"><i /><span><AppIcon name="arrow-right" size={15} /></span></div>
-      <div className="flight-stop"><strong>{localTime(option.arrivalAt, to.utcOffsetMinutes)}</strong><span>{option.timingKind === 'scheduled' ? 'Scheduled' : 'Estimated'}</span><small>{to.name}</small></div>
+      <div className="flight-stop"><strong>{localTime(travelOptionInstant(option, 'arrival'), to.utcOffsetMinutes)}</strong><span>{option.timingKind === 'scheduled' ? 'Scheduled' : 'Estimated'}</span><small>{to.name}</small></div>
       <dl className="flight-facts"><div><dt>Duration</dt><dd>{duration(option.minutes)}</dd></div>{option.meters !== null && <div><dt>Distance</dt><dd>{(option.meters / 1000).toFixed(0)} km</dd></div>}{!!option.transitLines.length && <div><dt>Lines</dt><dd>{option.transitLines.join(' · ')}</dd></div>}</dl>
       <div className="card-price"><strong>{option.fare ? money(option.fare.amount, option.fare.currency) : option.roadUse === 'cab' ? 'Cab fare unavailable' : option.mode === 'drive' ? 'Cost not estimated' : 'Fare not provided'}</strong><span>{option.fare ? 'Google-returned fare' : option.roadUse === 'cab' ? 'route duration only; cab availability unverified' : option.mode === 'drive' ? 'fuel, tolls and parking excluded' : 'ticket price unavailable'}</span></div>
     </div>
