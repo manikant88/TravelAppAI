@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { addCalendarDays } from '@/domain/dates';
-import { liveBriefSchema, type LiveRequest, type LiveResponse, type LivePlan, type LivePlace, type LiveTravelOption } from './contracts';
+import { LIVE_TRIP_MAX_DAYS, LIVE_TRIP_MIN_DAYS, liveBriefSchema, type LiveBrief, type LiveGenerationIssue, type LiveRequest, type LiveResponse, type LivePlan, type LivePlace, type LiveRoadJourneyPlan, type LiveTravelOption } from './contracts';
 import type { LiveProvider } from './google.server';
 import type { StayProvider, SupplierStaySearchResult } from '@/inventory/providers/stay-provider';
 import type { StayOffer } from '@/inventory/contracts';
@@ -9,11 +9,17 @@ import { dayStops, localClockMinutes, projectLiveDay, travelOptionInstant } from
 import type { FlightHub, FlightProvider } from '@/transport/providers/nuitee-flight.server';
 import { allocateActivities, mealDuration, mealWindow, prepareDaySchedule, reflowAndAssessDay, resolvedPace, targetActivityCount, type DayBounds } from './scheduler';
 import { missingLiveEssential } from './essentials';
+import { assessRoadJourneyPair, attachTransitStays, buildRoadJourneyPlan } from './road-journey';
+import { explicitLiveDateRange } from './explicit-dates';
+import { routeSearchProfiles, selectRecommendedFlight } from './travel-policy';
+import { deterministicBriefFallback } from './intake-fallback';
+
+export { deterministicBriefFallback } from './intake-fallback';
 
 export const extractionSchema = z.object({ brief: liveBriefSchema, question: z.string().max(500).nullable() }).strict();
 export const selectionSchema = z.object({
   hotelId: z.string(),
-  visits: z.array(z.object({ placeId: z.string(), day: z.number().int().min(1).max(7), durationMinutes: z.number().int().min(30).max(180) }).strict()).max(14),
+  visits: z.array(z.object({ placeId: z.string(), day: z.number().int().min(1).max(LIVE_TRIP_MAX_DAYS), durationMinutes: z.number().int().min(30).max(180) }).strict()).max(LIVE_TRIP_MAX_DAYS * 4),
 }).strict();
 export interface LiveModel {
   extract(input: LiveRequest): Promise<z.infer<typeof extractionSchema>>;
@@ -22,13 +28,25 @@ export interface LiveModel {
 export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; provider: LiveProvider; stayProvider?: StayProvider; flightProvider?: FlightProvider; signal: AbortSignal; progress?: (message: string) => void; today?: string; guestNationality?: string }): Promise<LiveResponse> {
   const emit = deps.progress ?? (() => {});
   emit('Understanding where you want to go and what matters to you…');
-  const { brief, question } = extractionSchema.parse(await deps.model.extract(input));
+  let extracted: z.infer<typeof extractionSchema>;
+  try { extracted = extractionSchema.parse(await deps.model.extract(input)); }
+  catch (error) {
+    const fallback = deterministicBriefFallback(input);
+    if (!fallback) throw error;
+    extracted = { brief: fallback, question: null };
+  }
+  const { brief, question } = extracted;
   const today = deps.today ?? new Date().toISOString().slice(0, 10);
   // A schema-valid date is not evidence that the user supplied that year.
   const userText = [...input.history.filter(m => m.role === 'user').map(m => m.text), input.message].join(' ');
   const statedYears: string[] = userText.match(/\b(?:19|20|21)\d{2}\b/g) ?? [];
   if (input.brief.startDate) statedYears.push(input.brief.startDate.slice(0, 4));
-  if (brief.startDate && !statedYears.includes(brief.startDate.slice(0, 4))) {
+  const explicitDates = explicitLiveDateRange(input.message);
+  if (explicitDates) {
+    brief.startDate = explicitDates.startDate;
+    brief.days = explicitDates.days;
+    brief.nightsConfirmed = true;
+  } else if (brief.startDate && !statedYears.includes(brief.startDate.slice(0, 4))) {
     brief.startDate = null;
     brief.nightsConfirmed = false;
   }
@@ -75,7 +93,7 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
     ...brief.constraints.map(c => `Needs verification: ${c}`),
     ...(supplierStaySearch?.assumptions.map(assumption => `Stay search assumption: ${assumption}`) ?? []),
   ];
-  if (searches.some(r => r.status === 'rejected')) warnings.push('One live provider search failed. Showing the results that were available; no snapshot fallback was used.');
+  if (searches.some(r => r.status === 'rejected')) warnings.push('One live provider search failed. Showing the results that were available.');
   if (!hotels.length) warnings.push('No hotel candidates returned; stay and hotel transfers remain unresolved.');
   if (!planningActivities.length) warnings.push('No attraction candidates returned; days remain unplanned.');
   if (!restaurants.length) warnings.push('No restaurant candidates returned; meal locations remain incomplete.');
@@ -85,26 +103,47 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
     eveningPrompt: eveningOptions.length && !explicitlyRequestedEvening ? eveningPrompt(brief, eveningOptions) : undefined,
     days: Array.from({ length: brief.days! }, (_, i) => ({ date: addCalendarDays(brief.startDate!, i), visits: [], meals: [], legs: [] })),
     warnings, checkedAt: new Date().toISOString(), status: 'provisional', totalCost: null,
+    generationStatus: 'incomplete',
     scheduling: { pace: resolvedPace(brief), paceDefaulted: brief.pace === null, findings: [] },
     locks: { hotel: false, outboundFlight: false, returnFlight: false, outboundTravel: false, returnTravel: false, activityIds: [], mealKeys: [] },
   };
-  if (!hotels.length || !planningActivities.length) return { kind: 'live', brief, plan, message: partialPlanMessage(plan) };
+  if (!hotels.length || !planningActivities.length) {
+    const missingSearchIndex = !hotels.length ? 0 : 1;
+    const retryable = searches[missingSearchIndex].status === 'rejected';
+    const message = partialPlanMessage(plan, retryable);
+    plan.generationIssue = {
+      code: !hotels.length ? 'no_stays' : 'no_activities',
+      message,
+      retryable,
+      cause: retryable
+        ? `${!hotels.length ? 'The stay' : 'The activity'} search did not finish, so another search may return results.`
+        : `${!hotels.length ? 'The stay' : 'The activity'} search completed without enough usable results for these dates.`,
+    };
+    return { kind: 'live', brief, plan, message };
+  }
   emit('Choosing a stay and shaping each day around your pace and travel time…');
   let selection: z.infer<typeof selectionSchema>;
+  let fallbackReason: string | undefined;
   try { selection = selectionSchema.parse(await deps.model.select(brief, hotels, planningActivities)); }
-  catch { plan.warnings.push('AI could not produce a valid selection. No itinerary was invented.'); return { kind: 'live', brief, plan, message: 'I found some promising places, but couldn’t make the days work comfortably. Would you like me to try again?' }; }
-  const hotel = hotels.find(h => h.id === selection.hotelId);
-  const seen = new Set<string>();
-  const counts = new Map<number, number>();
-  // Reject the whole selection if the model references unobserved IDs or repeats a place.
-  const valid = hotel && selection.visits.length > 0 && selection.visits.every(v => {
-    const count = (counts.get(v.day) ?? 0) + 1; counts.set(v.day, count);
-    if (v.day > brief.days! || count > 4 || seen.has(v.placeId) || !planningActivities.some(a => a.id === v.placeId)) return false;
-    seen.add(v.placeId); return true;
-  });
-  if (!valid || !hotel) { plan.warnings.push('AI selection failed validation. No unverified selections were applied.'); return { kind: 'live', brief, plan, message: 'These options don’t fit together comfortably yet. Would you like me to arrange them again?' }; }
+  catch {
+    fallbackReason = 'The first day-by-day arrangement did not finish, so the schedule was rebuilt deterministically from the verified options.';
+    selection = deterministicPlaceSelection(brief, hotels, planningActivities);
+  }
+  let hotel = validatePlaceSelection(selection, brief, hotels, planningActivities);
+  if (!hotel) {
+    fallbackReason = 'The first day-by-day arrangement contained repeated or unverified options, so those references were discarded and the schedule was rebuilt from the verified options.';
+    selection = deterministicPlaceSelection(brief, hotels, planningActivities);
+    hotel = validatePlaceSelection(selection, brief, hotels, planningActivities);
+  }
+  if (!hotel) {
+    const message = 'I found stays and activities, but could not form a validated starting arrangement from those results. Change the activity mix or destination before trying again.';
+    plan.warnings.push('No validated selection could be formed from the observed options.');
+    plan.generationIssue = { code: 'selection_invalid', message, retryable: false, cause: 'The verified search results could not form a valid starting arrangement.' };
+    return { kind: 'live', brief, plan, message };
+  }
+  if (fallbackReason) plan.warnings.push(fallbackReason);
   plan.selectedHotelId = hotel.id;
-  emit(brief.travelMode === 'flight' ? 'Comparing flights and the transfers to and from each airport…' : `Comparing ${travelModeDescription(brief.travelMode!)} options for the outward and return journeys…`);
+  emit(brief.travelMode === 'flight' ? 'Comparing flights and the transfers around each requested airport…' : `Comparing ${travelModeDescription(brief.travelMode!)} options for each requested journey…`);
   let resolvedRouteOrigin: LivePlace | undefined;
   try {
     const cityOriginModes = ['public_transit', 'train', 'bus', 'recommend'];
@@ -112,45 +151,81 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
     const [origin] = await deps.provider.search(routeOriginQuery, 1);
     resolvedRouteOrigin = origin;
     if (!origin) {
-      warnings.push(`Google could not resolve ${routeOriginQuery} to a route origin. Outbound and return travel remain unresolved.`);
-    } else if (brief.travelMode === 'flight') {
+      warnings.push(`Google could not resolve ${routeOriginQuery} to a route origin. The affected intercity journeys remain unresolved.`);
+    } else {
       const [destinationCity] = await deps.provider.search(brief.destination!, 1);
+      if (destinationCity?.utcOffsetMinutes !== undefined && hotel.utcOffsetMinutes === undefined) hotel.utcOffsetMinutes = destinationCity.utcOffsetMinutes;
+      let endDestination = origin;
+      if (brief.endIntent === 'continue_elsewhere') {
+        const [resolvedEnd] = await deps.provider.search(brief.onwardDestination!, 1);
+        if (resolvedEnd) endDestination = resolvedEnd;
+        else warnings.push(`The onward destination ${brief.onwardDestination} could not be resolved, so that journey remains unavailable.`);
+      }
+      if (brief.travelMode === 'flight') {
       if (!destinationCity || origin.utcOffsetMinutes === undefined || destinationCity.utcOffsetMinutes === undefined) {
         warnings.push('The origin or destination time-zone offset could not be resolved. Flight times remain unavailable.');
       } else {
         const returnDate = plan.days.at(-1)!.date;
         const flightSearch = await deps.flightProvider!.search({ origin: { lat: origin.lat, lng: origin.lng, utcOffsetMinutes: origin.utcOffsetMinutes }, destination: { lat: destinationCity.lat, lng: destinationCity.lng, utcOffsetMinutes: destinationCity.utcOffsetMinutes }, departureDate: brief.startDate!, returnDate, travellers: brief.travellers!, currency: 'INR', country: deps.guestNationality ?? 'IN' });
         warnings.push(...flightSearch.warnings.map(value => `Flight search: ${value}`));
-        const outboundFlight = selectFlight(flightSearch.outbound, 'outbound'); const returnFlight = selectFlight(flightSearch.returning, 'return');
+        const outboundFlight = selectRecommendedFlight(flightSearch.outbound, 'outbound');
+        let endOffers = brief.endIntent === 'return_to_origin' && brief.endTravelMode === 'flight' ? flightSearch.returning : [];
+        let returnFlight = endOffers.length ? selectRecommendedFlight(endOffers, 'return') : undefined;
         const originAirport = flightHubToLivePlace(flightSearch.originHub, origin.utcOffsetMinutes, flightSearch.checkedAt);
         const destinationAirport = flightHubToLivePlace(flightSearch.destinationHub, destinationCity.utcOffsetMinutes, flightSearch.checkedAt);
+        let endDestinationAirport = brief.endIntent === 'return_to_origin' ? originAirport : undefined;
+        if (brief.endIntent === 'continue_elsewhere' && brief.endTravelMode === 'flight' && endDestination.utcOffsetMinutes !== undefined) {
+          const onwardSearch = await deps.flightProvider!.search({ origin: { lat: destinationCity.lat, lng: destinationCity.lng, utcOffsetMinutes: destinationCity.utcOffsetMinutes }, destination: { lat: endDestination.lat, lng: endDestination.lng, utcOffsetMinutes: endDestination.utcOffsetMinutes }, departureDate: returnDate, returnDate: addCalendarDays(returnDate, 1), travellers: brief.travellers!, currency: 'INR', country: deps.guestNationality ?? 'IN' });
+          warnings.push(...onwardSearch.warnings.map(value => `Onward flight search: ${value}`));
+          endOffers = onwardSearch.outbound;
+          returnFlight = selectRecommendedFlight(endOffers, 'outbound');
+          endDestinationAirport = flightHubToLivePlace(onwardSearch.destinationHub, endDestination.utcOffsetMinutes, onwardSearch.checkedAt);
+        }
         const routeRequests = [
           outboundFlight ? deps.provider.travelRoutes(origin, originAirport, { direction: 'outbound', mode: 'drive', departureTime: minutesBefore(outboundFlight.departureAt, 180) }) : Promise.resolve([]),
           outboundFlight ? deps.provider.travelRoutes(destinationAirport, hotel, { direction: 'outbound', mode: 'drive', departureTime: outboundFlight.arrivalAt }) : Promise.resolve([]),
           returnFlight ? deps.provider.travelRoutes(hotel, destinationAirport, { direction: 'return', mode: 'drive', departureTime: minutesBefore(returnFlight.departureAt, 180) }) : Promise.resolve([]),
-          returnFlight ? deps.provider.travelRoutes(originAirport, origin, { direction: 'return', mode: 'drive', departureTime: returnFlight.arrivalAt }) : Promise.resolve([]),
+          returnFlight && endDestinationAirport ? deps.provider.travelRoutes(endDestinationAirport, endDestination, { direction: 'return', mode: 'drive', departureTime: returnFlight.arrivalAt }) : Promise.resolve([]),
         ];
         const transferResults = await Promise.allSettled(routeRequests);
         const transfer = (index: number) => transferResults[index].status === 'fulfilled' ? transferResults[index].value.sort((a, b) => a.minutes - b.minutes)[0] : undefined;
-        plan.flight = { origin, destination: hotel, originAirport, destinationAirport, outbound: flightSearch.outbound, return: flightSearch.returning, suggestedOutboundId: outboundFlight?.id ?? null, suggestedReturnId: returnFlight?.id ?? null, outboundFirstMile: transfer(0), outboundLastMile: transfer(1), returnFirstMile: transfer(2), returnLastMile: transfer(3), assumptions: [`${originAirport.name} and ${destinationAirport.name} are the nearest IATA airports found for the resolved locations.`, 'The schedule-aware suggestion prefers arrival by 13:00 outbound and departure after 17:00 on return, then price and duration.', 'Airport arrival buffers are planning assumptions: 120 minutes before each flight.', `${flightSearch.environment === 'sandbox' ? 'Sandbox' : 'Live'} fares expire and must be refreshed before selection or booking.`] };
+        plan.flight = { origin, destination: hotel, originAirport, destinationAirport, outbound: flightSearch.outbound, return: endOffers, suggestedOutboundId: outboundFlight?.id ?? null, suggestedReturnId: returnFlight?.id ?? null, outboundFirstMile: transfer(0), outboundLastMile: transfer(1), returnFirstMile: transfer(2), returnLastMile: transfer(3), endIntent: brief.endIntent ?? undefined, endDestination: brief.endIntent === 'end_at_destination' ? hotel : endDestination, endDestinationAirport, assumptions: [`${originAirport.name} and ${destinationAirport.name} are the nearest IATA airports found for the resolved locations.`, 'The schedule-aware suggestion preserves usable destination time, then compares price and duration.', 'Airport arrival buffers are planning assumptions: 120 minutes before each flight.', `${flightSearch.environment === 'sandbox' ? 'Sandbox' : 'Live'} fares expire and must be refreshed before selection or booking.`] };
         if (!outboundFlight) warnings.push('No direct outbound flight offer was returned. Day 1 arrival remains unresolved.');
-        if (!returnFlight) warnings.push('No direct return flight offer was returned. Return timing remains unresolved.');
+        if (brief.endIntent === 'return_to_origin' && brief.endTravelMode === 'flight' && !returnFlight) warnings.push('No direct return flight offer was returned. Return timing remains unresolved.');
         if (transferResults.some(result => result.status === 'rejected')) warnings.push('One or more airport road transfers failed. The successful flight and transfer evidence remains available.');
-        if (!outboundFlight || !returnFlight) plan.travel = await flightFallbackRoutes(deps.provider, origin, hotel, brief.startDate!, returnDate, warnings);
+        if (!outboundFlight || (brief.endIntent === 'return_to_origin' && brief.endTravelMode === 'flight' && !returnFlight)) plan.travel = await flightFallbackRoutes(deps.provider, origin, hotel, brief.startDate!, returnDate, warnings);
+        if (brief.endIntent !== 'end_at_destination' && brief.endTravelMode !== 'flight') {
+          const outboundFallback = !outboundFlight ? plan.travel : undefined;
+          const endResults = await Promise.allSettled(routeSearchProfiles(brief.endTravelMode!).map(request => deps.provider.travelRoutes(hotel, endDestination, { direction: 'return', departureTime: departureTime(returnDate, 17, hotel.utcOffsetMinutes), ...request })));
+          const returning = endResults.flatMap(result => result.status === 'fulfilled' ? result.value : []).sort(recommendedRouteComparator(brief, brief.endTravelMode!));
+          plan.travel = {
+            origin,
+            destination: hotel,
+            outbound: outboundFallback?.outbound ?? [],
+            return: returning,
+            suggestedOutboundId: outboundFallback?.suggestedOutboundId ?? null,
+            suggestedReturnId: returning[0]?.id ?? null,
+            selectionReason: outboundFallback?.selectionReason ?? routeSelectionReason(brief, returning),
+            assumptions: [...(outboundFallback?.assumptions ?? []), 'The journey after the destination is planned independently from the outward flight.'],
+            context: outboundFallback?.context ?? 'preferred',
+            endIntent: brief.endIntent ?? undefined,
+            endDestination,
+          };
+          const endRoad = returning[0] ? buildRoadJourneyPlan({ option: returning[0], date: addCalendarDays(returnDate, 1 - Math.ceil(returning[0].minutes / (returning[0].roadUse === 'self_drive' ? 480 : 600))), tripDays: brief.days! }) : undefined;
+          plan.travel.endRoadPlan = await attachTransitStays(endRoad, returning[0], deps.provider, transitStaySupplier(deps, brief.travellers!));
+        }
       }
-    } else {
+      } else {
       const returnDate = plan.days.at(-1)!.date;
       const outboundDeparture = departureTime(brief.startDate!, 8, origin.utcOffsetMinutes);
-      const returnDeparture = departureTime(returnDate, 17, hotel.utcOffsetMinutes);
-      const profile = routeSearchProfile(brief.travelMode!);
-      const requests = profile.flatMap(request => [
-        deps.provider.travelRoutes(origin, hotel, { direction: 'outbound', departureTime: outboundDeparture, ...request }),
-        deps.provider.travelRoutes(hotel, origin, { direction: 'return', departureTime: returnDeparture, ...request }),
-      ]);
-      const results = await Promise.allSettled(requests);
-      const available = results.map(result => result.status === 'fulfilled' ? result.value : []);
-      const outbound = available.filter((_, index) => index % 2 === 0).flat().sort(recommendedRouteComparator(brief));
-      const returning = available.filter((_, index) => index % 2 === 1).flat().sort(recommendedRouteComparator(brief));
+      const endDeparture = departureTime(returnDate, 17, hotel.utcOffsetMinutes);
+      const outboundResults = await Promise.allSettled(routeSearchProfiles(brief.travelMode!).map(request => deps.provider.travelRoutes(origin, hotel, { direction: 'outbound', departureTime: outboundDeparture, ...request })));
+      const endMode = brief.endIntent === 'end_at_destination' ? null : brief.endTravelMode;
+      const endResults = endMode && endMode !== 'flight'
+        ? await Promise.allSettled(routeSearchProfiles(endMode).map(request => deps.provider.travelRoutes(hotel, endDestination, { direction: 'return', departureTime: endDeparture, ...request })))
+        : [];
+      const outbound = outboundResults.flatMap(result => result.status === 'fulfilled' ? result.value : []).sort(recommendedRouteComparator(brief, brief.travelMode!));
+      const returning = endResults.flatMap(result => result.status === 'fulfilled' ? result.value : []).sort(recommendedRouteComparator(brief, endMode ?? brief.travelMode!));
       plan.travel = {
         origin,
         destination: hotel,
@@ -166,23 +241,72 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
           ...(brief.travelMode === 'recommend' ? ['The recommendation compares observed route duration and group-size practicality. Returned transit fares are displayed when available; private-cab price, vehicle capacity and total budget fit remain unresolved.'] : []),
         ],
         context: 'preferred',
+        endIntent: brief.endIntent ?? undefined,
+        endDestination: brief.endIntent === 'end_at_destination' ? hotel : endDestination,
       };
+      const outboundRoad = outbound[0] ? buildRoadJourneyPlan({ option: outbound[0], date: brief.startDate!, tripDays: brief.days! }) : undefined;
+      const provisionalEndRoad = returning[0]?.mode === 'drive' && returning[0].roadUse
+        ? buildRoadJourneyPlan({ option: returning[0], date: addCalendarDays(returnDate, 1 - Math.ceil(returning[0].minutes / (returning[0].roadUse === 'self_drive' ? 480 : 600))), tripDays: brief.days! })
+        : undefined;
+      const assessed = assessRoadJourneyPair(outboundRoad, provisionalEndRoad, brief.days!);
+      plan.travel.outboundRoadPlan = await attachTransitStays(assessed.outbound, outbound[0], deps.provider, transitStaySupplier(deps, brief.travellers!));
+      plan.travel.endRoadPlan = await attachTransitStays(assessed.end, returning[0], deps.provider, transitStaySupplier(deps, brief.travellers!));
+      const unresolvedTransitNights = [plan.travel.outboundRoadPlan, plan.travel.endRoadPlan].flatMap(road => road?.segments.filter(segment => segment.overnightRestMinutes && !segment.transitStay) ?? []).length;
+      if (unresolvedTransitNights) warnings.push(`${unresolvedTransitNights} road-journey overnight rest stop${unresolvedTransitNights === 1 ? '' : 's'} still need a dated stay and availability check.`);
+      if (assessed.status === 'not_feasible' && (assessed.outbound || assessed.end)) {
+        plan.travel.suggestedOutboundId = assessed.outbound ? null : plan.travel.suggestedOutboundId;
+        plan.travel.suggestedReturnId = assessed.end ? null : plan.travel.suggestedReturnId;
+        warnings.push(`${assessed.outbound?.message ?? assessed.end?.message} Extend the dates, choose a faster mode, or plan this explicitly as a road trip.`);
+      } else if (assessed.status === 'road_trip') {
+        warnings.push(`${assessed.outbound?.message ?? assessed.end?.message} Confirm that you want the journey itself to be the main part of the trip.`);
+      }
       if (!plan.travel.outbound.length) warnings.push('No outbound route was returned for the preferred mode. Arrival travel remains unresolved.');
-      if (!plan.travel.return.length) warnings.push('No return route was returned for the preferred mode. Departure travel remains unresolved.');
-      if (results.some(result => result.status === 'rejected')) warnings.push('One or more route searches failed. Available route evidence is shown without filling the gaps.');
+      if (brief.endIntent !== 'end_at_destination' && endMode !== 'flight' && !plan.travel.return.length) warnings.push('No route was returned for the journey after the destination. Its timing remains unresolved.');
+      if (endMode === 'flight' && destinationCity && destinationCity.utcOffsetMinutes !== undefined && endDestination.utcOffsetMinutes !== undefined) {
+        const endFlightSearch = await deps.flightProvider!.search({ origin: { lat: destinationCity.lat, lng: destinationCity.lng, utcOffsetMinutes: destinationCity.utcOffsetMinutes }, destination: { lat: endDestination.lat, lng: endDestination.lng, utcOffsetMinutes: endDestination.utcOffsetMinutes }, departureDate: returnDate, returnDate: addCalendarDays(returnDate, 1), travellers: brief.travellers!, currency: 'INR', country: deps.guestNationality ?? 'IN' });
+        const endFlight = selectRecommendedFlight(endFlightSearch.outbound, 'outbound');
+        const destinationAirport = flightHubToLivePlace(endFlightSearch.originHub, destinationCity.utcOffsetMinutes, endFlightSearch.checkedAt);
+        const endDestinationAirport = flightHubToLivePlace(endFlightSearch.destinationHub, endDestination.utcOffsetMinutes, endFlightSearch.checkedAt);
+        const [firstMile, lastMile] = await Promise.all([
+          endFlight ? deps.provider.travelRoutes(hotel, destinationAirport, { direction: 'return', mode: 'drive', departureTime: minutesBefore(endFlight.departureAt, 180) }).then(options => options.sort((a, b) => a.minutes - b.minutes)[0]) : undefined,
+          endFlight ? deps.provider.travelRoutes(endDestinationAirport, endDestination, { direction: 'return', mode: 'drive', departureTime: endFlight.arrivalAt }).then(options => options.sort((a, b) => a.minutes - b.minutes)[0]) : undefined,
+        ]);
+        plan.flight = { origin, destination: hotel, originAirport: endDestinationAirport, destinationAirport, outbound: [], return: endFlightSearch.outbound, suggestedOutboundId: null, suggestedReturnId: endFlight?.id ?? null, returnFirstMile: firstMile, returnLastMile: lastMile, endIntent: brief.endIntent ?? undefined, endDestination, endDestinationAirport, assumptions: ['The flight after the destination is searched independently from the outward journey.', 'Airport arrival buffers are planning assumptions: 120 minutes before the flight.'] };
+        warnings.push(...endFlightSearch.warnings.map(value => `Journey-after flight search: ${value}`));
+        if (!endFlight) warnings.push('No direct flight was returned for the journey after the destination. Its timing remains unresolved.');
+      }
+      if ([...outboundResults, ...endResults].some(result => result.status === 'rejected')) warnings.push('One or more route searches failed. Available route evidence is shown without filling the gaps.');
       if (origin.utcOffsetMinutes === undefined || hotel.utcOffsetMinutes === undefined) warnings.push('A route search time-zone offset was unavailable, so the affected 08:00 or 17:00 search time used UTC and needs review.');
+      }
     }
   } catch (error) {
     const detail = error instanceof Error && error.message.trim() ? `: ${error.message.trim()}` : '';
     warnings.push(brief.travelMode === 'flight'
       ? `Flight search failed${detail}. No flight offer was added; outbound and return timing remain unresolved.`
-      : `Travel route comparison failed${detail}. Outbound and return travel remain unresolved.`);
+      : `Travel route comparison failed${detail}. The affected intercity journey timing remains unresolved.`);
     if (brief.travelMode === 'flight' && resolvedRouteOrigin) {
       plan.travel = await flightFallbackRoutes(deps.provider, resolvedRouteOrigin, hotel, brief.startDate!, plan.days.at(-1)!.date, warnings);
     }
   }
+  const infeasibleRoad = plan.travel?.outboundRoadPlan?.status === 'not_feasible' ? plan.travel.outboundRoadPlan : plan.travel?.endRoadPlan?.status === 'not_feasible' ? plan.travel.endRoadPlan : undefined;
+  if (infeasibleRoad) {
+    plan.selectedHotelId = null;
+    plan.days.forEach(day => { day.visits = []; day.meals = []; day.legs = []; day.availableStartMinutes = null; day.availableEndMinutes = null; });
+    const message = `${infeasibleRoad.message} These dates do not leave enough time for a destination itinerary. Extend the trip, choose a faster mode, or tell me you want to plan it mainly as a road trip.`;
+    plan.generationIssue = roadGenerationIssue(plan, 'road_infeasible', message, infeasibleRoad);
+    return { kind: 'live', brief, plan, message };
+  }
+  const unconfirmedRoadTrip = plan.travel?.outboundRoadPlan?.status === 'road_trip' ? plan.travel.outboundRoadPlan : plan.travel?.endRoadPlan?.status === 'road_trip' ? plan.travel.endRoadPlan : undefined;
+  if (unconfirmedRoadTrip && !brief.roadTripConfirmed) {
+    plan.selectedHotelId = null;
+    plan.days.forEach(day => { day.visits = []; day.meals = []; day.legs = []; day.availableStartMinutes = null; day.availableEndMinutes = null; });
+    const message = `${unconfirmedRoadTrip.message} Confirm that you want the journey itself to be a main part of the trip, or choose a faster travel mode to preserve more time at ${brief.destination}.`;
+    plan.generationIssue = roadGenerationIssue(plan, 'road_confirmation', message, unconfirmedRoadTrip);
+    return { kind: 'live', brief, plan, message };
+  }
+  await refreshDestinationStayForRoadDates(plan, hotel, deps, warnings);
   emit('Checking opening hours, transfers and meal timing…');
-  const bounds = plan.days.map((_, index): DayBounds => ({ startMinutes: plannerDayStart(plan, index), endMinutes: plannerDayEnd(plan, index) }));
+  const bounds = plan.days.map((_, index): DayBounds => ({ startMinutes: plannerDayStart(plan, index), endMinutes: plannerDayEnd(plan, index), travelOnly: isRoadTravelOnlyDay(plan, index) }));
   const allocated = allocateActivities({
     brief,
     candidates: planningActivities,
@@ -252,18 +376,96 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
     const findings = reflowAndAssessDay(day, dayIndex, bounds[dayIndex].startMinutes, bounds[dayIndex].endMinutes, brief);
     plan.scheduling!.findings.push(...findings);
   }
+  const roadFinding = roadJourneyConstraint(plan);
+  if (roadFinding) plan.scheduling!.findings.push(roadFinding);
   const blocking = plan.scheduling!.findings.filter(finding => finding.severity === 'blocking');
   const unresolved = plan.scheduling!.findings.filter(finding => finding.severity === 'unresolved');
   if (blocking.length) warnings.push(`${blocking.length} schedule constraint${blocking.length === 1 ? '' : 's'} need changes before this itinerary can be relied on.`);
   if (unresolved.length) warnings.push(`${unresolved.length} schedule connection${unresolved.length === 1 ? '' : 's'} remain unresolved.`);
   deps.signal.throwIfAborted();
+  const activityCount = plan.days.reduce((total, day) => total + day.visits.length, 0);
+  if (!activityCount) {
+    const message = `I found options in ${brief.destination}, but none could be scheduled reliably within these dates. Try different dates, broaden your interests, or choose another destination.`;
+    plan.generationIssue = { code: 'schedule_empty', message, retryable: false, cause: 'The available activities could not fit their opening hours and the time available on your destination days.' };
+    return { kind: 'live', brief, plan, message };
+  }
+  if (blocking.length) {
+    const cause = blocking.map(finding => finding.message).join(' ');
+    const affectedRoad = [plan.travel?.outboundRoadPlan, plan.travel?.endRoadPlan]
+      .find(road => road && road.travelDays > 1);
+    const minimumTripDays = affectedRoad ? minimumPracticalTripDays(plan) : brief.days! < LIVE_TRIP_MAX_DAYS ? brief.days! + 1 : undefined;
+    const adjustment = affectedRoad
+      ? `${affectedRoad.direction === 'outbound' ? 'The outward' : 'The journey after the destination'} trip uses ${affectedRoad.travelDays} safe travel days. ${minimumTripDays ? `Use a faster mode or extend the trip to at least ${minimumTripDays} calendar days.` : `The trip is already at the ${LIVE_TRIP_MAX_DAYS}-day planning limit, so use a faster mode.`}`
+      : `${minimumTripDays ? `Add at least one day or ` : ''}let me choose a different day-by-day arrangement.`;
+    const message = `I couldn’t validate this itinerary because ${cause} ${adjustment}`;
+    plan.generationIssue = affectedRoad
+      ? roadGenerationIssue(plan, 'blocking_constraints', message, affectedRoad, cause)
+      : { code: 'blocking_constraints', message, cause, retryable: false, minimumTripDays };
+    return { kind: 'live', brief, plan, message };
+  }
+  plan.generationStatus = 'valid';
+  delete plan.generationIssue;
   return { kind: 'live', brief, plan, message: planCompletionMessage(plan, hotel) };
 }
 
-function partialPlanMessage(plan: LivePlan) {
-  if (!plan.hotels.length && !plan.activityOptions?.length) return `I couldn’t find enough options in ${plan.brief.destination} for these dates. Would you like me to try again or change the dates?`;
-  if (!plan.hotels.length) return `I found activities in ${plan.brief.destination}, but couldn’t find a stay for these dates. Would you like me to try again or change the dates?`;
-  return `I found places to stay in ${plan.brief.destination}, but not enough activities for a useful day-by-day plan. Would you like me to try again or adjust your interests?`;
+function deterministicPlaceSelection(brief: LiveBrief, hotels: LivePlace[], activities: LivePlace[]): z.infer<typeof selectionSchema> {
+  const days = brief.days ?? LIVE_TRIP_MIN_DAYS;
+  const interiorDays = Math.max(1, days - 2);
+  const capacity = (days <= 2 ? days : interiorDays) * 4;
+  return {
+    hotelId: hotels[0]!.id,
+    visits: activities.slice(0, capacity).map((activity, index) => ({
+      placeId: activity.id,
+      day: days <= 2 ? index % days + 1 : index % interiorDays + 2,
+      durationMinutes: 90,
+    })),
+  };
+}
+
+function validatePlaceSelection(selection: z.infer<typeof selectionSchema>, brief: LiveBrief, hotels: LivePlace[], activities: LivePlace[]) {
+  const hotel = hotels.find(candidate => candidate.id === selection.hotelId);
+  if (!hotel || !selection.visits.length) return undefined;
+  const seen = new Set<string>();
+  const counts = new Map<number, number>();
+  const valid = selection.visits.every(visit => {
+    const count = (counts.get(visit.day) ?? 0) + 1;
+    counts.set(visit.day, count);
+    if (visit.day > brief.days! || count > 4 || seen.has(visit.placeId) || !activities.some(activity => activity.id === visit.placeId)) return false;
+    seen.add(visit.placeId);
+    return true;
+  });
+  return valid ? hotel : undefined;
+}
+
+function partialPlanMessage(plan: LivePlan, retryable: boolean) {
+  if (!plan.hotels.length && !plan.activityOptions?.length) return retryable
+    ? `The live searches for ${plan.brief.destination} did not finish, so I don’t have enough verified stays and activities to build the trip. You can retry those searches without changing the Trip Brief.`
+    : `The searches completed, but I couldn’t find enough usable stays and activities in ${plan.brief.destination} for these dates. Try dates with more availability or choose another destination.`;
+  if (!plan.hotels.length) return retryable
+    ? `I found activities in ${plan.brief.destination}, but the stay search did not finish. Retry the stay search before changing the trip.`
+    : `I found activities in ${plan.brief.destination}, but no usable stay for these dates. Try dates with more availability or choose another destination.`;
+  return retryable
+    ? `I found places to stay in ${plan.brief.destination}, but the activity search did not finish. Retry the activity search before changing the trip.`
+    : `I found places to stay in ${plan.brief.destination}, but not enough suitable activities for a useful day-by-day plan. Broaden the activity mix, add a day, or choose another destination.`;
+}
+
+function roadGenerationIssue(plan: LivePlan, code: 'road_infeasible' | 'road_confirmation' | 'blocking_constraints', message: string, road: LiveRoadJourneyPlan, cause = road.message): LiveGenerationIssue {
+  return {
+    code,
+    message,
+    cause,
+    retryable: false,
+    journey: road.direction,
+    minimumTripDays: code === 'road_confirmation' ? undefined : minimumPracticalTripDays(plan),
+    suggestedTravelModes: ['flight', 'train', 'bus', 'recommend'],
+  };
+}
+
+function minimumPracticalTripDays(plan: LivePlan) {
+  const roadDays = (plan.travel?.outboundRoadPlan?.travelDays ?? 0) + (plan.travel?.endRoadPlan?.travelDays ?? 0);
+  if (!roadDays) return undefined;
+  const minimum = roadDays + 3;
+  return minimum <= LIVE_TRIP_MAX_DAYS ? minimum : undefined;
 }
 
 function planCompletionMessage(plan: LivePlan, hotel: LivePlace) {
@@ -347,23 +549,16 @@ function flightName(offer: import('@/inventory/contracts').TransportOffer) {
   return `${offer.operator}${number ? ` ${number}` : ''}`;
 }
 
-type RouteSearchInput = Pick<Parameters<LiveProvider['travelRoutes']>[2], 'mode' | 'transitModes' | 'roadUse'>;
-
-function routeSearchProfile(mode: NonNullable<z.infer<typeof liveBriefSchema>['travelMode']>): RouteSearchInput[] {
-  if (mode === 'self_drive') return [{ mode: 'drive', roadUse: 'self_drive' }];
-  if (mode === 'cab') return [{ mode: 'drive', roadUse: 'cab' }];
-  if (mode === 'train') return [{ mode: 'transit', transitModes: ['TRAIN', 'LIGHT_RAIL', 'RAIL', 'SUBWAY'] }];
-  if (mode === 'bus') return [{ mode: 'transit', transitModes: ['BUS'] }];
-  if (mode === 'recommend') return [{ mode: 'transit' }, { mode: 'drive', roadUse: 'cab' }];
-  return [{ mode: 'transit' }];
+function recommendedRouteComparator(brief: z.infer<typeof liveBriefSchema>, requestedMode: NonNullable<z.infer<typeof liveBriefSchema>['travelMode']> = brief.travelMode!) {
+  return (left: LiveTravelOption, right: LiveTravelOption) => routeRecommendationScore(left, brief, requestedMode) - routeRecommendationScore(right, brief, requestedMode);
 }
 
-function recommendedRouteComparator(brief: z.infer<typeof liveBriefSchema>) {
-  return (left: LiveTravelOption, right: LiveTravelOption) => routeRecommendationScore(left, brief) - routeRecommendationScore(right, brief);
-}
-
-function routeRecommendationScore(option: LiveTravelOption, brief: z.infer<typeof liveBriefSchema>) {
-  if (brief.travelMode !== 'recommend') return option.minutes;
+function routeRecommendationScore(option: LiveTravelOption, brief: z.infer<typeof liveBriefSchema>, requestedMode: NonNullable<z.infer<typeof liveBriefSchema>['travelMode']>) {
+  if (requestedMode !== 'recommend') return option.minutes;
+  if (option.mode === 'drive' && option.roadUse) {
+    const dailyLimit = option.roadUse === 'self_drive' ? 480 : 600;
+    if (Math.ceil(option.minutes / dailyLimit) >= (brief.days ?? 2)) return Number.MAX_SAFE_INTEGER;
+  }
   const preferenceText = `${brief.preferences} ${brief.constraints.join(' ')}`.toLowerCase();
   const budgetConscious = /budget|afford|econom|low[ -]?cost|save money/.test(preferenceText);
   const comfortFocused = /comfort|convenien|accessib|senior|young child|toddler/.test(preferenceText);
@@ -442,6 +637,10 @@ async function scheduleMeals(plan: LivePlan, hotel: LivePlace, candidates: LiveP
       : `No dining preference was stated; confirm menu and dietary fit${plan.brief.dietaryNotes ? ` · ${plan.brief.dietaryNotes}` : ''}.`;
   for (let dayIndex = 0; dayIndex < plan.days.length; dayIndex++) {
     const day = plan.days[dayIndex];
+    if (isRoadTravelOnlyDay(plan, dayIndex)) {
+      day.meals = [];
+      continue;
+    }
     if (dayIndex > 0) {
       const window = mealWindow('breakfast', plan.brief);
       day.meals!.push({ type: 'breakfast', place: hotel, durationMinutes: mealDuration('breakfast', plan.brief.travellers ?? 1), targetStartMinutes: window.preferredStartMinutes, window, location: 'stay', dietaryNote: hotel.stayOffer?.roomFacts.mealPlan === 'breakfast' ? 'Breakfast is included in the selected sandbox room offer; menu and dietary fit require confirmation.' : 'Breakfast is planned at or near the stay; inclusion, menu and price are unverified.' });
@@ -532,6 +731,11 @@ export function applyScheduleValidations(plan: LivePlan, day: LivePlan['days'][n
 }
 
 export function plannerDayStart(plan: LivePlan, dayIndex: number) {
+  const road = plan.travel?.outboundRoadPlan;
+  if (road) {
+    if (dayIndex < road.travelDays - 1) return null;
+    if (dayIndex === road.travelDays - 1) return road.segments.at(-1)!.arrivalMinutes + 30;
+  }
   if (dayIndex > 0) return 480;
   const outboundFlight = plan.flight?.outbound.find(offer => offer.id === plan.flight?.suggestedOutboundId);
   if (outboundFlight && plan.flight?.destinationAirport.utcOffsetMinutes !== undefined && plan.flight.outboundLastMile) {
@@ -547,6 +751,11 @@ export function plannerDayStart(plan: LivePlan, dayIndex: number) {
 }
 
 export function plannerDayEnd(plan: LivePlan, dayIndex: number) {
+  const endRoad = plan.travel?.endRoadPlan;
+  if (endRoad) {
+    const firstTravelDay = plan.days.length - endRoad.travelDays;
+    if (dayIndex >= firstTravelDay) return dayIndex === firstTravelDay ? endRoad.segments[0].departureMinutes : null;
+  }
   if (dayIndex < plan.days.length - 1) return 22 * 60;
   const returnFlight = plan.flight?.return.find(offer => offer.id === plan.flight?.suggestedReturnId);
   if (returnFlight && plan.flight?.destinationAirport.utcOffsetMinutes !== undefined && plan.flight.returnFirstMile) {
@@ -558,7 +767,28 @@ export function plannerDayEnd(plan: LivePlan, dayIndex: number) {
     const departure = localClockMinutes(travelOptionInstant(returning, 'departure'), plan.travel?.destination.utcOffsetMinutes, plan.days[dayIndex].date);
     return departure ?? 17 * 60;
   }
-  return null;
+  return plan.brief.endIntent === 'end_at_destination' ? 22 * 60 : null;
+}
+
+export function roadJourneyConstraint(plan: LivePlan) {
+  const road = [plan.travel?.outboundRoadPlan, plan.travel?.endRoadPlan].find(candidate => candidate && candidate.status !== 'feasible');
+  if (!road) return undefined;
+  return {
+    id: 'road-journey-feasibility',
+    severity: road.status === 'not_feasible' ? 'blocking' as const : 'warning' as const,
+    dayIndex: road.direction === 'outbound' ? 0 : Math.max(0, plan.days.length - road.travelDays),
+    message: road.message,
+    overridable: road.status === 'road_trip',
+  };
+}
+
+function isRoadTravelOnlyDay(plan: LivePlan, dayIndex: number) {
+  const outboundDays = plan.travel?.outboundRoadPlan?.travelDays ?? 0;
+  const endDays = plan.travel?.endRoadPlan?.travelDays ?? 0;
+  const outboundOnly = outboundDays > 1 && dayIndex < outboundDays - 1;
+  const firstEndDay = plan.days.length - endDays;
+  const endOnly = endDays > 0 && dayIndex >= firstEndDay;
+  return outboundOnly || endOnly;
 }
 
 function nearestUnused(candidates: LivePlace[], used: Set<string>, anchor: LivePlace) {
@@ -572,15 +802,6 @@ function flightHubToLivePlace(hub: FlightHub, utcOffsetMinutes: number, checkedA
 }
 
 function minutesBefore(value: string, minutes: number) { return new Date(Date.parse(value) - minutes * 60_000).toISOString(); }
-
-function selectFlight(offers: import('@/inventory/contracts').TransportOffer[], direction: 'outbound' | 'return') {
-  const usable = offers.filter(offer => {
-    const value = direction === 'outbound' ? offer.arrivalAt : offer.departureAt;
-    const minutes = Number(value.slice(11, 13)) * 60 + Number(value.slice(14, 16));
-    return direction === 'outbound' ? minutes <= 13 * 60 : minutes >= 17 * 60;
-  });
-  return [...(usable.length ? usable : offers)].sort((a, b) => a.price.amount - b.price.amount || a.durationMinutes - b.durationMinutes)[0];
-}
 
 function stayOfferToLivePlace(offer: StayOffer): LivePlace {
   const facts = offer.propertyFacts;
@@ -613,6 +834,49 @@ function departureTime(date: string, hour: number, offsetMinutes?: number) {
   const absolute = Math.abs(offset);
   const zone = `${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}:${String(absolute % 60).padStart(2, '0')}`;
   return `${date}T${String(hour).padStart(2, '0')}:00:00${zone}`;
+}
+
+function transitStaySupplier(deps: { stayProvider?: StayProvider; guestNationality?: string }, travellers: number) {
+  return deps.stayProvider ? { provider: deps.stayProvider, travellers, guestNationality: deps.guestNationality ?? 'IN' } : undefined;
+}
+
+export async function refreshDestinationStayForRoadDates(
+  plan: LivePlan,
+  hotel: LivePlace,
+  deps: { stayProvider?: StayProvider; guestNationality?: string },
+  warnings: string[],
+) {
+  if (!deps.stayProvider || !plan.brief.startDate || !plan.brief.travellers) return;
+  const arrivalDate = plan.travel?.outboundRoadPlan?.segments.at(-1)?.date ?? plan.brief.startDate;
+  const checkoutDate = plan.travel?.endRoadPlan?.segments[0]?.date ?? plan.days.at(-1)!.date;
+  if (arrivalDate === plan.brief.startDate && checkoutDate === plan.days.at(-1)!.date) return;
+  if (arrivalDate >= checkoutDate) return;
+  try {
+    const result = await deps.stayProvider.search({
+      destination: hotel.address || hotel.name,
+      checkIn: arrivalDate,
+      checkOut: checkoutDate,
+      travellers: plan.brief.travellers,
+      currency: 'INR',
+      guestNationality: deps.guestNationality ?? 'IN',
+      limit: 8,
+    });
+    const sameProperty = result.offers.find(offer => offer.propertyId === hotel.id);
+    if (!sameProperty) {
+      delete hotel.stayOffer;
+      warnings.push(`The destination stay was not returned when rechecked for the road-adjusted dates ${arrivalDate} to ${checkoutDate}. Keep the stay unresolved or choose another hotel before relying on it.`);
+      return;
+    }
+    const refreshed = stayOfferToLivePlace(sameProperty);
+    refreshed.utcOffsetMinutes = hotel.utcOffsetMinutes;
+    Object.assign(hotel, refreshed);
+    const hotelIndex = plan.hotels.findIndex(candidate => candidate.id === hotel.id);
+    if (hotelIndex >= 0) plan.hotels[hotelIndex] = hotel;
+    warnings.push(`The destination stay was rechecked for the actual road-adjusted occupancy dates ${arrivalDate} to ${checkoutDate}.`);
+  } catch {
+    delete hotel.stayOffer;
+    warnings.push(`The destination stay could not be rechecked for the road-adjusted dates ${arrivalDate} to ${checkoutDate}; its price and availability remain unresolved.`);
+  }
 }
 
 async function flightFallbackRoutes(provider: LiveProvider, origin: LivePlace, hotel: LivePlace, outboundDate: string, returnDate: string, warnings: string[]) {

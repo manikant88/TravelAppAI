@@ -27,7 +27,6 @@ price and activity/property requirements to be resolved sufficiently for feasibi
 budget review. A booking handoff additionally requires availability evidence. Estimated
 schedule and price facts remain explicitly estimated.
 
-Provider-specific payloads stay behind adapters. Canonical supplier offers may identify
-their environment as live, sandbox, or snapshot; only live offers may be presented as live
-inventory. Place evidence, route evidence, user links, and manual entry use their own
-provenance kinds and do not become supplier offers.
+Provider-specific payloads stay behind adapters. Canonical supplier offers identify their
+environment as live or sandbox; only live offers may be presented as live inventory. Place
+and route evidence do not become supplier offers.

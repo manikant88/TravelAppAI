@@ -1,7 +1,7 @@
 import type { ActivityTimingEvidence, ConstraintFinding, DurationProfile, LiveBrief, LiveDay, LiveMeal, LivePlace, LiveVisit, MealWindow } from './contracts';
 import { projectLiveDay } from './timeline';
 
-export type DayBounds = { startMinutes: number | null; endMinutes: number | null };
+export type DayBounds = { startMinutes: number | null; endMinutes: number | null; travelOnly?: boolean };
 export type ActivityHint = { placeId: string; dayIndex: number; durationMinutes: number };
 
 const PACE_LIMIT = { relaxed: 2, balanced: 3, packed: 4 } as const;
@@ -58,6 +58,7 @@ export function mealDuration(type: LiveMeal['type'], travellers: number) {
 }
 
 export function targetActivityCount(brief: LiveBrief, dayIndex: number, bounds: DayBounds) {
+  if (bounds.travelOnly) return 0;
   const pace = resolvedPace(brief);
   const max = PACE_LIMIT[pace];
   if (bounds.startMinutes === null || bounds.endMinutes === null) return dayIndex === 0 || dayIndex === (brief.days ?? 1) - 1 ? 1 : Math.min(max, 2);

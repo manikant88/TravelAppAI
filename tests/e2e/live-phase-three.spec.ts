@@ -3,13 +3,13 @@ import type { StayOffer, TransportOffer } from '@/inventory/contracts';
 import type { LiveBrief, LiveDay, LivePlace, LivePlan, LiveSelectionRequest, LiveTravelOption } from '@/live/contracts';
 
 const checkedAt = '2026-09-07T03:00:00.000Z';
-const brief: LiveBrief = { origin: 'Delhi', destination: 'Jaipur', startDate: '2027-09-08', days: 4, travellers: 2, travelMode: 'flight', pickupLocation: 'India Gate', dietaryPreference: 'both', dietaryNotes: '', dayRhythm: null, pace: null, nightsConfirmed: true, preferences: '', constraints: [] };
+const brief: LiveBrief = { origin: 'Delhi', destination: 'Jaipur', startDate: '2027-09-08', days: 4, travellers: 2, travelMode: 'flight', pickupLocation: 'India Gate', endIntent: 'return_to_origin', onwardDestination: null, endTravelMode: 'flight', dietaryPreference: 'both', dietaryNotes: '', dayRhythm: null, pace: null, nightsConfirmed: true, preferences: '', constraints: [] };
 
 function place(id: string, name: string, kind: 'hotel' | 'activity', index: number): LivePlace {
   return {
     id, name, address: `${index + 1} Test Road, Jaipur, India`, lat: 26.91 + index / 100, lng: 75.78 + index / 100,
     source: kind === 'hotel' ? 'Nuitée Connect' : 'Google Maps', checkedAt, mapsUrl: `https://maps.google.com/?q=${id}`,
-    rating: 4.2 + index / 10, reviewCount: 1200 + index * 300, photo: { url: kind === 'hotel' ? '/figma/itinerary/hotel.jpg' : '/figma/itinerary/activity.jpg', authors: [{ name: 'Test source' }] },
+    rating: 4.2 + index / 10, reviewCount: 1200 + index * 300,
     editorialSummary: `${name} has verified descriptive details for this browser test.`, amenities: ['Wheelchair-accessible entrance', 'Restroom'], attributions: [{ name: kind === 'hotel' ? 'Nuitée Connect' : 'Google Maps' }],
   };
 }
@@ -19,7 +19,7 @@ function stay(id: string, name: string, index: number, total: number): LivePlace
     schemaVersion: 1, kind: 'supplier_offer', id: `stay-offer-${id}`, roomOfferId: `room-${id}`, propertyId: id, locationId: 'city:jaipur', checkIn: '2027-09-08', checkOut: '2027-09-11', rooms: 1,
     price: { currency: 'INR', amount: Math.round(total / 3), unit: 'per_room_per_night' }, totalPrice: { currency: 'INR', amount: total }, availability: 'available',
     roomFacts: { roomLabel: 'Deluxe double room', maxOccupancy: 2, mealPlan: 'breakfast', refundable: true },
-    propertyFacts: { name, address: `${index + 1} Test Road`, latitude: 26.91 + index / 100, longitude: 75.78 + index / 100, rating: 4.2 + index / 10, reviewCount: 1200 + index * 300, amenities: ['Wi-Fi'], accessibility: [], tags: [], imageAssetKey: 'figma/itinerary/hotel.jpg', starRating: 4 },
+    propertyFacts: { name, address: `${index + 1} Test Road`, latitude: 26.91 + index / 100, longitude: 75.78 + index / 100, rating: 4.2 + index / 10, reviewCount: 1200 + index * 300, amenities: ['Wi-Fi'], accessibility: [], tags: [], imageAssetKey: 'test:hotel', starRating: 4 },
     source: { provider: 'Nuitée Connect', providerOfferId: `provider-${id}`, evidenceKind: 'sandbox', checkedAt, expiresAt: '2027-09-08T00:00:00.000Z' }, booking: null,
     cancellationTerms: { summary: 'Refundable until 24 hours before arrival.', refundable: true },
   };

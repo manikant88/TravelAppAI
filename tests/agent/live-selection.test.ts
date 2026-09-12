@@ -52,6 +52,14 @@ describe('live session selections', () => {
     expect(d.provider.travelRoutes).toHaveBeenCalledTimes(2);
   });
 
+  it('rejects a supplier flight whose availability is unknown', async () => {
+    const d = setup();
+    d.plan.flight!.outbound[1] = { ...d.plan.flight!.outbound[1], availability: 'unknown' };
+    await expect(applyLiveSelection({ phase: 'live-selection', plan: d.plan, command: { type: 'select_flight', direction: 'outbound', offerId: 'flight-outbound-b' } }, d))
+      .rejects.toThrow('could not be verified');
+    expect(d.provider.travelRoutes).not.toHaveBeenCalled();
+  });
+
   it('selects an observed Google route and changes the itinerary route pointer', async () => {
     const d = setup();
     const faster = routeOption('outbound', d.plan.hotels[0], d.plan.hotels[1]);
@@ -60,6 +68,42 @@ describe('live session selections', () => {
     const result = await applyLiveSelection({ phase: 'live-selection', plan: d.plan, command: { type: 'select_travel', direction: 'outbound', optionId: alternative.id } }, d);
     expect(result.plan.travel?.suggestedOutboundId).toBe(alternative.id);
     expect(d.provider.travelRoutes).not.toHaveBeenCalled();
+  });
+
+  it('keeps the existing route when a newly selected road journey consumes all trip dates', async () => {
+    const d = setup();
+    d.plan.brief = { ...d.plan.brief, travelMode: 'self_drive', endIntent: 'end_at_destination', endTravelMode: null };
+    d.plan.flight = undefined;
+    const current = { ...routeOption('outbound', place('origin'), d.plan.hotels[0]), id: 'short-drive', roadUse: 'self_drive' as const };
+    const impossible = { ...current, id: 'four-day-drive', minutes: 1500 };
+    d.plan.travel = { origin: place('origin'), destination: d.plan.hotels[0], endIntent: 'end_at_destination', endDestination: d.plan.hotels[0], outbound: [current, impossible], return: [], suggestedOutboundId: current.id, suggestedReturnId: null, selectionReason: 'Drive', assumptions: [] };
+    const result = await applyLiveSelection({ phase: 'live-selection', plan: d.plan, command: { type: 'select_travel', direction: 'outbound', optionId: impossible.id } }, d);
+    expect(result.plan.travel?.suggestedOutboundId).toBe('short-drive');
+    expect(result.impact?.status).toBe('blocking');
+    expect(result.impact?.findings).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'road-journey-feasibility', overridable: false })]));
+    expect(result.message).toContain('Extend the dates');
+  });
+
+  it('removes destination plans from travel-only days when switching to a multi-day road journey', async () => {
+    const d = setup();
+    d.plan.brief = { ...d.plan.brief, days: 7, travelMode: 'cab', endIntent: 'end_at_destination', endTravelMode: null };
+    d.plan.flight = undefined;
+    d.plan.days = Array.from({ length: 7 }, (_, index) => ({
+      date: `2027-09-${String(8 + index).padStart(2, '0')}`,
+      visits: index < 2 ? [{ place: index === 0 ? place('day-one-activity') : place('day-two-activity'), durationMinutes: 60 }] : [],
+      meals: index < 2 ? [{ type: 'lunch' as const, place: place(`day-${index + 1}-restaurant`), durationMinutes: 60, targetStartMinutes: 12 * 60 + 30, location: 'restaurant' as const, dietaryNote: '' }] : [],
+      legs: [],
+    }));
+    const current = { ...routeOption('outbound', place('origin'), d.plan.hotels[0]), id: 'short-cab', roadUse: 'cab' as const };
+    const multiDay = { ...current, id: 'three-day-cab', minutes: 1488 };
+    d.plan.travel = { origin: place('origin'), destination: d.plan.hotels[0], endIntent: 'end_at_destination', endDestination: d.plan.hotels[0], outbound: [current, multiDay], return: [], suggestedOutboundId: current.id, suggestedReturnId: null, selectionReason: 'Cab', assumptions: [] };
+
+    const result = await applyLiveSelection({ phase: 'live-selection', plan: d.plan, command: { type: 'select_travel', direction: 'outbound', optionId: multiDay.id, confirmConstraints: true } }, d);
+
+    expect(result.plan.travel?.outboundRoadPlan?.travelDays).toBe(3);
+    expect(result.plan.days[0]).toMatchObject({ visits: [], meals: [], legs: [] });
+    expect(result.plan.days[1]).toMatchObject({ visits: [], meals: [], legs: [] });
+    expect(result.plan.days.slice(2).flatMap(day => day.visits.map(visit => visit.place.id))).toEqual(expect.arrayContaining(['day-one-activity', 'day-two-activity']));
   });
 
   it('uses a flight fallback instead of a flight for the same direction', async () => {
@@ -129,6 +173,26 @@ describe('live session selections', () => {
     expect(result.plan.flight?.destination.id).toBe(destination.id);
     expect(result.plan.selectedHotelId).toBe(destination.id);
     expect(result.plan.flight?.suggestedOutboundId).toBe('flight-outbound-a');
+  });
+
+  it('retries a later flight independently when the outward journey uses another mode', async () => {
+    const d = setup();
+    const onward = place('mumbai');
+    d.plan.brief = { ...d.plan.brief, travelMode: 'cab', endIntent: 'continue_elsewhere', onwardDestination: 'Mumbai', endTravelMode: 'flight' };
+    d.plan.flight = undefined;
+    d.plan.travel = { origin: place('origin'), destination: d.plan.hotels[0], endDestination: onward, endIntent: 'continue_elsewhere', outbound: [], return: [], suggestedOutboundId: null, suggestedReturnId: null, selectionReason: 'Independent journeys', assumptions: [] };
+    const endOffer = flight('onward-flight', 'outbound', 18);
+    const flightProvider: FlightProvider = { search: vi.fn(async () => ({
+      originHub: { code: 'JAI', name: 'Jaipur Airport', latitude: 26.82, longitude: 75.8, countryCode: 'IN' },
+      destinationHub: { code: 'BOM', name: 'Mumbai Airport', latitude: 19.09, longitude: 72.87, countryCode: 'IN' },
+      outbound: [endOffer], returning: [], checkedAt: '2026-09-10T00:00:00Z', environment: 'sandbox' as const, warnings: [],
+    })) };
+    const result = await applyLiveSelection({ phase: 'live-selection', plan: d.plan, command: { type: 'retry_flights' } }, { ...d, flightProvider });
+    expect(flightProvider.search).toHaveBeenCalledOnce();
+    expect(result.plan.flight?.outbound).toEqual([]);
+    expect(result.plan.flight?.suggestedReturnId).toBe('onward-flight');
+    expect(result.plan.flight?.endDestinationAirport?.airportCode).toBe('BOM');
+    expect(result.message).toContain('onward to mumbai');
   });
 
   it('replaces an activity only from observed candidates and refreshes that day routes', async () => {

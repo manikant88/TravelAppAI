@@ -1,7 +1,7 @@
 import { addCalendarDays } from '@/domain/dates';
-import type { LiveBrief } from './contracts';
+import { LIVE_TRIP_MAX_DAYS, LIVE_TRIP_MIN_DAYS, type LiveBrief } from './contracts';
 
-export type LiveEssentialField = 'destination' | 'origin' | 'dates' | 'travellers' | 'transport' | 'pickup' | 'dining' | 'pace';
+export type LiveEssentialField = 'destination' | 'origin' | 'dates' | 'travellers' | 'transport' | 'pickup' | 'trip_end' | 'onward_destination' | 'end_transport' | 'dining' | 'pace';
 
 export type LiveEssentialsDraft = {
   destination: string;
@@ -11,6 +11,9 @@ export type LiveEssentialsDraft = {
   travellers: string;
   travelMode: '' | 'self_drive' | 'public_transit' | 'flight' | 'train' | 'bus' | 'cab' | 'recommend';
   pickupLocation: string;
+  endIntent: '' | 'return_to_origin' | 'end_at_destination' | 'continue_elsewhere';
+  onwardDestination: string;
+  endTravelMode: LiveEssentialsDraft['travelMode'];
   nightsConfirmed: boolean;
   dietaryPreference: '' | 'vegetarian' | 'pure_vegetarian' | 'non_vegetarian' | 'both';
   dietaryNotes: string;
@@ -23,7 +26,7 @@ export type LiveEssentialRequirementContext = {
   modelQuestion?: string | null;
 };
 
-export type LiveEssentialSuggestion = { label: string; message: string };
+export type LiveEssentialSuggestion = { label: string; message: string; action?: 'current_location' | 'compose_pickup' };
 
 export function liveEssentialSuggestions(brief: LiveBrief): LiveEssentialSuggestion[] {
   if (!brief.destination) return [{ label: 'Help me choose', message: 'Help me choose a destination based on my dates, budget, and interests.' }];
@@ -56,8 +59,26 @@ export function liveEssentialSuggestions(brief: LiveBrief): LiveEssentialSuggest
   ];
   if ((brief.travelMode === 'flight' || brief.travelMode === 'self_drive' || brief.travelMode === 'cab') && !brief.pickupLocation) return brief.origin ? [
     { label: `${brief.origin} city centre`, message: `Use ${brief.origin} city centre as my starting point.` },
-    { label: 'I’ll enter a pickup point', message: 'I want to provide a specific pickup area or public meeting point.' },
+    { label: `${brief.origin} airport`, message: `Use ${brief.origin} airport as my starting point.` },
+    { label: `${brief.origin} railway station`, message: `Use ${brief.origin} railway station as my starting point.` },
+    { label: 'My current location', message: 'Use my current location as my starting point.', action: 'current_location' },
+    { label: 'Add address in chat', message: 'I want to add my pickup address in chat.', action: 'compose_pickup' },
   ] : [];
+  if (!brief.endIntent) return [
+    { label: `Return to ${brief.origin}`, message: `I want to return to ${brief.origin} after this destination.` },
+    { label: 'End trip here', message: `My trip ends in ${brief.destination}.` },
+    { label: 'Continue elsewhere', message: 'I want to continue to another destination after this one.' },
+  ];
+  if (brief.endIntent === 'continue_elsewhere' && !brief.onwardDestination) return [];
+  if (brief.endIntent !== 'end_at_destination' && !brief.endTravelMode) return [
+    ...(brief.travelMode ? [{ label: 'Same as outward', message: `Use ${travelModeWords(brief.travelMode)} for my journey after ${brief.destination}.` }] : []),
+    { label: 'Flight', message: `I want to fly after ${brief.destination}.` },
+    { label: 'Train', message: `I want to take a train after ${brief.destination}.` },
+    { label: 'Bus', message: `I want to take a bus after ${brief.destination}.` },
+    { label: 'Cab', message: `I want to take a private cab after ${brief.destination}.` },
+    { label: 'Self Drive', message: `I want to self-drive after ${brief.destination}.` },
+    { label: 'Recommend Me', message: `Recommend how I should travel after ${brief.destination}.` },
+  ];
   return [];
 }
 
@@ -65,7 +86,7 @@ export function missingLiveEssential(brief: LiveBrief, context: LiveEssentialReq
   if (!brief.destination) return 'Which destination would you like to explore?';
   if (!brief.origin) return 'Which city are you travelling from?';
   if (!brief.travellers) return 'How many travellers are going?';
-  if (!brief.days) return 'How many calendar days will you travel? This live planner supports 2–7 days.';
+  if (!brief.days) return `How many calendar days will you travel? This live planner supports ${LIVE_TRIP_MIN_DAYS}–${LIVE_TRIP_MAX_DAYS} days.`;
   if (!brief.startDate) return `Please confirm your start date including the year. Should I treat ${brief.days} days as ${brief.days - 1} nights?`;
   if (brief.startDate < context.today) return 'That start date is in the past. What future date should I use?';
   if (!brief.nightsConfirmed) return `Should I treat ${brief.days} days as ${brief.days - 1} nights, checking out on ${addCalendarDays(brief.startDate, brief.days - 1)}? Please confirm the year too.`;
@@ -78,7 +99,14 @@ export function missingLiveEssential(brief: LiveBrief, context: LiveEssentialReq
         : 'Where will you start driving from? A neighbourhood or nearby landmark is enough.';
   }
   if (brief.travelMode === 'flight' && !context.flightConfigured) return 'Flight search is not available in this environment yet. You can choose train, bus, cab, self-drive or Recommend Me, or try flights again after it is configured.';
-  return context.modelQuestion ?? null;
+  if (!brief.endIntent) return `What should happen after ${brief.destination}: return to ${brief.origin}, end the trip there, or continue to another destination?`;
+  if (brief.endIntent === 'continue_elsewhere' && !brief.onwardDestination) return `Where would you like to go after ${brief.destination}?`;
+  if (brief.endIntent !== 'end_at_destination' && !brief.endTravelMode) return `How would you like to travel ${brief.endIntent === 'return_to_origin' ? `back to ${brief.origin}` : `onward to ${brief.onwardDestination}`}? It can be different from your outward journey.`;
+  if (brief.endTravelMode === 'flight' && !context.flightConfigured) return 'Flight search is not available for your journey after the destination in this environment yet. Choose another mode or try again after it is configured.';
+  // Optional model questions never override the deterministic readiness contract.
+  // In particular, a later flight begins at the selected stay and does not need a
+  // second pickup address before the stay has even been chosen.
+  return null;
 }
 
 export function liveEssentialReadiness(brief: LiveBrief) {
@@ -92,6 +120,9 @@ export function liveEssentialReadiness(brief: LiveBrief) {
     brief.nightsConfirmed,
     Boolean(brief.travelMode),
     ...(pickupRequired ? [Boolean(brief.pickupLocation)] : []),
+    Boolean(brief.endIntent),
+    ...(brief.endIntent === 'continue_elsewhere' ? [Boolean(brief.onwardDestination)] : []),
+    ...(brief.endIntent && brief.endIntent !== 'end_at_destination' ? [Boolean(brief.endTravelMode)] : []),
   ];
   return { complete: checks.filter(Boolean).length, total: checks.length, ready: checks.every(Boolean) };
 }
@@ -105,6 +136,9 @@ export function draftFromLiveBrief(brief: LiveBrief): LiveEssentialsDraft {
     travellers: brief.travellers?.toString() ?? '',
     travelMode: brief.travelMode ?? '',
     pickupLocation: brief.pickupLocation ?? '',
+    endIntent: brief.endIntent ?? '',
+    onwardDestination: brief.onwardDestination ?? '',
+    endTravelMode: brief.endTravelMode ?? '',
     nightsConfirmed: brief.nightsConfirmed,
     dietaryPreference: brief.dietaryPreference ?? '',
     dietaryNotes: brief.dietaryNotes,
@@ -128,8 +162,20 @@ export function liveEssentialsMessage(draft: LiveEssentialsDraft) {
     travel,
   ];
   if (draft.pickupLocation.trim() && (draft.travelMode === 'flight' || draft.travelMode === 'self_drive' || draft.travelMode === 'cab')) parts.push(`Use ${draft.pickupLocation.trim()} as my starting point.`);
+  if (draft.endIntent === 'end_at_destination') parts.push(`My trip ends in ${draft.destination.trim()}.`);
+  if (draft.endIntent === 'return_to_origin') parts.push(`I will return to ${draft.origin.trim()} after this destination.`);
+  if (draft.endIntent === 'continue_elsewhere' && draft.onwardDestination.trim()) parts.push(`After this destination I will continue to ${draft.onwardDestination.trim()}.`);
+  if (draft.endIntent !== 'end_at_destination' && draft.endTravelMode) parts.push(`For that journey, ${travelModeSentence(draft.endTravelMode)}`);
   if (draft.dietaryPreference) parts.push(`My dining preference is ${draft.dietaryPreference.replaceAll('_', ' ')}.`);
   if (draft.dietaryNotes.trim()) parts.push(`Dining notes: ${draft.dietaryNotes.trim()}.`);
   if (draft.pace) parts.push(`Use a ${draft.pace} trip pace.`);
   return parts.join(' ');
+}
+
+function travelModeWords(mode: NonNullable<LiveBrief['travelMode']>) {
+  return mode === 'self_drive' ? 'self-drive' : mode === 'cab' ? 'a private cab' : mode === 'recommend' ? 'the recommended mode' : mode === 'public_transit' ? 'public transport' : mode;
+}
+
+function travelModeSentence(mode: Exclude<LiveEssentialsDraft['endTravelMode'], ''>) {
+  return mode === 'self_drive' ? 'I will drive myself.' : mode === 'cab' ? 'I prefer a private cab.' : mode === 'recommend' ? 'recommend the most practical mode.' : mode === 'public_transit' ? 'I prefer public transport.' : `I prefer ${mode}.`;
 }

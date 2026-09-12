@@ -1,37 +1,41 @@
 # Domain documentation
 
-This is a single-context application. Keep each kind of information in its designated document.
+Keep each kind of project context in one designated document. Git history preserves
+superseded architecture and earlier handoff notes; do not copy them into new canonical
+files.
 
 ## Document ownership
 
 | File | Responsibility |
 | --- | --- |
-| `AGENTS.md` | Shared assistant instructions, Next.js documentation requirement, verification constraints, and pointers. |
-| `CLAUDE.md` | Imports `AGENTS.md` and records Matt Pocock skill configuration. |
-| `PROJECT_CONTEXT.md` | Product problem, users, principles, accepted scope, and non-goals. |
-| `IMPLEMENTATION_SPEC.md` | Technical contracts, state ownership, data boundaries, and implementation requirements. |
-| `AI_HANDOFF.md` | Dated implementation observations, continuation notes, and recorded verification. |
-| `README.md` | Human-facing overview, setup, and operating instructions for the application as it exists. |
-| `CONTEXT.md` | Domain glossary only: agreed terms and distinctions, without implementation plans. |
-| `docs/adr/` | Decisions with meaningful reversal cost, non-obvious reasoning, and real trade-offs. |
-| `.scratch/<feature>/` | Proposed feature specs, actionable tickets, acceptance criteria, and progress. |
+| `AGENTS.md` | Shared assistant instructions and required verification constraints. |
+| `PROJECT_CONTEXT.md` | Product problem, principles, accepted scope, and non-goals. |
+| `IMPLEMENTATION_SPEC.md` | Current technical contracts, state ownership, and data boundaries. |
+| `AI_HANDOFF.md` | Concise current code map, continuation risks, and latest verification. |
+| `README.md` | Human-facing overview, setup, commands, and smoke scenarios. |
+| `CONTEXT.md` | Resolved domain vocabulary only. |
+| `docs/adr/` | Decisions with meaningful reversal cost and non-obvious trade-offs. |
+| `.scratch/<feature>/` | Feature acceptance history and actionable local tickets. |
 
 ## Reading rules
 
-Before product or architecture work, read `PROJECT_CONTEXT.md`, the relevant sections of `IMPLEMENTATION_SPEC.md`, and `AI_HANDOFF.md`. Read `CONTEXT.md` and relevant ADRs when they exist. Create the glossary only when a term is resolved, and create an ADR only when a decision merits one; missing files do not block work.
+For routine implementation, read `AI_HANDOFF.md` first and only the relevant section of
+`IMPLEMENTATION_SPEC.md`. Read `PROJECT_CONTEXT.md` when the work changes product scope,
+experience principles, or customer behavior. Read `CONTEXT.md` and relevant ADRs when
+the change touches an agreed term or recorded decision.
 
-Use agreed glossary terms in specs, code discussions, and tests. Read the relevant feature spec and ticket before implementation.
+Before changing a feature with a `.scratch` spec, read its spec and active ticket. Follow
+`docs/agents/issue-tracker.md` when creating or updating tickets.
 
-## Transition from prototype to product
+Verify behavior in code when documents and implementation disagree. Reconcile the
+canonical document that owns the decision. Put enduring rules in product context or the
+implementation spec; keep the handoff limited to code navigation, active risks, and
+current verification.
 
-The accepted direction is a product for actual customers. The product and technical documents distinguish that direction from the existing implementation baseline. Historical P0 restrictions and P1/P2 priorities must not dictate customer requirements. Specific launch capabilities, providers, ownership, and booking responsibility remain discovery decisions; none is implemented merely by updating the scope.
+Create a glossary entry only after terminology is resolved. Create an ADR only when the
+decision has meaningful reversal cost. Update the README when delivered setup or runtime
+behavior changes.
 
-Keep the baseline documents in place during discovery. Capture proposed changes in feature specs. Once the user accepts a new scope, revise affected sections of the canonical documents together and identify which prior assumptions are superseded. Git history preserves earlier versions; avoid copying whole documents into parallel authoritative versions.
-
-`PROJECT_CONTEXT.md` currently delegates specific behavior decisions to the dated handoff. Honor that explicit delegation, but do not treat every handoff note as a blanket override of product or technical contracts. Surface other conflicts, verify actual behavior in code when relevant, and reconcile affected documents with the accepted decision.
-
-Keep enduring contracts in the product/spec documents rather than accumulating permanent overrides in the handoff. Keep verification results dated and distinguish historical results from checks performed for current work. Update the README when delivered behavior or setup changes.
-
-## Skill use
-
-User instructions and the repository's existing Next.js and browser-test requirements continue to apply. Use the local issue tracker conventions in `docs/agents/issue-tracker.md`. No `CONTEXT-MAP.md` or per-module documentation hierarchy is needed for this application.
+User instructions, the repository's Next.js documentation rule, and the browser-test
+restriction continue to apply. No per-module documentation hierarchy is needed for this
+application.

@@ -10,18 +10,21 @@ const completeBrief: LiveBrief = {
   days: 5,
   travellers: 3,
   travelMode: 'public_transit',
+  endIntent: 'return_to_origin',
+  endTravelMode: 'public_transit',
   nightsConfirmed: true,
 };
 
 describe('live trip essentials', () => {
   it('treats dining and pace as optional planning preferences', () => {
-    expect(liveEssentialReadiness(completeBrief)).toEqual({ complete: 7, total: 7, ready: true });
+    expect(liveEssentialReadiness(completeBrief)).toEqual({ complete: 9, total: 9, ready: true });
     expect(missingLiveEssential(completeBrief, { today: '2026-09-08', flightConfigured: true })).toBeNull();
+    expect(missingLiveEssential({ ...completeBrief, endTravelMode: 'flight' }, { today: '2026-09-08', flightConfigured: true, modelQuestion: 'Please provide a pickup point for the return flight.' })).toBeNull();
   });
 
   it('requires a first-mile location for flight, self-drive and cab', () => {
     const flight = { ...completeBrief, travelMode: 'flight' as const };
-    expect(liveEssentialReadiness(flight)).toEqual({ complete: 7, total: 8, ready: false });
+    expect(liveEssentialReadiness(flight)).toEqual({ complete: 9, total: 10, ready: false });
     expect(missingLiveEssential(flight, { today: '2026-09-08', flightConfigured: true })).toContain('airport transfer start');
     expect(liveEssentialReadiness({ ...completeBrief, travelMode: 'cab', pickupLocation: null }).ready).toBe(false);
   });
@@ -41,9 +44,17 @@ describe('live trip essentials', () => {
     expect(liveEssentialSuggestions(withoutTravel).map(option => option.label)).toEqual(['Flight', 'Train', 'Bus', 'Cab', 'Self Drive', 'Recommend Me']);
 
     const flightWithoutPickup = { ...completeBrief, travelMode: 'flight' as const, pickupLocation: null };
-    expect(liveEssentialSuggestions(flightWithoutPickup)).toEqual([
-      { label: 'Delhi city centre', message: 'Use Delhi city centre as my starting point.' },
-      { label: 'I’ll enter a pickup point', message: 'I want to provide a specific pickup area or public meeting point.' },
+    expect(liveEssentialSuggestions(flightWithoutPickup).map(option => option.label)).toEqual([
+      'Delhi city centre', 'Delhi airport', 'Delhi railway station', 'My current location', 'Add address in chat',
     ]);
+  });
+
+  it('requires an explicit end intent and an independent later travel mode', () => {
+    const undecided = { ...completeBrief, endIntent: null, endTravelMode: null };
+    expect(missingLiveEssential(undecided, { today: '2026-09-08', flightConfigured: true })).toContain('What should happen after Udaipur');
+    const returning = { ...undecided, endIntent: 'return_to_origin' as const };
+    expect(missingLiveEssential(returning, { today: '2026-09-08', flightConfigured: true })).toContain('It can be different');
+    const onward = { ...returning, endIntent: 'continue_elsewhere' as const, onwardDestination: null };
+    expect(missingLiveEssential(onward, { today: '2026-09-08', flightConfigured: true })).toContain('Where would you like to go');
   });
 });

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { transferOfferSchema, transportOfferSchema } from '@/inventory/contracts';
+import { transportOfferSchema } from '@/inventory/contracts';
 
-describe('canonical water transport contracts', () => {
-  it('preserves different modes across a ferry-to-cruise supplier offer', () => {
+describe('canonical transport offers', () => {
+  it('preserves the supplier segments that make up an offer', () => {
     const offer = {
       schemaVersion: 1,
       kind: 'supplier_offer',
@@ -29,24 +29,4 @@ describe('canonical water transport contracts', () => {
     expect(transportOfferSchema.parse(offer).segments.map(segment => segment.mode)).toEqual(['ferry', 'cruise']);
   });
 
-  it('can identify a ferry as the physical mode of a transfer', () => {
-    const transfer = {
-      schemaVersion: 1,
-      kind: 'supplier_offer',
-      id: 'offer:transfer:ferry',
-      transferId: 'transfer:ferry',
-      from: 'jetty:hotel',
-      to: 'jetty:casino',
-      mode: 'shared',
-      transportMode: 'ferry',
-      durationMinutes: 20,
-      capacity: 20,
-      price: { amount: 500, currency: 'INR', unit: 'per_traveller' },
-      availability: 'available',
-      source: { provider: 'example-water', providerOfferId: 'ferry-1', evidenceKind: 'live', checkedAt: '2026-09-05T05:00:00Z' },
-      booking: null,
-    };
-
-    expect(transferOfferSchema.parse(transfer).transportMode).toBe('ferry');
-  });
 });

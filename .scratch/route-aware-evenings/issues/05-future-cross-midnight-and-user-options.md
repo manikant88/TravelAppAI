@@ -6,9 +6,11 @@ Blocked by: 01-route-corridor-meals.md, 02-day-rhythm.md, 03-time-window-validat
 
 ## Intended behavior
 
-Future versions will model night occupancy, cross-midnight transport and activities,
-hotel-night removal, overnight self-drive safeguards, provider-verified overnight
+Future versions will complete night occupancy, cross-midnight scheduled transport and
+activities, main-stay charged-night recalculation, provider-verified overnight activity
 inventory, user-added links/manual items, and lock-aware downstream recalculation.
+Multi-day cab and self-drive segmentation now lives in the accepted
+`.scratch/multi-leg-road-journeys/` scope.
 
 ## Future-version work
 
@@ -16,8 +18,8 @@ inventory, user-added links/manual items, and lock-aware downstream recalculatio
   overnight activity, or explicitly unresolved.
 - **5F — Overnight intercity travel:** carry departure and arrival across calendar days
   while preserving the first- and last-mile legs.
-- **5G — Overnight self-drive:** add fatigue, rest-stop, driver and safety constraints
-  before recommending a cross-midnight drive.
+- **5G — Overnight self-drive:** superseded by capacity-aware multi-day road segments;
+  future work may add driver-specific fatigue and provider constraints.
 - **5H — Provider-verified night activities:** require dated operating, pickup, ticket
   and availability evidence for camps, treks, safaris, cruises and similar experiences.
 - **5I — User-added options:** ingest links or manual stay, travel and activity details
@@ -37,3 +39,9 @@ inventory, user-added links/manual items, and lock-aware downstream recalculatio
 ## Validation approach
 
 Define separate accepted specs and executable tickets before implementation.
+
+## Comments
+
+Multi-day cab and self-drive segmentation moved to the accepted
+`.scratch/multi-leg-road-journeys/` feature. The remaining items are still draft and have
+not been implemented or verified.

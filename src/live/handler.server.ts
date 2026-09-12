@@ -1,7 +1,7 @@
 import { liveRequestSchema, liveSelectionRequestSchema, type LiveSelectionRequest } from './contracts';
 import { createGoogleProvider } from './google.server';
 import { createLiveModel } from './model.server';
-import { runLivePlan } from './planner';
+import { runLivePlan, type LiveModel } from './planner';
 import { createNuiteeStayProvider } from '@/inventory/providers/nuitee.server';
 import { createNuiteeFlightProvider } from '@/transport/providers/nuitee-flight.server';
 import { applyLiveSelection, LiveSelectionError } from './selection.server';
@@ -30,20 +30,26 @@ export async function handleLiveConversation(body: unknown, request: Request): P
   const stream = new ReadableStream({
     async start(output) {
       let open = true;
+      let lastProgress = '';
       const send = (data: unknown) => { if (open) { try { output.enqueue(encoder.encode(JSON.stringify(data) + '\n')); } catch { open = false; controller.abort(); } } };
       try {
+        const model = resilientLiveModel(signal);
         const result = await runLivePlan(parsed.data, {
-          model: createLiveModel(signal),
+          model,
           provider: createGoogleProvider(signal),
           stayProvider: process.env.NUITEE_API_KEY ? createNuiteeStayProvider(signal) : undefined,
           flightProvider: process.env.NUITEE_API_KEY ? createNuiteeFlightProvider(signal) : undefined,
           guestNationality: process.env.NUITEE_GUEST_NATIONALITY?.trim() || 'IN',
           signal,
-          progress: message => send({ type: 'progress', message }),
+          progress: message => { lastProgress = message; send({ type: 'progress', message }); },
         });
         send({ type: 'result', result });
-      } catch {
-        send({ type: 'error', message: signal.aborted ? 'I stopped the search before changing your trip. Your previous plan is still here.' : 'I couldn’t finish checking the stays, travel and activities this time. Please try again; your previous plan is unchanged.' });
+      } catch (error) {
+        console.error('Live planning request failed', error instanceof Error ? { name: error.name, message: error.message, stage: lastProgress } : { stage: lastProgress });
+        const message = lastProgress.startsWith('Understanding')
+          ? 'I couldn’t interpret this request before the planning service stopped. Your message is still here, so you can retry it without retyping.'
+          : 'I couldn’t finish checking the stays, travel and activities this time. Please try again; your previous plan is unchanged.';
+        send({ type: 'error', message: signal.aborted ? 'I stopped the search before changing your trip. Your previous plan is still here.' : message });
       } finally {
         active--;
         if (open) { try { output.close(); } catch { /* Client disconnected. */ } }
@@ -52,6 +58,17 @@ export async function handleLiveConversation(body: unknown, request: Request): P
     cancel() { controller.abort(); },
   });
   return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' } });
+}
+
+function resilientLiveModel(signal: AbortSignal): LiveModel {
+  try { return createLiveModel(signal); }
+  catch (error) {
+    console.error('Live planning model is unavailable; using deterministic planning', error instanceof Error ? { name: error.name, message: error.message } : {});
+    return {
+      extract: async () => { throw error; },
+      select: async () => { throw error; },
+    };
+  }
 }
 
 export async function handleLiveSelection(body: unknown, request: Request): Promise<Response> {
@@ -64,6 +81,7 @@ export async function handleLiveSelection(body: unknown, request: Request): Prom
   try {
     return Response.json(await applyLiveSelection(parsed.data as LiveSelectionRequest, {
       provider: createGoogleProvider(signal),
+      stayProvider: process.env.NUITEE_API_KEY ? createNuiteeStayProvider(signal) : undefined,
       flightProvider: process.env.NUITEE_API_KEY ? createNuiteeFlightProvider(signal) : undefined,
       guestNationality: process.env.NUITEE_GUEST_NATIONALITY?.trim() || 'IN',
       signal,

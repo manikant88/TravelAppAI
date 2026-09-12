@@ -9,6 +9,13 @@ _Avoid_: Using account or user as a synonym when discussing trip participation.
 
 **Trip**: The overall journey shared by its travellers, including their dates, constraints, preferences, and itinerary.
 
+**Journey leg**: One intercity movement with its own origin, destination, date, mode, timing evidence, and feasibility result. The outward leg and the journey after a destination are independent.
+_Avoid_: Assuming the return destination or copying the outward mode onto a later leg.
+
+**Trip end intent**: The traveller's explicit choice to return to the origin, end at the current destination, or continue to another destination.
+
+**Transit stay**: An overnight rest stop used while completing a multi-day journey leg. It is distinct from the main destination stay and needs its own dated availability evidence before booking.
+
 **Itinerary**: The day-by-day sequence of travel, transfers, stays, meals, and activities within a trip.
 _Avoid_: Booking confirmation.
 
@@ -25,7 +32,7 @@ _Avoid_: Route estimate, booking confirmation.
 **Option candidate**: A discovered, linked, or manually entered possibility that may still lack information required for itinerary selection. A candidate becomes selectable only after the facts required for the proposed use have been validated.
 _Avoid_: Supplier offer, itinerary selection, booking confirmation.
 
-**Supplier offer**: A normalized, provider-backed option with explicit supplier identity, environment, availability, price, freshness, and booking semantics. Sandbox and snapshot offers remain supplier-shaped test evidence and are never presented as live inventory.
+**Supplier offer**: A normalized, provider-backed option with explicit supplier identity, environment, availability, price, freshness, and booking semantics. Sandbox offers remain supplier-shaped test evidence and are never presented as live inventory.
 
 **Option provenance**: The recorded origin of an option's facts: supplier, route evidence, place evidence, user-provided link, or manual entry. Provenance is preserved when the option is selected or locked.
 

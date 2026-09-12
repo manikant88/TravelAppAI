@@ -2,7 +2,6 @@
 
 import { DotLottieReact } from "@lottiefiles/dotlottie-react";
 import { useEffect, useState } from "react";
-import type { TripRequest } from "@/domain/model";
 
 type PlanningPhase = "scanning_route" | "searching_stays" | "searching_activities" | "validating";
 
@@ -16,7 +15,7 @@ function loadPlanningAnimation(): Promise<ArrayBuffer> {
   return planningAnimationPromise;
 }
 
-export function PlanningAnimation({ phase, request, origin: suppliedOrigin, status }: { phase: PlanningPhase; request?: TripRequest; origin?: string | null; status?: string }) {
+export function PlanningAnimation({ phase, origin: suppliedOrigin, status }: { phase: PlanningPhase; origin?: string | null; status?: string }) {
   const [animationData, setAnimationData] = useState<ArrayBuffer>();
   useEffect(() => {
     let mounted = true;
@@ -31,7 +30,7 @@ export function PlanningAnimation({ phase, request, origin: suppliedOrigin, stat
   }, []);
   const title = phase === "scanning_route" ? "Understanding your trip" : phase === "searching_stays" ? "Finding a place to stay" : phase === "searching_activities" ? "Shaping your days" : "Making sure the plan works";
   const detail = status || (phase === "scanning_route" ? "Reading the places, dates, travellers and preferences you shared" : phase === "searching_stays" ? "Looking for stays that suit your dates, group and budget" : phase === "searching_activities" ? "Balancing activities, meals and travel time around your interests" : "Checking timing, opening hours and connections");
-  const rawOrigin = suppliedOrigin ?? request?.origin;
+  const rawOrigin = suppliedOrigin;
   const origin = rawOrigin ? rawOrigin.replace(/^(city|airport):/, "").replaceAll("-", " ") : "your request";
   return (
     <div className={`planning-animation planning-animation-${phase}`} role="status" aria-live="polite">

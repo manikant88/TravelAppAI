@@ -95,7 +95,8 @@ export function LiveOptionDrawer({ plan, picker, busy, onSelect, onClose }: {
   }, [currentMeal, currentVisit, picker, plan]);
 
   const visible = options.filter(option => optionText(option).includes(query.trim().toLowerCase())).sort((a, b) => Number(b.selected) - Number(a.selected));
-  const title = picker.kind === 'hotel' ? 'Change stay' : picker.kind === 'activity' ? 'Change activity' : picker.kind === 'meal' ? `Change ${picker.mealType}` : picker.kind === 'flight' ? `Change ${picker.direction} flight` : `Change ${picker.direction} travel`;
+  const journeyLabel = picker.kind === 'flight' || picker.kind === 'travel' ? picker.direction === 'return' && plan.brief.endIntent === 'continue_elsewhere' ? 'onward' : picker.direction : undefined;
+  const title = picker.kind === 'hotel' ? 'Change stay' : picker.kind === 'activity' ? 'Change activity' : picker.kind === 'meal' ? `Change ${picker.mealType}` : picker.kind === 'flight' ? `Change ${journeyLabel} flight` : `Change ${journeyLabel} travel`;
   const noun = picker.kind === 'hotel' ? 'stays' : picker.kind === 'activity' ? 'activities' : picker.kind === 'meal' ? 'restaurants' : picker.kind === 'flight' ? 'flights' : 'routes';
 
   async function select(option: Option) {
@@ -132,8 +133,8 @@ function OptionRow({ option, picker, plan, currentHotel, currentVisit, currentMe
   if (option.type === 'meal' && picker.kind === 'meal') return <LivePlaceCard place={option.place} kind="meal" heading={`${option.selected ? 'Current' : 'Alternative'} ${picker.mealType} · ${currentMeal?.durationMinutes ?? 60} min`} subtitle="Opening hours, meal timing and surrounding drives will be checked before applying" selected={option.selected} selectionBusy={busy} onSelect={option.selected ? undefined : onSelect} decisionNote={note} />;
   if (option.type === 'flight' && picker.kind === 'flight' && plan.flight) {
     const from = picker.direction === 'outbound' ? plan.flight.originAirport : plan.flight.destinationAirport;
-    const to = picker.direction === 'outbound' ? plan.flight.destinationAirport : plan.flight.originAirport;
-    return <LiveFlightCard offer={option.offer} direction={picker.direction} from={from} to={to} travellers={plan.brief.travellers!} selected={option.selected} selectionBusy={busy} onSelect={option.selected ? undefined : onSelect} decisionNote={note} />;
+    const to = picker.direction === 'outbound' ? plan.flight.destinationAirport : plan.flight.endDestinationAirport ?? plan.flight.originAirport;
+    return <LiveFlightCard offer={option.offer} direction={picker.direction} journeyLabel={picker.direction === 'return' && plan.brief.endIntent === 'continue_elsewhere' ? 'onward' : picker.direction} from={from} to={to} travellers={plan.brief.travellers!} selected={option.selected} selectionBusy={busy} onSelect={option.selected ? undefined : onSelect} decisionNote={note} />;
   }
   if (option.type === 'travel' && picker.kind === 'travel' && plan.travel) return <LiveTravelCard travel={plan.travel} direction={picker.direction} date={dateLabel(picker.direction === 'outbound' ? plan.days[0].date : plan.days.at(-1)!.date)} optionId={option.option.id} selected={option.selected} busy={busy} onSelect={option.selected ? undefined : onSelect} decisionNote={note} />;
   return null;

@@ -10,8 +10,13 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## Project continuation
 
-Read `PROJECT_CONTEXT.md` and the relevant sections of `IMPLEMENTATION_SPEC.md`.
+Read `AI_HANDOFF.md` first; it is the concise map of the current implementation and its
+known continuation risks. Read only the relevant sections of `IMPLEMENTATION_SPEC.md`
+before changing behavior. Read `PROJECT_CONTEXT.md` for product decisions or scope work,
+not for routine local implementation.
 
-Read `AI_HANDOFF.md` before changing existing behavior. Before product discovery, architecture work, or documentation changes, read `docs/agents/domain.md` for document ownership and conflict handling. Before working with specs or tickets, read `docs/agents/issue-tracker.md`.
+Before product discovery, architecture work, or documentation changes, read
+`docs/agents/domain.md` for document ownership and conflict handling. Before working
+with specs or tickets, read `docs/agents/issue-tracker.md`.
 
 Do not run automated browser tests unless the user explicitly asks for them.

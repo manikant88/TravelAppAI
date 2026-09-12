@@ -29,6 +29,7 @@ a commercial offer.
 
 ## Deferred scope
 
-Cross-midnight occupancy, overnight intercity journeys, overnight self-drive policy,
-provider-verified overnight activities, user-added items, and complete lock-aware
-recalculation are recorded in `issues/05-future-cross-midnight-and-user-options.md`.
+Complete night occupancy, provider-verified overnight activities, user-added items, and
+complete lock-aware recalculation are recorded in
+`issues/05-future-cross-midnight-and-user-options.md`. Safe multi-day road segmentation
+and independent later journey modes moved to `.scratch/multi-leg-road-journeys/`.

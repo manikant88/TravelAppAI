@@ -1,30 +1,28 @@
 import HomeGlobe, { type HomeMarket } from "@/ui/home-globe";
-import { travelInventorySeed } from "@/db/seed/data";
 
 export default function Home() {
-  const images = new Map(travelInventorySeed.imageAssets.map((asset) => [asset.key, asset.url]));
-  const locations = new Map(travelInventorySeed.locations.map((location) => [location.id, location]));
-  const markets: HomeMarket[] = travelInventorySeed.markets
-    .toSorted((left, right) => left.displayOrder - right.displayOrder)
-    .flatMap((market, index) => {
-      const location = locations.get(market.locationId);
-      if (!location || typeof location.latitudeE6 !== "number" || typeof location.longitudeE6 !== "number") return [];
-      const tags = (location.tags ?? []).filter((tag) => tag !== "origin_hub" && tag !== "multi_stop");
-      const country = location.parentId ? locations.get(location.parentId)?.name : undefined;
-      const slug = location.id.split(":")[1];
-      return [{
-        id: location.id,
-        name: location.name,
-        country: country ?? location.countryCode,
-        lat: location.latitudeE6 / 1_000_000,
-        lng: location.longitudeE6 / 1_000_000,
-        tags: tags.slice(0, 3),
-        imageUrl: location.imageAssetKey ? images.get(location.imageAssetKey) : images.get(`activity-${slug}-highlights`),
-        prompt: scenarioPrompt(location.name, tags, index),
-      }];
-    });
+  const markets: HomeMarket[] = destinationIdeas.map((market, index) => ({
+    ...market,
+    id: `destination:${market.name.toLocaleLowerCase("en").replaceAll(" ", "-")}`,
+    prompt: scenarioPrompt(market.name, market.tags, index),
+  }));
   return <HomeGlobe markets={markets} />;
 }
+
+const destinationIdeas: Array<Omit<HomeMarket, "id" | "prompt">> = [
+  { name: "Udaipur", country: "India", lat: 24.5854, lng: 73.7125, tags: ["lakes", "heritage", "food"] },
+  { name: "Darjeeling", country: "India", lat: 27.041, lng: 88.2663, tags: ["hills", "tea", "heritage"] },
+  { name: "Goa", country: "India", lat: 15.2993, lng: 74.124, tags: ["beaches", "food", "nightlife"] },
+  { name: "Kochi", country: "India", lat: 9.9312, lng: 76.2673, tags: ["coast", "culture", "food"] },
+  { name: "Jaipur", country: "India", lat: 26.9124, lng: 75.7873, tags: ["forts", "markets", "food"] },
+  { name: "Leh", country: "India", lat: 34.1526, lng: 77.5771, tags: ["mountains", "monasteries", "scenery"] },
+  { name: "Bangkok", country: "Thailand", lat: 13.7563, lng: 100.5018, tags: ["food", "markets", "culture"] },
+  { name: "Singapore", country: "Singapore", lat: 1.3521, lng: 103.8198, tags: ["food", "architecture", "family"] },
+  { name: "Dubai", country: "United Arab Emirates", lat: 25.2048, lng: 55.2708, tags: ["architecture", "shopping", "desert"] },
+  { name: "Bali", country: "Indonesia", lat: -8.4095, lng: 115.1889, tags: ["beaches", "temples", "wellness"] },
+  { name: "Rome", country: "Italy", lat: 41.9028, lng: 12.4964, tags: ["history", "food", "art"] },
+  { name: "Sydney", country: "Australia", lat: -33.8688, lng: 151.2093, tags: ["harbour", "beaches", "food"] },
+];
 
 function scenarioPrompt(name: string, tags: string[], index: number): string {
   const themes = tags.filter((tag) => !["origin_hub", "multi_stop"].includes(tag)).slice(0, 3).join(", ");
