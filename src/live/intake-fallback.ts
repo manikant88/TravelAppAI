@@ -14,6 +14,18 @@ export function deterministicBriefFallback(input: LiveRequest): LiveBrief | unde
     if (origin && origin !== brief.origin) { brief.origin = origin; changed = true; }
     if (destination && destination !== brief.destination) { brief.destination = destination; changed = true; }
   }
+  if (!route) {
+    const destination = /\b(?:planning|plan|considering)\s+(?:a|an|the)\s+([a-z][a-z .'-]{1,60}?)\s+trip\b/i.exec(text)?.[1]?.trim();
+    const origin = /\btrip\s+from\s+([^,.;]{2,60}?)(?=\s*(?:[,.]|$|\b(?:for|lasting|with)\b))/i.exec(text)?.[1]?.trim();
+    if (destination) {
+      recognized = true;
+      if (destination !== brief.destination) { brief.destination = destination; changed = true; }
+    }
+    if (origin) {
+      recognized = true;
+      if (origin !== brief.origin) { brief.origin = origin; changed = true; }
+    }
+  }
   const dates = explicitLiveDateRange(text);
   if (dates) {
     recognized = true;
@@ -24,8 +36,23 @@ export function deterministicBriefFallback(input: LiveRequest): LiveBrief | unde
       changed = true;
     }
   }
+  const durationDays = explicitTripDuration(text);
+  if (!dates && durationDays) {
+    recognized = true;
+    if (durationDays !== brief.days) {
+      brief.days = durationDays;
+      brief.nightsConfirmed = false;
+      changed = true;
+    }
+  }
   const count = travellerCount(text);
   if (count) { recognized = true; if (count !== brief.travellers) { brief.travellers = count; changed = true; } }
+  const budget = explicitBudget(text);
+  if (budget !== undefined) {
+    recognized = true;
+    const next = budget === null ? null : { amount: budget, currency: 'INR' as const, scope: 'total' as const };
+    if (JSON.stringify(next) !== JSON.stringify(brief.budget)) { brief.budget = next; changed = true; }
+  }
   const mode = explicitTravelMode(text);
   if (mode) { recognized = true; if (mode !== brief.travelMode) { brief.travelMode = mode; brief.roadTripConfirmed = false; changed = true; } }
   const pickup = explicitPickupLocation(text);
@@ -54,6 +81,35 @@ export function deterministicBriefFallback(input: LiveRequest): LiveBrief | unde
   return changed || recognized ? brief : undefined;
 }
 
+/**
+ * Repairs core facts that a schema-valid model response omitted even though the
+ * traveller stated them explicitly. Semantic preferences remain model-owned so
+ * words used in a question (for example, "when should I book flights?") are not
+ * mistaken for a selected travel mode.
+ */
+export function repairMissingExplicitCoreFacts(input: LiveRequest, extracted: LiveBrief): LiveBrief {
+  const explicit = deterministicBriefFallback(input);
+  if (!explicit) return extracted;
+  return {
+    ...extracted,
+    origin: extracted.origin ?? explicit.origin,
+    destination: extracted.destination ?? explicit.destination,
+    days: extracted.days ?? explicit.days,
+    travellers: extracted.travellers ?? explicit.travellers,
+  };
+}
+
+function explicitBudget(text: string): number | null | undefined {
+  if (/\b(?:remove|clear|no|without) (?:my |the )?(?:trip )?budget(?: limit)?\b/i.test(text)) return null;
+  const match = /(?:₹|\bINR\s*)\s*([\d,]+(?:\.\d+)?)\s*([kK]|(?:lakh|lac)s?)?\b/i.exec(text)
+    ?? /\b(?:total (?:trip )?budget|trip budget|budget(?: limit)?)(?:\s+(?:is|of|to))?\s*(?:₹|INR)?\s*([\d,]+(?:\.\d+)?)\s*([kK]|(?:lakh|lac)s?)?\b/i.exec(text);
+  if (!match) return undefined;
+  const base = Number(match[1].replaceAll(',', ''));
+  const multiplier = match[2]?.toLowerCase() === 'k' ? 1_000 : match[2] ? 100_000 : 1;
+  const amount = base * multiplier;
+  return Number.isFinite(amount) && amount > 0 && amount <= 100_000_000 ? amount : undefined;
+}
+
 function travellerCount(text: string) {
   const words: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
   const value = (raw: string) => Number(raw) || words[raw.toLowerCase()];
@@ -66,8 +122,19 @@ function travellerCount(text: string) {
     found = true;
   }
   if (found) return total;
-  if (/\bwith my (?:wife|husband|partner)\b/i.test(text)) return 2;
+  if (/\bwith my (?:wife|husband|partner)\b/i.test(text)
+    || /\b(?:me|i)\s+(?:and|&)\s+my (?:wife|husband|partner)\b/i.test(text)
+    || /\bmy (?:wife|husband|partner)\s+(?:and|&)\s+(?:me|i)\b/i.test(text)) return 2;
   return undefined;
+}
+
+function explicitTripDuration(text: string) {
+  const words: Record<string, number> = { two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14 };
+  const match = /\b(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen)[ -]days?\s+trip\b/i.exec(text)
+    ?? /\btrip\s+(?:for|lasting)\s+(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen)\s+days?\b/i.exec(text);
+  if (!match) return undefined;
+  const days = Number(match[1]) || words[match[1].toLowerCase()];
+  return days >= 2 && days <= 14 ? days : undefined;
 }
 
 function explicitTravelMode(text: string): LiveBrief['travelMode'] | undefined {

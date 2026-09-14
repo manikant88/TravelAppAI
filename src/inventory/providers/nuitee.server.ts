@@ -20,7 +20,7 @@ const rateSchema = z.object({
   boardName: z.string().optional(),
   retailRate: z.object({
     total: z.array(moneySchema).default([]),
-    taxesAndFees: z.array(z.object({ included: z.boolean().optional(), amount: z.number().optional(), currency: z.string().optional() }).passthrough()).optional(),
+    taxesAndFees: z.array(z.object({ included: z.boolean().optional(), amount: z.number().optional(), currency: z.string().optional() }).passthrough()).nullish(),
   }).passthrough(),
   cancellationPolicies: cancellationSchema.optional(),
   mappedRoomId: z.union([z.string(), z.number()]).optional(),

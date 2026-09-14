@@ -79,6 +79,14 @@ describe("Nuitée stay provider normalization", () => {
     expect(result.offers).toEqual([]);
   });
 
+  it("keeps a valid rate when Nuitée returns null tax details", () => {
+    const raw: unknown = response();
+    (raw as { data: Array<{ roomTypes: Array<{ rates: Array<{ retailRate: { taxesAndFees: null } }> }> }> }).data[0].roomTypes[0].rates[0].retailRate.taxesAndFees = null;
+    const result = normalizeNuiteeStayResponse(raw, request, "2026-09-06T16:00:00Z");
+    expect(result.offers).toHaveLength(1);
+    expect(result.offers[0].totalPrice).toEqual({ amount: 9_600, currency: "INR" });
+  });
+
   it("keeps a non-sandbox response explicitly live", () => {
     const raw = response();
     raw.sandbox = false;

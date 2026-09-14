@@ -4,16 +4,24 @@ import { stayOfferSchema, transportOfferSchema, type TransportOffer } from '@/in
 export const LIVE_TRIP_MIN_DAYS = 2;
 export const LIVE_TRIP_MAX_DAYS = 14;
 
+export const tripBudgetSchema = z.object({
+  amount: z.number().finite().positive().max(100_000_000),
+  currency: z.literal('INR'),
+  scope: z.literal('total'),
+}).strict();
+export type TripBudget = z.infer<typeof tripBudgetSchema>;
+
 export const liveBriefSchema = z.object({
   origin: z.string().max(120).nullable(), destination: z.string().max(120).nullable(),
   startDate: z.string().date().nullable(), days: z.number().int().min(LIVE_TRIP_MIN_DAYS).max(LIVE_TRIP_MAX_DAYS).nullable(),
   travellers: z.number().int().min(1).max(12).nullable(),
+  budget: tripBudgetSchema.nullable(),
   travelMode: z.enum(['self_drive', 'public_transit', 'flight', 'train', 'bus', 'cab', 'recommend']).nullable(),
   pickupLocation: z.string().max(240).nullable(),
-  endIntent: z.enum(['return_to_origin', 'end_at_destination', 'continue_elsewhere']).nullable().optional(),
-  onwardDestination: z.string().max(120).nullable().optional(),
-  endTravelMode: z.enum(['self_drive', 'public_transit', 'flight', 'train', 'bus', 'cab', 'recommend']).nullable().optional(),
-  roadTripConfirmed: z.boolean().optional(),
+  endIntent: z.enum(['return_to_origin', 'end_at_destination', 'continue_elsewhere']).nullable(),
+  onwardDestination: z.string().max(120).nullable(),
+  endTravelMode: z.enum(['self_drive', 'public_transit', 'flight', 'train', 'bus', 'cab', 'recommend']).nullable(),
+  roadTripConfirmed: z.boolean(),
   dietaryPreference: z.enum(['vegetarian', 'pure_vegetarian', 'non_vegetarian', 'both']).nullable(),
   dietaryNotes: z.string().max(500),
   dayRhythm: z.enum(['early_nights', 'evening_experiences', 'nightlife', 'overnight_adventure', 'flexible']).nullable(),
@@ -22,7 +30,16 @@ export const liveBriefSchema = z.object({
   constraints: z.array(z.string().max(200)).max(12),
 }).strict();
 export type LiveBrief = z.infer<typeof liveBriefSchema>;
-export const emptyLiveBrief: LiveBrief = { origin: null, destination: null, startDate: null, days: null, travellers: null, travelMode: null, pickupLocation: null, endIntent: null, onwardDestination: null, endTravelMode: null, roadTripConfirmed: false, dietaryPreference: null, dietaryNotes: '', dayRhythm: null, pace: null, nightsConfirmed: false, preferences: '', constraints: [] };
+export const emptyLiveBrief: LiveBrief = { origin: null, destination: null, startDate: null, days: null, travellers: null, budget: null, travelMode: null, pickupLocation: null, endIntent: null, onwardDestination: null, endTravelMode: null, roadTripConfirmed: false, dietaryPreference: null, dietaryNotes: '', dayRhythm: null, pace: null, nightsConfirmed: false, preferences: '', constraints: [] };
+export const provisionalDateGuidanceSchema = z.object({
+  status: z.literal('provisional'),
+  evidenceKind: z.literal('model_general_guidance'),
+  startDate: z.string().date(),
+  days: z.number().int().min(LIVE_TRIP_MIN_DAYS).max(LIVE_TRIP_MAX_DAYS),
+  summary: z.string().trim().min(1).max(500),
+  bookingGuidance: z.string().trim().min(1).max(300).nullable(),
+}).strict();
+export type ProvisionalDateGuidance = z.infer<typeof provisionalDateGuidanceSchema> & { endDate: string };
 export const liveRequestSchema = z.object({
   phase: z.literal('live'), message: z.string().trim().min(1).max(1200),
   brief: liveBriefSchema,
@@ -204,7 +221,7 @@ export type LivePlan = {
   scheduling?: { pace: 'relaxed' | 'balanced' | 'packed'; paceDefaulted: boolean; findings: ConstraintFinding[] };
   locks?: { hotel: boolean; outboundFlight: boolean; returnFlight: boolean; outboundTravel?: boolean; returnTravel?: boolean; activityIds?: string[]; mealKeys?: string[] };
 };
-export type LiveResponse = { kind: 'live'; brief: LiveBrief; message: string; plan?: LivePlan };
+export type LiveResponse = { kind: 'live'; brief: LiveBrief; message: string; plan?: LivePlan; dateGuidance?: ProvisionalDateGuidance };
 
 const liveLegSchema = z.union([
   z.object({ fromId: z.string(), toId: z.string(), checkedAt: z.string(), minutes: z.number().int().nonnegative(), meters: z.number().nonnegative().nullable(), path: z.array(z.object({ lat: z.number(), lng: z.number() }).strict()) }).strict(),

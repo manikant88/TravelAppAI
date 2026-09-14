@@ -3,7 +3,7 @@ import type { StayOffer, TransportOffer } from '@/inventory/contracts';
 import type { LiveBrief, LiveDay, LivePlace, LivePlan, LiveSelectionRequest, LiveTravelOption } from '@/live/contracts';
 
 const checkedAt = '2026-09-07T03:00:00.000Z';
-const brief: LiveBrief = { origin: 'Delhi', destination: 'Jaipur', startDate: '2027-09-08', days: 4, travellers: 2, travelMode: 'flight', pickupLocation: 'India Gate', endIntent: 'return_to_origin', onwardDestination: null, endTravelMode: 'flight', dietaryPreference: 'both', dietaryNotes: '', dayRhythm: null, pace: null, nightsConfirmed: true, preferences: '', constraints: [] };
+const brief: LiveBrief = { origin: 'Delhi', destination: 'Jaipur', startDate: '2027-09-08', days: 4, travellers: 2, budget: null, travelMode: 'flight', pickupLocation: 'India Gate', endIntent: 'return_to_origin', onwardDestination: null, endTravelMode: 'flight', roadTripConfirmed: false, dietaryPreference: 'both', dietaryNotes: '', dayRhythm: null, pace: null, nightsConfirmed: true, preferences: '', constraints: [] };
 
 function place(id: string, name: string, kind: 'hotel' | 'activity', index: number): LivePlace {
   return {

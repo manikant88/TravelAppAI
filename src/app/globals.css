@@ -139,6 +139,10 @@ h1, h2, h3, p { margin-top: 0; }
 .brief-setup-icon.has-issue { background: #fff5df; box-shadow: 0 0 0 9px rgb(198 129 0 / 8%); color: #a86800; }
 .brief-setup-workspace h2 { margin: 5px 0 8px; font: 800 25px/1.2 var(--heading); }
 .brief-setup-workspace > p:not(.eyebrow) { max-width: 510px; color: var(--muted); }
+.provisional-date-guidance { width: 100%; margin: 14px 0 4px; padding: 16px 18px; border: 1px solid #f0cf8a; border-radius: 12px; background: #fffaf0; color: #2f3a4c; display: grid; gap: 7px; text-align: left; }
+.provisional-date-guidance > strong { color: #9a5b00; }
+.provisional-date-guidance > span { line-height: 1.45; }
+.provisional-date-guidance > small { color: var(--muted); line-height: 1.45; }
 .brief-recovery-actions { display: grid; width: min(100%, 500px); margin-top: 20px; gap: 8px; text-align: left; }
 .brief-recovery-actions > small { color: var(--subtle); font-family: var(--heading); font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .brief-recovery-actions > div { display: grid; gap: 8px; }

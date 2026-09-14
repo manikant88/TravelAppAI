@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { emptyLiveBrief, isRenderableLivePlan, type LiveGenerationIssue, type LivePlan, type LiveRequest, type LiveDay, type LiveTravelOption, type LiveSelectionRequest, type LiveSelectionResponse } from '@/live/contracts';
+import { emptyLiveBrief, isRenderableLivePlan, type LiveGenerationIssue, type LivePlan, type LiveRequest, type LiveDay, type LiveTravelOption, type LiveSelectionRequest, type LiveSelectionResponse, type ProvisionalDateGuidance } from '@/live/contracts';
 import { requestLivePlan, requestLiveSelection } from './services/live-client';
 import { LiveMap } from './live-map';
 import { LivePlaceCard } from './live-place-card';
@@ -109,6 +109,7 @@ export default function LiveWorkspace({ initialPrompt = '', autoSubmitInitialPro
   const [text, setText] = useState(initialPrompt);
   const [plan, setPlan] = useState<LivePlan>();
   const [planningIssue, setPlanningIssue] = useState<LiveGenerationIssue>();
+  const [dateGuidance, setDateGuidance] = useState<ProvisionalDateGuidance>();
   const [planNeedsRefresh, setPlanNeedsRefresh] = useState(false);
   const [day, setDay] = useState(0);
   const [focus, setFocus] = useState('hotel');
@@ -185,6 +186,7 @@ export default function LiveWorkspace({ initialPrompt = '', autoSubmitInitialPro
       if (remainingPresentationTime > 0) await new Promise(resolve => window.setTimeout(resolve, remainingPresentationTime));
       if (current.signal.aborted) return;
       setBrief(result.brief);
+      setDateGuidance(result.dateGuidance);
       setBriefInterpreted(true);
       if (result.plan && isRenderableLivePlan(result.plan)) {
         setPlan(result.plan); setPlanningIssue(undefined); setPlanNeedsRefresh(false); setDay(0); setEstimates({}); setLastImpact(undefined);
@@ -318,7 +320,7 @@ export default function LiveWorkspace({ initialPrompt = '', autoSubmitInitialPro
       <section className="live-results" ref={results} aria-label={plan ? 'Live itinerary' : 'Trip setup'}>
         {briefInterpreted ? <LiveTripBriefBar key={JSON.stringify(brief)} brief={brief} busy={busy} editing={editingFact} onEditingChange={setEditingFact} onSubmit={message => void sendMessage(message)} onPrefill={message => { setText(message); requestAnimationFrame(() => composer.current?.focus()); }} /> : null}
         {!plan && busy ? <section className="planning-state"><PlanningAnimation phase={planningPhase(progress, elapsed)} origin={brief.origin} status={progress || 'Understanding the places, dates, travellers, and preferences you shared'} /><div className="planning-meta"><span className="live-dot" />Working for {elapsed}s</div></section> : null}
-        {!plan && !busy && briefInterpreted ? <LiveTripEssentials brief={brief} busy={busy} planningIssue={planningIssue} onEdit={editBrief} onSubmit={message => void sendMessage(message)} onLocate={locatePickup} /> : null}
+        {!plan && !busy && briefInterpreted ? <LiveTripEssentials brief={brief} busy={busy} planningIssue={planningIssue} dateGuidance={dateGuidance} onEdit={editBrief} onSubmit={message => void sendMessage(message)} onLocate={locatePickup} /> : null}
         {!plan && !busy && !briefInterpreted ? <div className="live-empty"><span className="eyebrow">{messages.length ? 'TRY AGAIN' : 'YOUR NEXT ADVENTURE'}</span><h2>{messages.length ? 'Planning couldn’t start this time.' : <>Start with an idea.<br />Make it a trip.</>}</h2><p>{messages.length ? 'Your request is still in chat and the composer. Retry it when ready; no Trip Brief details were changed.' : 'Share a destination, dates, and who is coming. The planner will interpret your message before showing any Trip Brief fields.'}</p></div> : null}
         {plan && <>
           <header className="live-trip-heading"><div><p className="eyebrow">YOUR TRIP</p><h2>{plan.brief.destination}</h2><p>From {plan.brief.origin} · {dateLabel(plan.brief.startDate!)} – {dateLabel(plan.days.at(-1)!.date)} · {plan.brief.travellers} travellers · {destinationStayNights} destination night{destinationStayNights === 1 ? '' : 's'} · {plan.scheduling?.pace ?? 'balanced'} pace{plan.scheduling?.paceDefaulted ? ' (default)' : ''}</p></div><Badge tone="warning">{planNeedsRefresh ? 'Previous plan' : 'Provisional plan'}</Badge></header>

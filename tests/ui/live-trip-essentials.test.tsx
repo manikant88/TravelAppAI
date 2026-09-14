@@ -20,7 +20,7 @@ const waitingForTravel: LiveBrief = {
 describe('live Trip Essentials', () => {
   it('renders only pending requirements', () => {
     const markup = renderToStaticMarkup(<LiveTripEssentials brief={waitingForTravel} busy={false} onEdit={vi.fn()} onSubmit={vi.fn()} />);
-    expect(markup).toContain('Travel preference');
+    expect(markup).not.toContain('Travel preference');
     expect(markup).not.toContain('Starting city');
     expect(markup).not.toContain('Destination or recommendations');
     expect(markup).not.toContain('Travel dates and hotel nights');
@@ -28,7 +28,7 @@ describe('live Trip Essentials', () => {
   });
 
   it('stages recommendation chips for one combined update', () => {
-    const markup = renderToStaticMarkup(<LiveTripEssentials brief={waitingForTravel} busy={false} onEdit={vi.fn()} onSubmit={vi.fn()} />);
+    const markup = renderToStaticMarkup(<LiveTripEssentials brief={{ ...waitingForTravel, travellers: null }} busy={false} onEdit={vi.fn()} onSubmit={vi.fn()} />);
     expect(markup).toContain('Apply answers');
     expect(markup).toContain('aria-pressed="false"');
     expect(markup).toContain('Choose all the answers you want to add');
@@ -42,16 +42,29 @@ describe('live Trip Essentials', () => {
     expect(stagedEssentialAnswerCount(answers)).toBe(1);
   });
 
+  it('labels seasonal guidance as provisional and offers its exact range as an answer', () => {
+    const markup = renderToStaticMarkup(<LiveTripEssentials
+      brief={{ ...waitingForTravel, startDate: null, nightsConfirmed: false }}
+      busy={false}
+      dateGuidance={{ status: 'provisional', evidenceKind: 'model_general_guidance', startDate: '2027-03-22', endDate: '2027-03-28', days: 7, summary: 'Late March is generally suitable for this trip.', bookingGuidance: 'Check live fares before deciding when to book.' }}
+      onEdit={() => undefined}
+      onSubmit={() => undefined}
+    />);
+    expect(markup).toContain('Provisional seasonal guidance');
+    expect(markup).toContain('Current weather, prices, availability, events and closures have not been verified');
+    expect(markup).toContain('Use 22 Mar–28 Mar');
+    expect(markup).toContain('Check live fares before deciding when to book.');
+  });
+
   it('uses staged choices to reveal dependent essentials before applying', () => {
-    let answers = stageEssentialAnswer({}, 'transport', { label:'Flight', message:'I prefer to fly.', patch:{ travelMode:'flight' } });
-    answers = stageEssentialAnswer(answers, 'trip_end', { label:'Return to Delhi', message:'I want to return to Delhi after Darjeeling.', patch:{ endIntent:'return_to_origin' } });
-    const effective = Object.values(answers).reduce<LiveBrief>((current, answer) => ({...current,...answer?.patch}), {...waitingForTravel,travelMode:null,endIntent:null,endTravelMode:null});
+    const answers = stageEssentialAnswer({}, 'transport', { label:'Flight', message:'I prefer to fly.', patch:{ travelMode:'flight' } });
+    const effective = Object.values(answers).reduce<LiveBrief>((current, answer) => ({...current,...answer?.patch}), {...waitingForTravel,travelMode:null});
     expect(effective).toMatchObject({ travelMode:'flight',endIntent:'return_to_origin' });
   });
 
-  it('highlights Preferences when travel is still pending', () => {
+  it('does not highlight Preferences when automatic travel recommendation is available', () => {
     const markup = renderToStaticMarkup(<LiveTripBriefBar brief={waitingForTravel} busy={false} onEditingChange={vi.fn()} onSubmit={vi.fn()} onPrefill={vi.fn()} />);
-    expect(markup).toMatch(/class="trip-fact trip-fact-empty essential-missing"[^>]*><span>Preferences<\/span>/);
+    expect(markup).not.toMatch(/class="trip-fact trip-fact-empty essential-missing"[^>]*><span>Preferences<\/span>/);
     expect(markup).not.toMatch(/essential-missing[^>]*><span>From city<\/span>/);
   });
 
@@ -84,7 +97,7 @@ describe('live Trip Essentials', () => {
     expect(markup).toContain('Add 1 day · until 14 Oct');
     expect(markup).not.toContain('Build my trip');
     const recovery = livePlanningRecoveryActions({ code: 'road_infeasible', message: 'Too far.', journey: 'outbound', minimumTripDays: 6, suggestedTravelModes: ['flight', 'train', 'recommend'] }, readyBrief);
-    expect(recovery.map(action => action.label)).toEqual(['Optional: reconsider the long road journey', 'Extend the trip to fit the journey']);
+    expect(recovery.map(action => action.label)).toEqual(['Choose a practical travel mode', 'Extend the trip to fit the journey']);
     expect(recovery[0].options.map(option => option.label)).toEqual(['Fly outbound instead', 'Take a train outbound', 'Let the planner choose faster travel']);
   });
 
@@ -98,7 +111,7 @@ describe('live Trip Essentials', () => {
       journey: 'outbound',
       suggestedTravelModes: ['flight'],
     }, readyBrief);
-    expect(deterministic.map(action => action.label)).toEqual(['Optional: reconsider the long road journey', 'Extend the trip to fit the journey']);
+    expect(deterministic.map(action => action.label)).toEqual(['Reconsider the long road journey', 'Extend the trip to fit the journey']);
     expect(deterministic.some(action => action.label.toLowerCase().includes('try again'))).toBe(false);
 
     const transient = livePlanningRecoveryActions({ code: 'no_stays', message: 'Stay search timed out.', retryable: true }, readyBrief);
@@ -109,16 +122,14 @@ describe('live Trip Essentials', () => {
   it('stages recovery chips and omits date extensions at the planning limit', () => {
     const maxLengthBrief = { ...waitingForTravel, days: 14, travelMode: 'cab' as const, pickupLocation: 'Delhi city centre' };
     const actions = livePlanningRecoveryActions({ code: 'no_activities', message: 'Activity search timed out.', retryable: true }, maxLengthBrief);
-    expect(actions.map(action => action.label)).toEqual(['Optional: reconsider the long road journey', 'Broaden the activity mix', 'Choose another destination', 'Retry the activity search']);
+    expect(actions.map(action => action.label)).toEqual(['Retry the activity search']);
     expect(actions.some(action => action.label.includes('time'))).toBe(false);
     const markup = renderToStaticMarkup(<LiveTripEssentials brief={maxLengthBrief} busy={false} planningIssue={{ code: 'no_activities', message: 'Activity search timed out.', retryable: true }} onEdit={vi.fn()} onSubmit={vi.fn()} />);
-    expect(markup).toContain('Nature &amp; viewpoints');
+    expect(markup).not.toContain('Nature &amp; viewpoints');
     expect(markup).toContain('Search for activities again');
     expect(markup).toContain('Apply answers');
 
-    let selected = stageRecoveryAnswer({}, 'Broaden the activity mix', actions[1].options[0]);
-    selected = stageRecoveryAnswer(selected, 'Retry the activity search', actions[3].options[0]);
-    expect(batchRecoveryAnswerMessage(selected)).toContain('Add nature and viewpoints');
+    const selected = stageRecoveryAnswer({}, 'Retry the activity search', actions[0].options[0]);
     expect(batchRecoveryAnswerMessage(selected)).toContain('Repeat the live searches');
   });
 
@@ -134,7 +145,8 @@ describe('live Trip Essentials', () => {
     const readyBrief = { ...waitingForTravel, travelMode: 'public_transit' as const };
     const markup = renderToStaticMarkup(<LiveTripEssentials brief={readyBrief} busy={false} onEdit={vi.fn()} onSubmit={vi.fn()} />);
     expect(markup).not.toContain('Build my trip');
-    expect(markup).toContain('Preparing your itinerary');
+    expect(markup).not.toContain('Preparing your itinerary');
+    expect(markup).toBe('');
   });
 
   it('turns an approved browser location into an explicit pickup answer', () => {

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { addCalendarDays } from '@/domain/dates';
-import { LIVE_TRIP_MAX_DAYS, LIVE_TRIP_MIN_DAYS, liveBriefSchema, type LiveBrief, type LiveGenerationIssue, type LiveRequest, type LiveResponse, type LivePlan, type LivePlace, type LiveRoadJourneyPlan, type LiveTravelOption } from './contracts';
+import { LIVE_TRIP_MAX_DAYS, LIVE_TRIP_MIN_DAYS, liveBriefSchema, provisionalDateGuidanceSchema, type LiveBrief, type LiveGenerationIssue, type LiveRequest, type LiveResponse, type LivePlan, type LivePlace, type LiveRoadJourneyPlan, type LiveTravelOption } from './contracts';
 import type { LiveProvider } from './google.server';
 import type { StayProvider, SupplierStaySearchResult } from '@/inventory/providers/stay-provider';
 import type { StayOffer } from '@/inventory/contracts';
@@ -8,34 +8,50 @@ import { hoursValidationNote, regularHoursStatus, validateRegularHoursInterval }
 import { dayStops, localClockMinutes, projectLiveDay, travelOptionInstant } from './timeline';
 import type { FlightHub, FlightProvider } from '@/transport/providers/nuitee-flight.server';
 import { allocateActivities, mealDuration, mealWindow, prepareDaySchedule, reflowAndAssessDay, resolvedPace, targetActivityCount, type DayBounds } from './scheduler';
-import { missingLiveEssential } from './essentials';
+import { applyLivePlanningDefaults, missingLiveEssential } from './essentials';
 import { assessRoadJourneyPair, attachTransitStays, buildRoadJourneyPlan } from './road-journey';
 import { explicitLiveDateRange } from './explicit-dates';
-import { routeSearchProfiles, selectRecommendedFlight } from './travel-policy';
-import { deterministicBriefFallback } from './intake-fallback';
+import { routeSearchProfiles, scheduleFriendlyFlights, selectRecommendedFlight } from './travel-policy';
+import { deterministicBriefFallback, repairMissingExplicitCoreFacts } from './intake-fallback';
+import { flightCandidate, routeCandidate, selectBudgetAwareHotel, selectJourneyRecommendation, type JourneyRecommendation } from './recommendation-policy';
+import { isLiveSearchRetryRequest } from './recovery-intent';
+import { provisionalDateGuidanceMessage, validateProvisionalDateGuidance, type ModelDateGuidance } from './date-guidance';
 
 export { deterministicBriefFallback } from './intake-fallback';
 
-export const extractionSchema = z.object({ brief: liveBriefSchema, question: z.string().max(500).nullable() }).strict();
+export const extractionSchema = z.object({
+  brief: liveBriefSchema,
+  question: z.string().max(500).nullable(),
+  dateGuidance: provisionalDateGuidanceSchema.nullable(),
+}).strict();
 export const selectionSchema = z.object({
   hotelId: z.string(),
   visits: z.array(z.object({ placeId: z.string(), day: z.number().int().min(1).max(LIVE_TRIP_MAX_DAYS), durationMinutes: z.number().int().min(30).max(180) }).strict()).max(LIVE_TRIP_MAX_DAYS * 4),
 }).strict();
 export interface LiveModel {
-  extract(input: LiveRequest): Promise<z.infer<typeof extractionSchema>>;
+  extract(input: LiveRequest): Promise<{ brief: LiveBrief; question: string | null; dateGuidance?: ModelDateGuidance | null }>;
   select(brief: z.infer<typeof liveBriefSchema>, hotels: LivePlace[], activities: LivePlace[]): Promise<z.infer<typeof selectionSchema>>;
 }
 export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; provider: LiveProvider; stayProvider?: StayProvider; flightProvider?: FlightProvider; signal: AbortSignal; progress?: (message: string) => void; today?: string; guestNationality?: string }): Promise<LiveResponse> {
   const emit = deps.progress ?? (() => {});
   emit('Understanding where you want to go and what matters to you…');
   let extracted: z.infer<typeof extractionSchema>;
-  try { extracted = extractionSchema.parse(await deps.model.extract(input)); }
-  catch (error) {
-    const fallback = deterministicBriefFallback(input);
-    if (!fallback) throw error;
-    extracted = { brief: fallback, question: null };
+  if (isLiveSearchRetryRequest(input.message)) {
+    extracted = { brief: { ...input.brief }, question: null, dateGuidance: null };
+  } else {
+    try {
+      const modelExtraction = await deps.model.extract(input);
+      extracted = extractionSchema.parse({ ...modelExtraction, dateGuidance: modelExtraction.dateGuidance ?? null });
+      extracted.brief = repairMissingExplicitCoreFacts(input, extracted.brief);
+    }
+    catch (error) {
+      const fallback = deterministicBriefFallback(input);
+      if (!fallback) throw error;
+      extracted = { brief: fallback, question: null, dateGuidance: null };
+    }
   }
-  const { brief, question } = extracted;
+  let { brief } = extracted;
+  const { question } = extracted;
   const today = deps.today ?? new Date().toISOString().slice(0, 10);
   // A schema-valid date is not evidence that the user supplied that year.
   const userText = [...input.history.filter(m => m.role === 'user').map(m => m.text), input.message].join(' ');
@@ -50,8 +66,17 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
     brief.startDate = null;
     brief.nightsConfirmed = false;
   }
+  brief = applyLivePlanningDefaults(brief);
   const missing = missingLiveEssential(brief, { today, modelQuestion: question, flightConfigured: Boolean(deps.flightProvider) });
-  if (missing) return { kind: 'live', brief, message: missing };
+  if (missing) {
+    const dateGuidance = validateProvisionalDateGuidance(extracted.dateGuidance, brief, today);
+    return {
+      kind: 'live',
+      brief,
+      message: dateGuidance && !brief.startDate ? provisionalDateGuidanceMessage(dateGuidance) : missing,
+      dateGuidance,
+    };
+  }
   deps.signal.throwIfAborted();
   emit('Looking for stays, activities, restaurants and evening options…');
   let supplierStaySearch: SupplierStaySearchResult | undefined;
@@ -109,14 +134,15 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
   };
   if (!hotels.length || !planningActivities.length) {
     const missingSearchIndex = !hotels.length ? 0 : 1;
-    const retryable = searches[missingSearchIndex].status === 'rejected';
-    const message = partialPlanMessage(plan, retryable);
+    const failedSearch = searches[missingSearchIndex].status === 'rejected' ? searches[missingSearchIndex].reason : undefined;
+    const retryable = failedSearch !== undefined;
+    const message = partialPlanMessage(plan, retryable, failedSearch);
     plan.generationIssue = {
       code: !hotels.length ? 'no_stays' : 'no_activities',
       message,
       retryable,
       cause: retryable
-        ? `${!hotels.length ? 'The stay' : 'The activity'} search did not finish, so another search may return results.`
+        ? searchFailureCause(failedSearch, !hotels.length ? 'The stay search did not finish.' : 'The activity search did not finish after two attempts.')
         : `${!hotels.length ? 'The stay' : 'The activity'} search completed without enough usable results for these dates.`,
     };
     return { kind: 'live', brief, plan, message };
@@ -142,6 +168,16 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
     return { kind: 'live', brief, plan, message };
   }
   if (fallbackReason) plan.warnings.push(fallbackReason);
+  const budgetHotel = selectBudgetAwareHotel(hotel, hotels, brief.budget);
+  if (budgetHotel.id !== hotel.id) {
+    const selectedTotal = budgetHotel.stayOffer?.totalPrice;
+    const budget = brief.budget!;
+    const fitsAllocation = Boolean(selectedTotal && selectedTotal.currency === budget.currency && selectedTotal.amount <= budget.amount * 0.6);
+    plan.warnings.push(fitsAllocation
+      ? `${budgetHotel.name} was preferred over the initial stay choice because its verified stay total fits the planning allocation for your ₹${budget.amount.toLocaleString('en-IN')} budget.`
+      : `${budgetHotel.name} was preferred because it has the lowest comparable verified stay total returned, although it still exceeds the stay allocation within your ₹${budget.amount.toLocaleString('en-IN')} budget.`);
+    hotel = budgetHotel;
+  }
   plan.selectedHotelId = hotel.id;
   emit(brief.travelMode === 'flight' ? 'Comparing flights and the transfers around each requested airport…' : `Comparing ${travelModeDescription(brief.travelMode!)} options for each requested journey…`);
   let resolvedRouteOrigin: LivePlace | undefined;
@@ -224,8 +260,8 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
       const endResults = endMode && endMode !== 'flight'
         ? await Promise.allSettled(routeSearchProfiles(endMode).map(request => deps.provider.travelRoutes(hotel, endDestination, { direction: 'return', departureTime: endDeparture, ...request })))
         : [];
-      const outbound = outboundResults.flatMap(result => result.status === 'fulfilled' ? result.value : []).sort(recommendedRouteComparator(brief, brief.travelMode!));
-      const returning = endResults.flatMap(result => result.status === 'fulfilled' ? result.value : []).sort(recommendedRouteComparator(brief, endMode ?? brief.travelMode!));
+      const outbound = dedupeTravelOptions(outboundResults.flatMap(result => result.status === 'fulfilled' ? result.value : [])).sort(recommendedRouteComparator(brief, brief.travelMode!));
+      const returning = dedupeTravelOptions(endResults.flatMap(result => result.status === 'fulfilled' ? result.value : [])).sort(recommendedRouteComparator(brief, endMode ?? brief.travelMode!));
       plan.travel = {
         origin,
         destination: hotel,
@@ -244,13 +280,109 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
         endIntent: brief.endIntent ?? undefined,
         endDestination: brief.endIntent === 'end_at_destination' ? hotel : endDestination,
       };
-      const outboundRoad = outbound[0] ? buildRoadJourneyPlan({ option: outbound[0], date: brief.startDate!, tripDays: brief.days! }) : undefined;
-      const provisionalEndRoad = returning[0]?.mode === 'drive' && returning[0].roadUse
-        ? buildRoadJourneyPlan({ option: returning[0], date: addCalendarDays(returnDate, 1 - Math.ceil(returning[0].minutes / (returning[0].roadUse === 'self_drive' ? 480 : 600))), tripDays: brief.days! })
+
+      if (brief.travelMode === 'recommend') {
+        const stayTotal = hotel.stayOffer?.totalPrice;
+        const stayCost = stayTotal && brief.budget && stayTotal.currency === brief.budget.currency ? stayTotal.amount : 0;
+        const journeyCount = brief.endIntent === 'end_at_destination' ? 1 : 2;
+        const perJourneyBudget = brief.budget ? { amount: Math.max(0, brief.budget.amount - stayCost) / journeyCount, currency: brief.budget.currency } : null;
+        const outboundRecommendation = selectJourneyRecommendation(outbound.map(option => routeCandidate(option, brief.travellers!)), perJourneyBudget);
+        const returnRecommendation = brief.endIntent === 'end_at_destination' ? undefined : selectJourneyRecommendation(returning.map(option => routeCandidate(option, brief.travellers!)), perJourneyBudget);
+        plan.travel.suggestedOutboundId = outboundRecommendation?.id ?? null;
+        plan.travel.suggestedReturnId = returnRecommendation?.id ?? null;
+        plan.travel.selectionReason = automaticTravelSelectionReason(brief, outboundRecommendation, returnRecommendation, Boolean(hotel.stayOffer?.totalPrice));
+      }
+
+      if (brief.travelMode === 'recommend' && deps.flightProvider && destinationCity && origin.utcOffsetMinutes !== undefined && destinationCity.utcOffsetMinutes !== undefined) {
+        try {
+          const flightSearch = await deps.flightProvider.search({
+            origin: { lat: origin.lat, lng: origin.lng, utcOffsetMinutes: origin.utcOffsetMinutes },
+            destination: { lat: destinationCity.lat, lng: destinationCity.lng, utcOffsetMinutes: destinationCity.utcOffsetMinutes },
+            departureDate: brief.startDate!, returnDate, travellers: brief.travellers!, currency: 'INR', country: deps.guestNationality ?? 'IN',
+          });
+          warnings.push(...flightSearch.warnings.map(value => `Flight comparison: ${value}`));
+          const originAirport = flightHubToLivePlace(flightSearch.originHub, origin.utcOffsetMinutes, flightSearch.checkedAt);
+          const destinationAirport = flightHubToLivePlace(flightSearch.destinationHub, destinationCity.utcOffsetMinutes, flightSearch.checkedAt);
+          const outboundFlights = scheduleFriendlyFlights(flightSearch.outbound, 'outbound');
+          let endOffers = brief.endIntent === 'return_to_origin' && endMode === 'recommend' ? flightSearch.returning : [];
+          let returnFlights = brief.endIntent === 'return_to_origin' && endMode === 'recommend' ? scheduleFriendlyFlights(endOffers, 'return') : [];
+          let endDestinationAirport = brief.endIntent === 'return_to_origin' ? originAirport : undefined;
+          if (brief.endIntent === 'continue_elsewhere' && endMode === 'recommend' && endDestination.utcOffsetMinutes !== undefined) {
+            try {
+              const onwardSearch = await deps.flightProvider.search({
+                origin: { lat: destinationCity.lat, lng: destinationCity.lng, utcOffsetMinutes: destinationCity.utcOffsetMinutes },
+                destination: { lat: endDestination.lat, lng: endDestination.lng, utcOffsetMinutes: endDestination.utcOffsetMinutes },
+                departureDate: returnDate, returnDate: addCalendarDays(returnDate, 1), travellers: brief.travellers!, currency: 'INR', country: deps.guestNationality ?? 'IN',
+              });
+              warnings.push(...onwardSearch.warnings.map(value => `Onward flight comparison: ${value}`));
+              endOffers = onwardSearch.outbound;
+              returnFlights = scheduleFriendlyFlights(endOffers, 'return');
+              endDestinationAirport = flightHubToLivePlace(onwardSearch.destinationHub, endDestination.utcOffsetMinutes, onwardSearch.checkedAt);
+            } catch (error) {
+              const detail = error instanceof Error && error.message.trim() ? `: ${error.message.trim()}` : '';
+              warnings.push(`The onward flight comparison was unavailable${detail}. That journey uses the train, bus and cab evidence that was returned.`);
+            }
+          }
+          const representativeOutbound = outboundFlights[0];
+          const representativeReturn = returnFlights[0];
+          const transfers = await Promise.allSettled([
+            representativeOutbound ? deps.provider.travelRoutes(origin, originAirport, { direction: 'outbound', mode: 'drive', departureTime: minutesBefore(representativeOutbound.departureAt, 180) }) : Promise.resolve([]),
+            representativeOutbound ? deps.provider.travelRoutes(destinationAirport, hotel, { direction: 'outbound', mode: 'drive', departureTime: representativeOutbound.arrivalAt }) : Promise.resolve([]),
+            representativeReturn ? deps.provider.travelRoutes(hotel, destinationAirport, { direction: 'return', mode: 'drive', departureTime: minutesBefore(representativeReturn.departureAt, 180) }) : Promise.resolve([]),
+            representativeReturn && endDestinationAirport ? deps.provider.travelRoutes(endDestinationAirport, endDestination, { direction: 'return', mode: 'drive', departureTime: representativeReturn.arrivalAt }) : Promise.resolve([]),
+          ]);
+          const transfer = (index: number) => transfers[index].status === 'fulfilled' ? transfers[index].value.sort((a, b) => a.minutes - b.minutes)[0] : undefined;
+          plan.flight = {
+            origin, destination: hotel, originAirport, destinationAirport,
+            outbound: flightSearch.outbound,
+            return: endOffers,
+            suggestedOutboundId: null, suggestedReturnId: null,
+            outboundFirstMile: transfer(0), outboundLastMile: transfer(1), returnFirstMile: transfer(2), returnLastMile: transfer(3),
+            endIntent: brief.endIntent ?? undefined,
+            endDestination: brief.endIntent === 'end_at_destination' ? hotel : endDestination,
+            endDestinationAirport,
+            assumptions: [
+              'Flights were compared with train, bus and cab evidence using door-to-door journey time.',
+              'Airport arrival buffers are planning assumptions: 120 minutes before each flight.',
+              `${flightSearch.environment === 'sandbox' ? 'Sandbox' : 'Live'} fares expire and must be refreshed before selection or booking.`,
+            ],
+          };
+
+          const stayTotal = hotel.stayOffer?.totalPrice;
+          const stayCost = stayTotal && brief.budget && stayTotal.currency === brief.budget.currency ? stayTotal.amount : 0;
+          const journeyCount = brief.endIntent === 'end_at_destination' ? 1 : 2;
+          const perJourneyBudget = brief.budget ? { amount: Math.max(0, brief.budget.amount - stayCost) / journeyCount, currency: brief.budget.currency } : null;
+          const outboundTransferMinutes = (transfer(0)?.minutes ?? 0) + (transfer(1)?.minutes ?? 0);
+          const outboundRecommendation = selectJourneyRecommendation([
+            ...outbound.map(option => routeCandidate(option, brief.travellers!)),
+            ...outboundFlights.map(offer => flightCandidate(offer, brief.travellers!, outboundTransferMinutes)),
+          ], perJourneyBudget);
+          const returnTransferMinutes = (transfer(2)?.minutes ?? 0) + (transfer(3)?.minutes ?? 0);
+          const returnRecommendation = brief.endIntent !== 'end_at_destination' ? selectJourneyRecommendation([
+            ...returning.map(option => routeCandidate(option, brief.travellers!)),
+            ...returnFlights.map(offer => flightCandidate(offer, brief.travellers!, returnTransferMinutes)),
+          ], perJourneyBudget) : undefined;
+          plan.travel.suggestedOutboundId = outboundRecommendation?.kind === 'route' ? outboundRecommendation.id : null;
+          plan.travel.suggestedReturnId = returnRecommendation?.kind === 'route' ? returnRecommendation.id : null;
+          plan.flight.suggestedOutboundId = outboundRecommendation?.kind === 'flight' ? outboundRecommendation.id : null;
+          plan.flight.suggestedReturnId = returnRecommendation?.kind === 'flight' ? returnRecommendation.id : null;
+          plan.travel.selectionReason = automaticTravelSelectionReason(brief, outboundRecommendation, returnRecommendation, Boolean(hotel.stayOffer?.totalPrice));
+          if (transfers.some(result => result.status === 'rejected')) warnings.push('One or more airport transfer estimates failed; the affected flight comparison excludes that missing transfer time.');
+        } catch (error) {
+          const detail = error instanceof Error && error.message.trim() ? `: ${error.message.trim()}` : '';
+          warnings.push(`Flight comparison was unavailable${detail}. The recommendation uses the train, bus and cab evidence that was returned.`);
+        }
+      }
+
+      const selectedOutboundRoute = outbound.find(option => option.id === plan.travel?.suggestedOutboundId);
+      const selectedReturnRoute = returning.find(option => option.id === plan.travel?.suggestedReturnId);
+      const outboundRoad = selectedOutboundRoute ? buildRoadJourneyPlan({ option: selectedOutboundRoute, date: brief.startDate!, tripDays: brief.days! }) : undefined;
+      const provisionalEndRoad = selectedReturnRoute?.mode === 'drive' && selectedReturnRoute.roadUse
+        ? buildRoadJourneyPlan({ option: selectedReturnRoute, date: addCalendarDays(returnDate, 1 - Math.ceil(selectedReturnRoute.minutes / (selectedReturnRoute.roadUse === 'self_drive' ? 480 : 600))), tripDays: brief.days! })
         : undefined;
       const assessed = assessRoadJourneyPair(outboundRoad, provisionalEndRoad, brief.days!);
-      plan.travel.outboundRoadPlan = await attachTransitStays(assessed.outbound, outbound[0], deps.provider, transitStaySupplier(deps, brief.travellers!));
-      plan.travel.endRoadPlan = await attachTransitStays(assessed.end, returning[0], deps.provider, transitStaySupplier(deps, brief.travellers!));
+      plan.travel.outboundRoadPlan = await attachTransitStays(assessed.outbound, selectedOutboundRoute, deps.provider, transitStaySupplier(deps, brief.travellers!));
+      plan.travel.endRoadPlan = await attachTransitStays(assessed.end, selectedReturnRoute, deps.provider, transitStaySupplier(deps, brief.travellers!));
       const unresolvedTransitNights = [plan.travel.outboundRoadPlan, plan.travel.endRoadPlan].flatMap(road => road?.segments.filter(segment => segment.overnightRestMinutes && !segment.transitStay) ?? []).length;
       if (unresolvedTransitNights) warnings.push(`${unresolvedTransitNights} road-journey overnight rest stop${unresolvedTransitNights === 1 ? '' : 's'} still need a dated stay and availability check.`);
       if (assessed.status === 'not_feasible' && (assessed.outbound || assessed.end)) {
@@ -292,7 +424,10 @@ export async function runLivePlan(input: LiveRequest, deps: { model: LiveModel; 
   if (infeasibleRoad) {
     plan.selectedHotelId = null;
     plan.days.forEach(day => { day.visits = []; day.meals = []; day.legs = []; day.availableStartMinutes = null; day.availableEndMinutes = null; });
-    const message = `${infeasibleRoad.message} These dates do not leave enough time for a destination itinerary. Extend the trip, choose a faster mode, or tell me you want to plan it mainly as a road trip.`;
+    const combinedRoadDays = brief.days! - infeasibleRoad.destinationDaysRemaining;
+    const message = brief.travelMode === 'recommend'
+      ? `I couldn’t find a practical recommended journey within these dates. The available ${infeasibleRoad.roadUse === 'cab' ? 'cab route' : 'self-drive route'} safely needs about ${combinedRoadDays} travel days, leaving no usable day at ${brief.destination}, and no usable faster option was returned. Choose flight, train or bus to search that mode directly, or extend the trip if the road journey is intentional.`
+      : `${infeasibleRoad.message} These dates do not leave enough time for a destination itinerary. Extend the trip, choose a faster mode, or tell me you want to plan it mainly as a road trip.`;
     plan.generationIssue = roadGenerationIssue(plan, 'road_infeasible', message, infeasibleRoad);
     return { kind: 'live', brief, plan, message };
   }
@@ -437,7 +572,8 @@ function validatePlaceSelection(selection: z.infer<typeof selectionSchema>, brie
   return valid ? hotel : undefined;
 }
 
-function partialPlanMessage(plan: LivePlan, retryable: boolean) {
+function partialPlanMessage(plan: LivePlan, retryable: boolean, failedSearch?: unknown) {
+  const activityRetried = failedSearch instanceof ActivityDiscoveryError;
   if (!plan.hotels.length && !plan.activityOptions?.length) return retryable
     ? `The live searches for ${plan.brief.destination} did not finish, so I don’t have enough verified stays and activities to build the trip. You can retry those searches without changing the Trip Brief.`
     : `The searches completed, but I couldn’t find enough usable stays and activities in ${plan.brief.destination} for these dates. Try dates with more availability or choose another destination.`;
@@ -445,7 +581,7 @@ function partialPlanMessage(plan: LivePlan, retryable: boolean) {
     ? `I found activities in ${plan.brief.destination}, but the stay search did not finish. Retry the stay search before changing the trip.`
     : `I found activities in ${plan.brief.destination}, but no usable stay for these dates. Try dates with more availability or choose another destination.`;
   return retryable
-    ? `I found places to stay in ${plan.brief.destination}, but the activity search did not finish. Retry the activity search before changing the trip.`
+    ? `I found places to stay in ${plan.brief.destination}, but the activity lookup did not finish${activityRetried ? ' after two attempts' : ''}.${failedSearch instanceof ActivityDiscoveryError ? ` ${failedSearch.userExplanation}` : ''} Retry the activity search before changing the trip.`
     : `I found places to stay in ${plan.brief.destination}, but not enough suitable activities for a useful day-by-day plan. Broaden the activity mix, add a day, or choose another destination.`;
 }
 
@@ -482,6 +618,7 @@ function planCompletionMessage(plan: LivePlan, hotel: LivePlace) {
     `I’m using ${hotel.name} as your base so the daily routes stay practical. I scheduled ${activityCount} activit${activityCount === 1 ? 'y' : 'ies'} at a ${pace} pace and kept the arrival and departure days lighter when travel reduces the time available.`,
     mealDecisionMessage(restaurantMeals.length, corridorMeals, plan.brief.dietaryPreference),
     travelDecisionMessage(plan),
+    budgetDecisionMessage(plan, hotel),
     issueCount
       ? `There ${issueCount === 1 ? 'is' : 'are'} still ${issueCount} timing or connection ${issueCount === 1 ? 'detail' : 'details'} to review. I’ve marked them beside the affected items instead of guessing.`
       : 'The days fit together comfortably. Check the latest prices and availability before booking.',
@@ -544,6 +681,20 @@ function travelDecisionMessage(plan: LivePlan) {
   return 'I kept the first and last days light until your arrival and departure times are known.';
 }
 
+function budgetDecisionMessage(plan: LivePlan, hotel: LivePlace) {
+  if (!plan.brief.budget) return 'Because you didn’t set a budget, I prioritized the strongest available experience and usable time. You can still replace the stay, travel or activities with alternatives.';
+  let known = hotel.stayOffer?.totalPrice?.currency === plan.brief.budget.currency ? hotel.stayOffer.totalPrice.amount : 0;
+  const outboundFlight = plan.flight?.outbound.find(option => option.id === plan.flight?.suggestedOutboundId);
+  const returnFlight = plan.flight?.return.find(option => option.id === plan.flight?.suggestedReturnId);
+  for (const offer of [outboundFlight, returnFlight]) if (offer?.price.currency === plan.brief.budget.currency) known += offer.price.amount * (plan.brief.travellers ?? 1);
+  const outboundRoute = plan.travel?.outbound.find(option => option.id === plan.travel?.suggestedOutboundId);
+  const returnRoute = plan.travel?.return.find(option => option.id === plan.travel?.suggestedReturnId);
+  for (const option of [outboundRoute, returnRoute]) if (option?.fare?.currency === plan.brief.budget.currency) known += option.fare.amount * (plan.brief.travellers ?? 1);
+  if (!known) return `I used your ₹${plan.brief.budget.amount.toLocaleString('en-IN')} total budget when comparing options, but the selected items do not have enough verified price evidence to calculate a reliable running total.`;
+  const unknown = !hotel.stayOffer?.totalPrice || [outboundFlight, returnFlight, outboundRoute, returnRoute].some(option => option && !('price' in option ? option.price : option.fare));
+  return `The selected items with comparable prices currently account for ₹${known.toLocaleString('en-IN')} of your ₹${plan.brief.budget.amount.toLocaleString('en-IN')} total budget.${unknown ? ' Meals, activities and any unpriced travel are not included, so this remains a provisional budget check.' : ' Meals and activities without verified prices are still outside this total.'}`;
+}
+
 function flightName(offer: import('@/inventory/contracts').TransportOffer) {
   const number = offer.segments[0]?.number;
   return `${offer.operator}${number ? ` ${number}` : ''}`;
@@ -560,7 +711,7 @@ function routeRecommendationScore(option: LiveTravelOption, brief: z.infer<typeo
     if (Math.ceil(option.minutes / dailyLimit) >= (brief.days ?? 2)) return Number.MAX_SAFE_INTEGER;
   }
   const preferenceText = `${brief.preferences} ${brief.constraints.join(' ')}`.toLowerCase();
-  const budgetConscious = /budget|afford|econom|low[ -]?cost|save money/.test(preferenceText);
+  const budgetConscious = Boolean(brief.budget) || /budget|afford|econom|low[ -]?cost|save money/.test(preferenceText);
   const comfortFocused = /comfort|convenien|accessib|senior|young child|toddler/.test(preferenceText);
   const coordinationPenalty = option.mode === 'transit' && brief.travellers! >= 5 ? 45 : option.mode === 'drive' && brief.travellers! <= 2 ? 30 : 0;
   const budgetAdjustment = budgetConscious ? option.mode === 'transit' ? -25 : 25 : 0;
@@ -573,10 +724,20 @@ function routeSelectionReason(brief: z.infer<typeof liveBriefSchema>, options: L
   const hasFare = options.some(option => option.fare);
   const preferenceText = `${brief.preferences} ${brief.constraints.join(' ')}`.toLowerCase();
   const signals = [
-    /budget|afford|econom|low[ -]?cost|save money/.test(preferenceText) ? 'budget preference' : '',
+    brief.budget ? `₹${brief.budget.amount.toLocaleString('en-IN')} total budget` : /budget|afford|econom|low[ -]?cost|save money/.test(preferenceText) ? 'budget preference' : '',
     /comfort|convenien|accessib|senior|young child|toddler/.test(preferenceText) ? 'comfort or accessibility preference' : '',
   ].filter(Boolean);
   return `I compared journey time and what is practical for ${brief.travellers} traveller${brief.travellers === 1 ? '' : 's'}${signals.length ? `, including your ${signals.join(' and ')}` : ''}.${hasFare ? ' Any returned transit fare stays visible for comparison.' : ' There wasn’t a comparable fare, so price was not treated as known.'}`;
+}
+
+function automaticTravelSelectionReason(brief: LiveBrief, outbound: JourneyRecommendation | undefined, returning: JourneyRecommendation | undefined, stayPriceKnown: boolean) {
+  const selected = [outbound, returning].filter((value): value is JourneyRecommendation => Boolean(value));
+  if (!brief.budget) return 'I compared the available flight, train, bus and cab evidence and chose the option that preserves the most usable trip time. Price was used only as a tie-breaker when it was available.';
+  const withinBudget = selected.length > 0 && selected.every(option => option.budgetStatus === 'within_known_budget');
+  const unknownCost = selected.some(option => option.budgetStatus === 'cost_unknown') || !stayPriceKnown;
+  if (withinBudget && !unknownCost) return `I compared the priced travel choices with the selected stay against your ₹${brief.budget.amount.toLocaleString('en-IN')} total budget, then chose the fastest options within the available planning allowance.`;
+  if (unknownCost) return `I used your ₹${brief.budget.amount.toLocaleString('en-IN')} total budget wherever comparable prices were available. Some selected or alternative costs are still unknown, so the budget fit remains provisional.`;
+  return `The returned priced choices exceed the current planning allowance within your ₹${brief.budget.amount.toLocaleString('en-IN')} total budget, so I chose the lowest known-cost travel option and kept the shortfall visible.`;
 }
 
 function travelModeDescription(mode: NonNullable<z.infer<typeof liveBriefSchema>['travelMode']>) {
@@ -584,8 +745,17 @@ function travelModeDescription(mode: NonNullable<z.infer<typeof liveBriefSchema>
   if (mode === 'cab') return 'private-cab';
   if (mode === 'train') return 'train';
   if (mode === 'bus') return 'bus';
-  if (mode === 'recommend') return 'transit and cab comparison';
+  if (mode === 'recommend') return 'flight, train, bus and cab comparison';
   return 'public-transit';
+}
+
+function dedupeTravelOptions(options: LiveTravelOption[]) {
+  const unique = new Map<string, LiveTravelOption>();
+  for (const option of options) {
+    const key = `${option.direction}:${option.mode}:${option.roadUse ?? ''}:${option.id}:${option.transitModes.join(',')}`;
+    if (!unique.has(key)) unique.set(key, option);
+  }
+  return [...unique.values()];
 }
 
 async function searchActivityCandidates(provider: LiveProvider, brief: z.infer<typeof liveBriefSchema>) {
@@ -600,8 +770,40 @@ async function searchActivityCandidates(provider: LiveProvider, brief: z.infer<t
   ];
   const results = await Promise.allSettled(queries.map(query => provider.search(query.trim(), 4)));
   const places = results.flatMap(result => result.status === 'fulfilled' ? result.value : []);
-  if (!places.length && results.some(result => result.status === 'rejected')) throw new Error('Activity discovery failed.');
-  return mergePlaces([], places);
+  if (places.length) return mergePlaces([], places);
+  const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+  if (!failures.length) return [];
+
+  const fallbackQueries = [
+    `tourist top attractions things to do in ${brief.destination}`,
+    `tourist family friendly sights and experiences in ${brief.destination}`,
+  ];
+  const fallbackResults = await Promise.allSettled(fallbackQueries.map(query => provider.search(query, 4)));
+  const fallbackPlaces = fallbackResults.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+  if (fallbackPlaces.length) return mergePlaces([], fallbackPlaces);
+  const fallbackFailures = fallbackResults.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+  if (fallbackFailures.length) throw new ActivityDiscoveryError([...failures, ...fallbackFailures]);
+  return [];
+}
+
+class ActivityDiscoveryError extends Error {
+  readonly userExplanation: string;
+
+  constructor(errors: unknown[]) {
+    const reasons = [...new Set(errors.map(error => error instanceof Error && error.message.trim() ? error.message.trim() : 'Unknown lookup failure'))];
+    super(`Activity discovery failed after two attempts: ${reasons.join('; ')}`);
+    this.name = 'ActivityDiscoveryError';
+    const combined = reasons.join(' ');
+    this.userExplanation = /timeout|timed out|aborted due to timeout/i.test(combined)
+      ? 'Both attempts exceeded the activity lookup time limit.'
+      : /failed \((?:401|403)\)|blocked|API key|restriction/i.test(combined)
+        ? 'The configured activity data service rejected both attempts.'
+        : 'The activity data service failed both attempts.';
+  }
+}
+
+function searchFailureCause(error: unknown, fallback: string) {
+  return error instanceof Error && error.message.trim() ? error.message.trim() : fallback;
 }
 
 function restaurantQuery(brief: z.infer<typeof liveBriefSchema>) {

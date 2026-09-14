@@ -9,10 +9,15 @@ _Avoid_: Using account or user as a synonym when discussing trip participation.
 
 **Trip**: The overall journey shared by its travellers, including their dates, constraints, preferences, and itinerary.
 
+**Trip budget**: An optional total spending ceiling for the current trip. Planning uses
+comparable observed prices to fit selections within it and keeps unknown costs explicit.
+It is not a payment authorization, guaranteed final total, or permission to invent a
+price.
+
 **Journey leg**: One intercity movement with its own origin, destination, date, mode, timing evidence, and feasibility result. The outward leg and the journey after a destination are independent.
 _Avoid_: Assuming the return destination or copying the outward mode onto a later leg.
 
-**Trip end intent**: The traveller's explicit choice to return to the origin, end at the current destination, or continue to another destination.
+**Trip end intent**: The resolved choice to return to the origin, end at the current destination, or continue to another destination. It defaults to return to origin when the traveller says nothing, while an explicit end or onward request overrides that default.
 
 **Transit stay**: An overnight rest stop used while completing a multi-day journey leg. It is distinct from the main destination stay and needs its own dated availability evidence before booking.
 
@@ -42,6 +47,11 @@ _Avoid_: Supplier offer, itinerary selection, booking confirmation.
 _Avoid_: Transport offer, confirmed ticket.
 
 **Travel mode**: The physical mode used by a transport journey or segment: flight, train, bus, cab, self-drive, ferry, ship, or cruise. A mode does not by itself imply that inventory, availability, or booking exists.
+
+**Travel recommendation**: The planner's selected journey option when the traveller has
+not constrained the mode. Without a trip budget it prioritizes usable time; with a trip
+budget it uses comparable known costs. It remains editable and does not replace provider
+evidence.
 
 **Water travel mode**: A ferry is primarily a local or point-to-point connection; a ship is scheduled water transport not more specifically classified; a cruise is a journey sold as a cruise. A sightseeing or casino cruise that returns to its starting area is an activity, with any ferry used to reach it represented as a separate transfer.
 
@@ -85,3 +95,9 @@ _Avoid_: Assuming every departure point is a home address.
 **Date scenario**: A candidate set of trip dates with its associated travel, stays, activities, transfers and cost implications. Comparing scenarios does not itself change the shared itinerary.
 
 **Travel window**: The permitted period within which candidate trip dates may be explored, subject to traveller availability and trip duration.
+
+**Provisional seasonal guidance**: A suggested future date range based on general destination knowledge when the traveller has not supplied exact dates. It remains outside the Trip Brief until selected and is not evidence of current weather, prices, availability, events, opening, or access.
+_Avoid_: Forecast, observed availability, confirmed best time.
+
+**Observed evidence**: A time-stamped fact returned by a configured provider for the place, route, dates, and travellers being evaluated. Its scope remains limited to the fields and validity period the provider actually returned.
+_Avoid_: Extending one observation into unrelated claims, such as treating a route estimate as cab availability.

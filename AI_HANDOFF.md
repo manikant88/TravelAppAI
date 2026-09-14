@@ -1,6 +1,6 @@
 # AI implementation handoff
 
-Last updated: 12 September 2026
+Last updated: 14 September 2026
 
 This is the short continuation map for `codex/product-foundation`. Product decisions are
 in `PROJECT_CONTEXT.md`, current technical contracts in `IMPLEMENTATION_SPEC.md`, terms
@@ -29,8 +29,12 @@ For routine work, read only the relevant implementation-spec section:
 3. `src/live/planner.ts` coordinates extraction, readiness, searches, travel, stay
    occupancy, scheduling, validation, and the final explanation.
 4. `src/live/intake-fallback.ts` and `explicit-dates.ts` preserve explicit facts when the
-   model is unavailable. `essentials.ts` decides whether planning may start.
-5. `src/live/travel-policy.ts` owns route profiles and flight ranking.
+   model is unavailable. A successful-but-incomplete model response is also reconciled
+   with explicitly stated core facts before `essentials.ts` decides whether planning may
+   start.
+5. `src/live/travel-policy.ts` owns route profiles and explicit-flight ranking;
+   `src/live/recommendation-policy.ts` compares journeys and stays against optional budget
+   intent.
    `road-journey.ts` owns safe multi-day road segmentation and transit stays.
 6. `src/live/scheduler.ts` owns capacity and constraint findings;
    `timeline.ts` projects dated events for UI and map use.
@@ -40,14 +44,35 @@ For routine work, read only the relevant implementation-spec section:
 ## Trust boundaries
 
 - `LiveBrief` is canonical session intent. Outward and later destinations and modes are
-  independent.
+  independent. A missing trip-ending preference normalizes to `return_to_origin`, and
+  missing modes normalize independently to `recommend`; neither becomes an intake
+  question. Explicit one-way and onward requests override those defaults.
+- `LiveBrief.budget` is an optional total INR planning ceiling. Known prices inform
+  selection; unknown costs remain unresolved and prevent a guaranteed full-trip total.
+- Deterministic intake preserves partial natural-language requests when extraction is
+  unavailable. Seasonal alternatives such as “March / April / May” do not become an
+  invented date. Successful model extraction may instead return response-level
+  `ProvisionalDateGuidance`; it remains outside `LiveBrief` until selected and is clearly
+  separated from current weather, pricing, availability, event, opening, and access
+  evidence.
 - Render a newly generated plan only when `generationStatus === "valid"`. An incomplete
   result carries a `generationIssue` and returns to Trip Essentials recovery.
+- Loading is represented only by `PlanningAnimation`. Trip Essentials renders pending
+  questions or recovery actions and has no static ready/loading screen.
+- Activity discovery has one automatic fallback attempt. A transient two-attempt failure
+  offers only a targeted retry; broader trip edits are reserved for completed searches
+  that returned too few usable places.
+- The targeted live-search retry is recognized before model extraction and reruns
+  discovery from the saved `LiveBrief`. Keep its shared instruction in
+  `src/live/recovery-intent.ts`; do not duplicate or reinterpret the UI string.
 - Route evidence is not a ticket, seat, private-cab quote, or booking. Place evidence is
   not dated room availability. Supplier offers retain environment, freshness, price,
   availability, and booking capability.
 - Model output may interpret text and rank observed IDs. Code owns dates, arithmetic,
   feasibility, route continuity, availability interpretation, locks, and state changes.
+- Keep every field in the model-facing `LiveBrief` Zod object required. Represent absent
+  values explicitly; optional object properties make the Responses structured-output
+  schema fail before extraction runs.
 - Customer copy explains destinations, choices, and practical trade-offs. Provider names
   remain on evidence and attribution surfaces.
 
@@ -60,7 +85,12 @@ For routine work, read only the relevant implementation-spec section:
 - Reduced provider-neutral inventory contracts to the live stay and transport offers.
 - Reduced shared domain primitives to dates, locations, travel modes, and route stops.
 - Added deterministic explicit-date and intake fallbacks.
+- Reconcile missing origin, destination, duration, and traveller count after successful
+  structured extraction without treating semantic question terms as user selections.
 - Added shared route-search and flight-ranking policy.
+- Added automatic travel recommendation across available flight, train, bus, and cab
+  evidence. No-budget recommendations preserve usable time; budgeted recommendations use
+  known comparable prices and disclose gaps.
 - Added first-class multi-day road segmentation with breaks, meals, transit stays, and
   destination-day capacity.
 - Fixed mixed-mode planning so outward flight fallback routes survive when the later leg

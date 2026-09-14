@@ -84,7 +84,7 @@
 .live-card-actions { margin-left:auto; display:flex; align-items:center; gap:7px; }
 .live-card-actions .ui-button { min-height:28px; padding:5px 9px; font-size:10px; white-space:nowrap; }
 .live-card-actions .ui-button svg { margin-right:3px; vertical-align:middle; }
-.live-place-card .hotel-card-body,.live-place-card .activity-card-body { grid-template-columns:minmax(150px,38%) minmax(0,1fr); gap:16px; padding:14px; }
+.live-place-card .hotel-card-body,.live-place-card .activity-card-body { display:grid; grid-template-columns:minmax(150px,38%) minmax(0,1fr); gap:16px; padding:14px; }
 .live-place-media { margin:0; min-width:0; }
 .live-photo { position:relative; border-radius:7px; background:var(--surface-soft); overflow:hidden; aspect-ratio:4/3; }
 .live-photo img { display:block; height:100%; width:100%; object-fit:cover; }

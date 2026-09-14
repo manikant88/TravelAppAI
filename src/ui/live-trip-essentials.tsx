@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { LIVE_TRIP_MAX_DAYS, type LiveBrief, type LiveGenerationIssue } from '@/live/contracts';
+import { LIVE_TRIP_MAX_DAYS, type LiveBrief, type LiveGenerationIssue, type ProvisionalDateGuidance } from '@/live/contracts';
 import type { LiveEssentialField } from '@/live/essentials';
+import { LIVE_SEARCH_RETRY_INSTRUCTION } from '@/live/recovery-intent';
 import { AppIcon } from './components/app-icon';
 import { Button, Chip } from './components/primitives';
 
@@ -60,7 +61,7 @@ function FactEditor({ editorRef, fact, draft, setDraft, onPrefill }: { editorRef
   </div>;
 }
 
-export function LiveTripEssentials({ brief, busy, planningIssue, onEdit, onSubmit, onLocate }: { brief: LiveBrief; busy: boolean; planningIssue?: LiveGenerationIssue; onEdit(field: LiveEssentialField): void; onSubmit(message: string): void; onLocate?(): Promise<EssentialAnswer | undefined> }) {
+export function LiveTripEssentials({ brief, busy, planningIssue, dateGuidance, onEdit, onSubmit, onLocate }: { brief: LiveBrief; busy: boolean; planningIssue?: LiveGenerationIssue; dateGuidance?: ProvisionalDateGuidance; onEdit(field: LiveEssentialField): void; onSubmit(message: string): void; onLocate?(): Promise<EssentialAnswer | undefined> }) {
   const [answers, setAnswers] = useState<StagedEssentialAnswers>({});
   const [recoveryAnswers, setRecoveryAnswers] = useState<Record<string, RecoveryChoice>>({});
   const effectiveBrief = Object.values(answers).reduce<LiveBrief>((current, answer) => ({ ...current, ...answer?.patch }), brief);
@@ -69,29 +70,25 @@ export function LiveTripEssentials({ brief, busy, planningIssue, onEdit, onSubmi
   const items: { field: LiveEssentialField; label: string; complete: boolean; recommendations?: EssentialAnswer[] }[] = [
     { field: 'origin', label: 'Starting city', complete: Boolean(effectiveBrief.origin), recommendations: [{ label: 'Start from Delhi', message: 'My starting city is Delhi.' }, { label: 'Start from Mumbai', message: 'My starting city is Mumbai.' }, { label: 'Start from Bengaluru', message: 'My starting city is Bengaluru.' }] },
     { field: 'destination', label: 'Destination or recommendations', complete: Boolean(effectiveBrief.destination), recommendations: [{ label: 'Help me choose', message: 'Help me choose a destination based on my dates, budget, and interests.' }] },
-    { field: 'dates', label: 'Travel dates and hotel nights', complete: Boolean(effectiveBrief.startDate && effectiveBrief.days && effectiveBrief.nightsConfirmed), recommendations: brief.startDate && brief.days && !brief.nightsConfirmed ? [{ label: `Confirm ${brief.days - 1} hotel nights`, message: `I confirm ${brief.days - 1} hotel nights and checkout on ${addDays(brief.startDate, brief.days - 1)}.` }] : undefined },
+    { field: 'dates', label: 'Travel dates and hotel nights', complete: Boolean(effectiveBrief.startDate && effectiveBrief.days && effectiveBrief.nightsConfirmed), recommendations: !brief.startDate && dateGuidance ? [{ label: `Use ${formatRange(dateGuidance.startDate, dateGuidance.endDate)}`, message: `Use ${dateGuidance.startDate} through ${dateGuidance.endDate} as my exact travel dates (${dateGuidance.days} calendar days and ${dateGuidance.days - 1} hotel nights, checking out on ${dateGuidance.endDate}).` }] : brief.startDate && brief.days && !brief.nightsConfirmed ? [{ label: `Confirm ${brief.days - 1} hotel nights`, message: `I confirm ${brief.days - 1} hotel nights and checkout on ${addDays(brief.startDate, brief.days - 1)}.` }] : undefined },
     { field: 'travellers', label: 'Traveller details', complete: Boolean(effectiveBrief.travellers), recommendations: [{ label: 'Just me', message: 'It is just me, one adult traveller.' }, { label: '2 adults', message: 'There are 2 adult travellers.' }, { label: '2 adults + 1 child', message: 'There are 2 adults and 1 child, 3 travellers total.' }] },
-    { field: 'transport', label: 'Travel preference', complete: Boolean(effectiveBrief.travelMode), recommendations: [{ label: 'Flight', message: 'I prefer to fly.', patch: { travelMode: 'flight' } }, { label: 'Train', message: 'I prefer to travel by train.', patch: { travelMode: 'train' } }, { label: 'Bus', message: 'I prefer to travel by bus.', patch: { travelMode: 'bus' } }, { label: 'Cab', message: 'I prefer a private cab.', patch: { travelMode: 'cab' } }, { label: 'Self Drive', message: 'I will drive my own vehicle.', patch: { travelMode: 'self_drive' } }, { label: 'Recommend Me', message: 'Recommend the best travel mode using observed route evidence, my budget and group size.', patch: { travelMode: 'recommend' } }] },
     ...(pickupRequired ? [{ field: 'pickup' as const, label: effectiveBrief.travelMode === 'flight' ? 'Airport transfer starting point' : effectiveBrief.travelMode === 'cab' ? 'Cab pickup point' : 'Driving starting point', complete: Boolean(effectiveBrief.pickupLocation), recommendations: effectiveBrief.origin ? pickupAnswers(effectiveBrief.origin) : undefined }] : []),
-    { field: 'trip_end', label: 'After this destination', complete: Boolean(effectiveBrief.endIntent), recommendations: effectiveBrief.origin && effectiveBrief.destination ? [{ label: `Return to ${effectiveBrief.origin}`, message: `I want to return to ${effectiveBrief.origin} after ${effectiveBrief.destination}.`, patch: { endIntent: 'return_to_origin' } }, { label: 'End trip here', message: `My trip ends in ${effectiveBrief.destination}.`, patch: { endIntent: 'end_at_destination', onwardDestination: null, endTravelMode: null } }, { label: 'Continue elsewhere', message: `I want to continue to another destination after ${effectiveBrief.destination}.`, patch: { endIntent: 'continue_elsewhere' } }] : undefined },
     ...(effectiveBrief.endIntent === 'continue_elsewhere' ? [{ field: 'onward_destination' as const, label: 'Next destination', complete: Boolean(effectiveBrief.onwardDestination) }] : []),
-    ...(effectiveBrief.endIntent && effectiveBrief.endIntent !== 'end_at_destination' ? [{ field: 'end_transport' as const, label: effectiveBrief.endIntent === 'return_to_origin' ? 'Return travel preference' : 'Onward travel preference', complete: Boolean(effectiveBrief.endTravelMode), recommendations: [
-      essentialAnswer('Same as outward', `Use the same travel mode after ${brief.destination}.`, effectiveBrief.travelMode ? { endTravelMode: effectiveBrief.travelMode } : undefined),
-      essentialAnswer('Flight', `I want to fly after ${brief.destination}.`, { endTravelMode: 'flight' }),
-      essentialAnswer('Train', `I want to take a train after ${brief.destination}.`, { endTravelMode: 'train' }),
-      essentialAnswer('Bus', `I want to take a bus after ${brief.destination}.`, { endTravelMode: 'bus' }),
-      essentialAnswer('Cab', `I want to take a private cab after ${brief.destination}.`, { endTravelMode: 'cab' }),
-      essentialAnswer('Self Drive', `I want to self-drive after ${brief.destination}.`, { endTravelMode: 'self_drive' }),
-      essentialAnswer('Recommend Me', `Recommend how I should travel after ${brief.destination}.`, { endTravelMode: 'recommend' }),
-    ] }] : []),
   ];
   const pendingItems = items.filter(item => !item.complete);
   const missing = pendingItems.length;
   const recoveryActions = planningIssue ? livePlanningRecoveryActions(planningIssue, brief) : [];
+  if (!planningIssue && !missing) return null;
   return <section className="brief-setup-workspace" aria-labelledby="live-essentials-title">
-    <div className={`brief-setup-icon${planningIssue ? ' has-issue' : ''}`}>{planningIssue ? <AppIcon name="alert-circle" size={24} /> : missing ? missing : <AppIcon name="sparkles" size={24} />}</div><p className="eyebrow">Trip essentials</p>
-    <h2 id="live-essentials-title">{planningIssue ? 'Let’s adjust this trip' : missing ? `Complete ${missing} detail${missing === 1 ? '' : 's'} to start planning` : 'Preparing your itinerary'}</h2>
-    <p>{planningIssue?.message ?? (missing ? 'Choose all the answers you want to add. Nothing is applied until you send them together, and you can also add the remaining details through the Trip Brief or chat.' : 'Everything needed is available, so planning continues automatically.')}</p>
+    <div className={`brief-setup-icon${planningIssue ? ' has-issue' : ''}`}>{planningIssue ? <AppIcon name="alert-circle" size={24} /> : missing}</div><p className="eyebrow">Trip essentials</p>
+    <h2 id="live-essentials-title">{planningIssue ? 'Let’s adjust this trip' : `Complete ${missing} detail${missing === 1 ? '' : 's'} to start planning`}</h2>
+    <p>{planningIssue?.message ?? 'Choose all the answers you want to add. Nothing is applied until you send them together, and you can also add the remaining details through the Trip Brief or chat.'}</p>
+    {!planningIssue && dateGuidance ? <aside className="provisional-date-guidance" aria-label="Provisional seasonal guidance">
+      <strong>Provisional seasonal guidance</strong>
+      <span>{dateGuidance.summary}</span>
+      {dateGuidance.bookingGuidance ? <span><b>Booking guidance:</b> {dateGuidance.bookingGuidance}</span> : null}
+      <small>Based on general destination knowledge. Current weather, prices, availability, events and closures have not been verified. Selecting the dates starts those live checks where providers are available.</small>
+    </aside> : null}
     {recoveryActions.length ? <div className="brief-recovery-actions" aria-label="Ways to make this trip work"><small>Choose one answer from any section</small><div>{recoveryActions.map(action => <div className="brief-recovery-option" key={action.label}><strong>{action.label}</strong><span>{action.description}</span><div className="brief-recovery-choices">{action.options.map(option => <Chip key={option.label} aria-pressed={recoveryAnswers[action.label]?.label === option.label} disabled={busy} onClick={() => {
         if (option.field) { onEdit(option.field); return; }
         setRecoveryAnswers(current => stageRecoveryAnswer(current, action.label, option));
@@ -101,7 +98,7 @@ export function LiveTripEssentials({ brief, busy, planningIssue, onEdit, onSubmi
       if (option.action === 'current_location') { void onLocate?.().then(answer => { if (answer) setAnswers(current => stageEssentialAnswer(current, item.field, answer)); }); return; }
       setAnswers(current => stageEssentialAnswer(current, item.field, option));
     }}>{option.label}</Chip>)}</div></div> : null}</div>)}</div>
-    {planningIssue && recoveryActions.length ? <div className="live-essentials-ready"><Button disabled={busy || !Object.keys(recoveryAnswers).length} onClick={() => onSubmit(batchRecoveryAnswerMessage(recoveryAnswers))}>Apply answers</Button></div> : missing ? <div className="live-essentials-ready"><Button disabled={busy || !stagedEssentialAnswerCount(answers)} onClick={() => onSubmit(batchEssentialAnswerMessage(answers))}>Apply answers</Button></div> : null}
+    {planningIssue && recoveryActions.length ? <div className="live-essentials-ready"><Button disabled={busy || !Object.keys(recoveryAnswers).length} onClick={() => { onSubmit(batchRecoveryAnswerMessage(recoveryAnswers)); setRecoveryAnswers({}); }}>Apply answers</Button></div> : missing ? <div className="live-essentials-ready"><Button disabled={busy || !stagedEssentialAnswerCount(answers)} onClick={() => { onSubmit(batchEssentialAnswerMessage(answers)); setAnswers({}); }}>Apply answers</Button></div> : null}
   </section>;
 }
 
@@ -109,6 +106,14 @@ export type RecoveryChoice = { label: string; message?: string; field?: LiveEsse
 type RecoveryAction = { label: string; description: string; options: RecoveryChoice[] };
 export function livePlanningRecoveryActions(issue: LiveGenerationIssue, brief: LiveBrief): RecoveryAction[] {
   const actions: RecoveryAction[] = [];
+  if (issue.retryable && (issue.code === 'no_stays' || issue.code === 'no_activities')) {
+    const staySearch = issue.code === 'no_stays';
+    return [{
+      label: staySearch ? 'Retry the stay search' : 'Retry the activity search',
+      description: `The previous ${staySearch ? 'stay' : 'activity'} search did not finish after its automatic attempts, so a fresh request may succeed without changing your trip.`,
+      options: [{ label: staySearch ? 'Search for stays again' : 'Search for activities again', message: LIVE_SEARCH_RETRY_INSTRUCTION }],
+    }];
+  }
   const journey = issue.journey ?? 'outbound';
   const destination = brief.destination ?? 'the destination';
   const journeyLabel = journey === 'outbound' ? 'outbound' : 'after the destination';
@@ -130,10 +135,12 @@ export function livePlanningRecoveryActions(issue: LiveGenerationIssue, brief: L
     message: `Keep my ${brief.travelMode === 'cab' ? 'private cab' : 'self-drive'} preference and treat the multi-day road journey as a main part of this trip. I understand this can leave less time at ${destination}.`,
   });
   if (travelOptions.length) actions.push({
-    label: issue.code === 'road_confirmation' ? 'Choose how this long journey should work' : 'Optional: reconsider the long road journey',
+    label: issue.code === 'road_confirmation' ? 'Choose how this long journey should work' : issue.code === 'road_infeasible' ? 'Choose a practical travel mode' : 'Reconsider the long road journey',
     description: issue.code === 'road_confirmation'
       ? `This road journey would use much of the available trip. Choose faster travel or confirm that the journey itself is part of the experience.`
-      : `Long-distance ${brief.travelMode === 'cab' ? 'cab travel' : 'self-driving'} can take multiple days and leave less time at ${destination}. You can switch modes, confirm a road trip, or leave this unchanged.`,
+      : brief.travelMode === 'recommend'
+        ? `The returned road option cannot preserve usable time at ${destination}. Choose a faster mode to search directly.`
+        : `Long-distance ${brief.travelMode === 'cab' ? 'cab travel' : 'self-driving'} can take multiple days and leave less time at ${destination}. Choose a faster mode or extend the trip.`,
     options: travelOptions,
   });
   if (issue.minimumTripDays && brief.startDate && issue.minimumTripDays > (brief.days ?? 0)) {
@@ -170,7 +177,7 @@ export function livePlanningRecoveryActions(issue: LiveGenerationIssue, brief: L
     actions.push({
       label: selectionRetry ? 'Try a different day-by-day arrangement' : issue.code === 'no_stays' ? 'Retry the stay search' : 'Retry the activity search',
       description: selectionRetry ? 'The place searches succeeded; only the previous arrangement failed validation.' : `The previous ${issue.code === 'no_stays' ? 'stay' : 'activity'} search did not finish, so a fresh request can return different results.`,
-      options: [{ label: selectionRetry ? 'Rearrange these places' : issue.code === 'no_stays' ? 'Search for stays again' : 'Search for activities again', message: selectionRetry ? 'Arrange the same verified stays and activities again, using a different day-by-day combination that fits the available times.' : 'Repeat the live searches that did not finish and plan again with the rest of my Trip Brief unchanged.' }],
+      options: [{ label: selectionRetry ? 'Rearrange these places' : issue.code === 'no_stays' ? 'Search for stays again' : 'Search for activities again', message: selectionRetry ? 'Arrange the same verified stays and activities again, using a different day-by-day combination that fits the available times.' : LIVE_SEARCH_RETRY_INSTRUCTION }],
     });
   }
   return actions;
@@ -198,7 +205,7 @@ function recoveryTravelMessage(mode: NonNullable<LiveBrief['travelMode']>) {
   return mode === 'flight' ? 'a flight' : mode === 'train' ? 'a train' : mode === 'bus' ? 'a bus' : mode === 'cab' ? 'a private cab' : mode === 'self_drive' ? 'self drive' : 'the fastest practical option you can verify';
 }
 
-export function draftFromBrief(brief: LiveBrief): BriefDraft { return { origin: brief.origin ?? '', destination: brief.destination ?? '', start: brief.startDate ?? '', end: brief.startDate && brief.days ? addDays(brief.startDate, brief.days - 1) : '', adults: brief.travellers ?? 0, children: 0, seniors: 0, budget: '', pace: brief.pace ?? '', interests: brief.preferences, travel: brief.travelMode === 'public_transit' ? 'recommend' : brief.travelMode ?? '', endIntent: brief.endIntent ?? '', onwardDestination: brief.onwardDestination ?? '', endTravel: brief.endTravelMode === 'public_transit' ? 'recommend' : brief.endTravelMode ?? '' }; }
+export function draftFromBrief(brief: LiveBrief): BriefDraft { return { origin: brief.origin ?? '', destination: brief.destination ?? '', start: brief.startDate ?? '', end: brief.startDate && brief.days ? addDays(brief.startDate, brief.days - 1) : '', adults: brief.travellers ?? 0, children: 0, seniors: 0, budget: brief.budget?.amount.toString() ?? '', pace: brief.pace ?? '', interests: brief.preferences, travel: brief.travelMode === 'public_transit' ? 'recommend' : brief.travelMode ?? '', endIntent: brief.endIntent ?? 'return_to_origin', onwardDestination: brief.onwardDestination ?? '', endTravel: brief.endTravelMode === 'public_transit' ? 'recommend' : brief.endTravelMode ?? (brief.endIntent === 'end_at_destination' ? '' : 'recommend') }; }
 function essentialAnswer(label: string, message: string, patch?: Partial<LiveBrief>): EssentialAnswer { return { label, message, patch }; }
 function pickupAnswers(origin: string): EssentialAnswer[] {
   return [
@@ -237,12 +244,10 @@ export function batchRecoveryAnswerMessage(answers: Record<string, RecoveryChoic
   return `Apply these trip adjustments together: ${Object.values(answers).map(answer => answer.message).filter(Boolean).join(' ')}`;
 }
 function requiredPreferencesPresent(brief: LiveBrief) {
-  if (!brief.travelMode) return false;
   const pickupRequired = brief.travelMode === 'flight' || brief.travelMode === 'self_drive' || brief.travelMode === 'cab';
   if (pickupRequired && !brief.pickupLocation) return false;
-  if (!brief.endIntent) return false;
   if (brief.endIntent === 'continue_elsewhere' && !brief.onwardDestination) return false;
-  return brief.endIntent === 'end_at_destination' || Boolean(brief.endTravelMode);
+  return true;
 }
 export function liveBriefUpdateMessage(brief: LiveBrief, draft: BriefDraft) {
   const initial = draftFromBrief(brief);
@@ -262,7 +267,7 @@ export function liveBriefUpdateMessage(brief: LiveBrief, draft: BriefDraft) {
     messages.push(`change my next destination to ${draft.onwardDestination.trim()}`);
   }
   if (draft.endIntent !== 'end_at_destination' && draft.endTravel && draft.endTravel !== initial.endTravel) messages.push(`change my travel after ${draft.destination.trim()}: ${travelMessage(draft.endTravel)}`);
-  if (draft.budget !== initial.budget && draft.budget) messages.push(`set my total trip budget to ₹${draft.budget}`);
+  if (draft.budget !== initial.budget) messages.push(draft.budget ? `set my total trip budget to ₹${draft.budget}` : 'remove my total trip budget limit');
   if (draft.pace && draft.pace !== initial.pace) messages.push(`change the pace to ${draft.pace}`);
   if (draft.interests.trim() !== initial.interests.trim()) messages.push(`change my interests to ${draft.interests.trim()}`);
   return `Update my Trip Brief: ${messages.join('; ')}.`;
@@ -272,6 +277,7 @@ function addDays(date: string, days: number) { const value = new Date(`${date}T1
 function daysBetween(start: string, end: string) { return Math.round((new Date(`${end}T12:00:00Z`).getTime() - new Date(`${start}T12:00:00Z`).getTime()) / 86_400_000); }
 function formatDate(date: string) { return new Date(`${date}T12:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); }
 function formatShortDate(date: string) { return new Date(`${date}T12:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }); }
+function formatRange(start: string, end: string) { return `${formatShortDate(start)}–${formatShortDate(end)}`; }
 function guestLabel(draft: BriefDraft) { const total = draft.adults + draft.children + draft.seniors; return total ? `${total} traveller${total === 1 ? '' : 's'}` : 'Select guests'; }
-function preferenceLabel(draft: BriefDraft) { const end = draft.endIntent === 'end_at_destination' ? 'Ends here' : draft.endIntent === 'return_to_origin' ? `Return${draft.endTravel ? ` by ${travelLabel(draft.endTravel)}` : ''}` : draft.endIntent === 'continue_elsewhere' ? `Continue to ${draft.onwardDestination || 'another destination'}` : ''; const parts = [draft.travel ? travelLabel(draft.travel) : '', end, draft.budget ? `₹${draft.budget}` : '', draft.pace ? `${draft.pace} pace` : '', draft.interests].filter(Boolean); return parts.length ? parts.join(' · ') : 'Add preferences'; }
+function preferenceLabel(draft: BriefDraft) { const end = draft.endIntent === 'end_at_destination' ? 'Ends here' : draft.endIntent === 'return_to_origin' ? `Return${draft.endTravel ? ` by ${travelLabel(draft.endTravel)}` : ''}` : draft.endIntent === 'continue_elsewhere' ? `Continue to ${draft.onwardDestination || 'another destination'}` : ''; const parts = [draft.travel ? travelLabel(draft.travel) : 'Best travel', end, draft.budget ? `₹${Number(draft.budget).toLocaleString('en-IN')} budget` : '', draft.pace ? `${draft.pace} pace` : '', draft.interests].filter(Boolean); return parts.length ? parts.join(' · ') : 'Add preferences'; }
 function travelLabel(choice: TravelChoice) { return choice === 'self_drive' ? 'Self Drive' : choice === 'recommend' ? 'Recommend Me' : choice ? choice[0].toUpperCase() + choice.slice(1) : ''; }

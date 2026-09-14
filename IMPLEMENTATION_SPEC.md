@@ -47,6 +47,7 @@ mutable trip state.
 `LiveBrief` is the canonical user intent for a live session. It contains:
 
 - `origin`, `destination`, `startDate`, `days`, and `travellers`;
+- optional total INR `budget`;
 - outward `travelMode` and an optional `pickupLocation`;
 - `endIntent`: return to origin, end at destination, or continue elsewhere;
 - optional `onwardDestination` and independent `endTravelMode`;
@@ -62,13 +63,25 @@ An explicit start and end date determine `days` inclusively and hotel nights as
 confirm the arithmetic. A start date plus duration still requires enough information to
 identify the intended checkout date.
 
-Outward and later journeys are independent. `end_at_destination` needs no later travel
-mode. `return_to_origin` requires a later mode to the origin. `continue_elsewhere`
-requires both an onward destination and a later mode.
+Outward and later journeys are independent. An unstated mode is normalized to
+`recommend` before readiness, so it does not become a question. `end_at_destination`
+needs no later travel mode. `return_to_origin` and `continue_elsewhere` independently
+default an unstated later mode to `recommend`; `continue_elsewhere` still requires an
+onward destination.
 
-A pickup point is required for flight, cab, and self-drive. Trip Essentials offers
-origin-aware places, browser geolocation, and free-text address entry. Train and bus do
-not require a local pickup point in the brief.
+An unstated `endIntent` is normalized to `return_to_origin` before readiness. The
+planner must not ask what happens after the destination during initial intake. Explicit
+`end_at_destination` and `continue_elsewhere` requests override the default and remain
+editable in the Trip Brief.
+
+A pickup point is required for explicitly requested flight, cab, and self-drive. Trip
+Essentials offers origin-aware places, browser geolocation, and free-text address entry.
+Train, bus, public transit, and automatic recommendation use a city-level route origin
+until the traveller chooses a more specific departure point.
+
+`budget` is an optional total-trip ceiling with an amount, `INR` currency, and `total`
+scope. It is planning intent rather than a payment authorization or proof that every
+item has a known price.
 
 ## 4. Intake and conversation
 
@@ -76,12 +89,22 @@ The client sends the latest message, the current brief, and at most 12 recent me
 Model extraction uses a strict schema. It may interpret language but may not invent dates,
 availability, or provider facts.
 
+Every `LiveBrief` field in the extraction schema is required by the structured-output
+contract. Unstated values use explicit `null`, `false`, an empty string, or an empty
+array. Do not introduce Zod `.optional()` fields inside the model extraction object;
+the Responses structured-output format rejects them before extraction can run.
+
 `src/live/intake-fallback.ts` deterministically preserves explicit information when model
-extraction is unavailable. It recognizes:
+extraction is unavailable. After a schema-valid model response, the planner also repairs
+missing explicit core facts (`origin`, `destination`, `days`, and `travellers`) before
+readiness is evaluated. This repair is deliberately narrower than the full fallback:
+semantic terms in questions, such as asking when to book flights, must not become a
+selected travel mode. The deterministic parser recognizes:
 
 - ISO and common English date ranges with an explicit year;
 - origin and destination statements;
 - traveller counts;
+- total INR budgets and budget removal;
 - outward and later travel modes;
 - pickup points;
 - return, end-here, and continue-elsewhere intent;
@@ -105,6 +128,31 @@ building days. Internal provider or orchestration detail stays out of general ch
 only pending items and highlights corresponding fact fields. When every required item is
 ready, planning begins automatically; there is no separate “Build my trip” step.
 
+If model extraction is unavailable or its successful structured response omits a core
+fact, deterministic intake retains explicit facts from common natural phrasing,
+including “planning a Bhutan trip,” “trip from Bangalore,” spouse pairs, and a stated
+trip duration. A seasonal window without one exact future date remains an incomplete
+brief and leads to date clarification instead of a fatal planning error.
+
+When model extraction succeeds and the traveller asks when to visit, it may return a
+`ProvisionalDateGuidance` alongside the brief. This response-level value contains one
+future start date, a duration, a cautious seasonal summary, and optional general booking
+guidance. It uses the explicit trip duration when one exists and never mutates
+`LiveBrief.startDate`. The UI labels the guidance as unverified and offers the computed
+exact range as a staged Trip Essential answer. Only after the traveller applies that
+answer do the existing stay, flight, route, activity, and place checks run for those
+dates. Past or malformed recommendations are discarded in code.
+
+Travel preference is not a required Trip Essential. `applyLivePlanningDefaults` assigns
+`recommend` separately to missing outward and later modes once their journey exists.
+It also assigns `return_to_origin` when no trip-ending preference was stated.
+Explicit flight, cab, and self-drive preferences still require their relevant starting
+point before provider searches begin.
+
+The essentials component has no idle ready-state card. While a request is active,
+`LiveWorkspace` renders `PlanningAnimation`; after a successful request it renders the
+validated itinerary. If generation fails, it renders actionable recovery instead.
+
 An itinerary renders only when `isRenderableLivePlan` accepts it. New plans set
 `generationStatus` explicitly:
 
@@ -115,6 +163,18 @@ On failure, retain Trip Essentials and show actions derived from `generationIssu
 Actions must state what changes, why it can help, and provide a selectable chip or field
 editor. A provider retry appears only when `retryable=true`. Date recovery uses a
 computed end date or minimum duration rather than a vague request to “change dates.”
+
+Activity discovery first runs category queries in parallel. If no place is returned and
+at least one lookup failed, it makes one bounded fallback attempt with simpler queries.
+Only failure of both attempts produces a retryable `no_activities` issue. That transient
+state offers a retry only; interest, date, and destination changes belong to a completed
+search that returned too few usable places.
+
+The retry instruction emitted by Trip Essentials is a first-class planner intent. The
+planner recognizes that instruction at its boundary, copies the existing canonical
+`LiveBrief`, and starts live discovery without calling model extraction. This keeps a
+temporary extraction failure from trapping provider recovery in a repeated clarification
+loop.
 
 Generation issue codes are `no_stays`, `no_activities`, `selection_invalid`,
 `road_infeasible`, `road_confirmation`, `schedule_empty`, and
@@ -131,6 +191,11 @@ address, ratings, regular hours, editorial text, amenities, photos, and attribut
 Route evidence can include duration, distance, path, scheduled transit times, transit
 lines, and a returned fare. A road route does not establish cab availability or price.
 A transit route is not exhaustive ticket inventory.
+
+Model-generated seasonal guidance is not provider evidence. Current weather, climate
+normals, holidays, events, seasonal closures, and price-calendar comparisons require
+dedicated provider adapters before the planner may describe them as observed or
+verified.
 
 The browser map uses the public Maps key. Server-side Places and Routes use a separate
 server key. Missing or invalid keys produce explicit unresolved behavior.
@@ -156,9 +221,12 @@ or the recheck fails, remove its stale supplier offer, price, and availability.
 provider IDs, schedules, airports, segments, duration, capacity, price, checked time,
 expiry, environment, and booking capability.
 
-The recommended flight favors useful arrival or departure times, then lower price and
-duration. Outward and later flights are searched independently when their modes differ
-or the trip continues elsewhere.
+For an explicit flight preference, the recommended flight favors useful arrival or
+departure times, then lower price and duration. For automatic recommendation, usable
+flight offers are compared with train, bus, and cab route evidence using door-to-door
+time, including airport transfer estimates and a 120-minute airport buffer. Outward and
+later flights are searched independently when their modes differ or the trip continues
+elsewhere.
 
 When a flight search returns no usable offer, observed train, bus, cab, or self-drive
 routes remain available. Resolving one journey must not discard fallbacks for the other.
@@ -168,6 +236,22 @@ routes remain available. Resolving one journey must not discard fallbacks for th
 `src/live/travel-policy.ts` owns the shared mapping from user travel modes to Google route
 profiles and the shared flight-ranking rule. Planner and selection flows must use this
 module rather than duplicate those policies.
+
+`src/live/recommendation-policy.ts` owns evidence-aware stay and journey selection. With
+no budget, journey recommendation minimizes observed door-to-door time and uses known
+price only as a tie-breaker. With a total budget, the current compatibility planner
+reserves up to 60% for the destination stay and divides the remaining allowance across
+the required intercity journeys. It chooses the fastest option whose comparable known
+price fits that allowance. If every comparable option exceeds it, it chooses the lowest
+known-cost option and reports the shortfall; options with unknown costs are never treated
+as free. Meals, activities, cab quotes, and other missing prices keep total budget fit
+provisional.
+
+An automatically compared road route is a candidate, not a traveller preference. If the
+selected road candidate fails the combined safe-travel assessment and no usable faster
+candidate was returned, recovery says that no practical recommendation was available and
+offers direct flight, train, and bus searches. It must not describe cab or self-drive as
+the traveller's choice when `travelMode` is `recommend`.
 
 `src/live/road-journey.ts` turns a raw drive duration into dated journey segments:
 

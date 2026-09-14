@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { refreshDestinationStayForRoadDates, runLivePlan, type LiveModel } from '@/live/planner';
+import { zodTextFormat } from 'openai/helpers/zod';
+import { extractionSchema, refreshDestinationStayForRoadDates, runLivePlan, type LiveModel } from '@/live/planner';
 import { emptyLiveBrief, type LiveBrief, type LivePlace, type LivePlan, type LiveRequest, type LiveTravelOption } from '@/live/contracts';
 import type { LiveProvider } from '@/live/google.server';
 import type { StayProvider, SupplierStaySearchResult } from '@/inventory/providers/stay-provider';
@@ -7,6 +8,8 @@ import type { FlightProvider } from '@/transport/providers/nuitee-flight.server'
 import type { TransportOffer } from '@/inventory/contracts';
 const brief: LiveBrief = { ...emptyLiveBrief, origin: 'Delhi', destination: 'Jaipur', startDate: '2026-09-08', days: 4, travellers: 2, travelMode: 'public_transit', endIntent: 'return_to_origin', endTravelMode: 'public_transit', dietaryPreference: 'both', nightsConfirmed: true };
 const place = (id: string): LivePlace => ({ id, name: id, address: 'Test address', lat: 26, lng: 75, source: 'Google Maps', checkedAt: '2026-09-04T00:00:00Z', mapsUrl: 'https://www.google.com/maps', attributions: [] });
+const flightOffer = (direction: 'outbound' | 'return', amount = 2500): TransportOffer => ({ schemaVersion:1,kind:'supplier_offer',id:`recommended-flight-${direction}`,serviceId:`recommended-service-${direction}`,mode:'flight',from:direction==='outbound'?'DEL':'JAI',to:direction==='outbound'?'JAI':'DEL',departureAt:direction==='outbound'?'2026-09-08T08:00:00+05:30':'2026-09-11T18:00:00+05:30',arrivalAt:direction==='outbound'?'2026-09-08T09:00:00+05:30':'2026-09-11T19:00:00+05:30',durationMinutes:60,stops:0,operator:'Test Air',segments:[{mode:'flight',from:direction==='outbound'?'DEL':'JAI',to:direction==='outbound'?'JAI':'DEL',departureAt:direction==='outbound'?'2026-09-08T08:00:00+05:30':'2026-09-11T18:00:00+05:30',arrivalAt:direction==='outbound'?'2026-09-08T09:00:00+05:30':'2026-09-11T19:00:00+05:30',operator:'Test Air',number:'TA1'}],price:{amount,currency:'INR',unit:'per_traveller'},availability:'available',source:{provider:'Nuitée Connect Flights',providerOfferId:`recommended-provider-${direction}`,evidenceKind:'sandbox',checkedAt:'2026-09-07T00:00:00Z'},booking:null });
+const flightProvider = (): FlightProvider => ({ search:vi.fn(async()=>({originHub:{code:'DEL',name:'Delhi Airport',latitude:28.56,longitude:77.1,countryCode:'IN'},destinationHub:{code:'JAI',name:'Jaipur Airport',latitude:26.82,longitude:75.8,countryCode:'IN'},outbound:[flightOffer('outbound')],returning:[flightOffer('return')],checkedAt:'2026-09-07T00:00:00Z',environment:'sandbox' as const,warnings:[]})) });
 function setup() {
  const model: LiveModel = { extract: vi.fn(async () => ({ brief, question: null })), select: vi.fn(async () => ({ hotelId: 'hotel', visits: [{ placeId: 'attraction', day: 2, durationMinutes: 90 }] })) };
  const travelOption = (direction: 'outbound' | 'return', mode: 'drive' | 'transit'): LiveTravelOption => ({ schemaVersion:1,kind:'route_evidence',id:`${direction}-${mode}`,providerRouteId:`${direction}-${mode}`,direction,mode,label:mode==='drive'?'Drive':'Bus',minutes:mode==='drive'?300:360,meters:250000,path:[],transitModes:mode==='transit'?['BUS']:[],transitLines:[],checkedAt:'2026-09-04T00:00:00Z',source:'Google Routes',timingKind:mode==='drive'?'estimated':'scheduled' });
@@ -20,13 +23,29 @@ function setup() {
  return { model, provider, input, signal: new AbortController().signal, today: '2026-09-04' };
 }
 describe('live conversation planning boundary', () => {
- it('keeps explicit trip facts when model extraction temporarily fails', async () => {
+ it('keeps the model extraction contract compatible with strict Responses output', () => {
+  expect(() => zodTextFormat(extractionSchema,'live_trip_brief')).not.toThrow();
+ });
+ it('keeps explicit trip facts and plans with defaults when model extraction temporarily fails', async () => {
   const d=setup();
   d.model.extract=async()=>{ throw new Error('model timeout'); };
   const result=await runLivePlan({ ...d.input, message:'Plan a relaxed trip from Delhi to Darjeeling for two adults from 10 October 2026 to 13 October 2026. Prioritise hills, tea and heritage.' },d);
-  expect(result.plan).toBeUndefined();
+  expect(result.plan?.generationStatus).toBe('valid');
   expect(result.brief).toMatchObject({ origin:'Delhi', destination:'Darjeeling', startDate:'2026-10-10', days:4, travellers:2, nightsConfirmed:true, pace:'relaxed', preferences:'hills, tea and heritage' });
-  expect(result.message).toContain('How would you like to travel');
+  expect(result.brief).toMatchObject({ travelMode:'recommend', endIntent:'return_to_origin', endTravelMode:'recommend' });
+ });
+ it('retries failed live searches from the saved brief without requiring AI extraction', async () => {
+  const d=setup();
+  d.model.extract=vi.fn(async()=>{ throw new Error('model timeout'); });
+  const result=await runLivePlan({
+   ...d.input,
+   brief,
+   message:'Apply these trip adjustments together: Repeat the live searches that did not finish and plan again with the rest of my Trip Brief unchanged.',
+  },d);
+  expect(d.model.extract).not.toHaveBeenCalled();
+  expect(d.provider.search).toHaveBeenCalledWith(expect.stringContaining('tourist'),4);
+  expect(result.plan?.generationStatus).toBe('valid');
+  expect(result.brief).toEqual(brief);
  });
  it('recovers a complete batch of essential answers without changing the outward mode', async () => {
   const d=setup();
@@ -41,7 +60,62 @@ describe('live conversation planning boundary', () => {
   d.model.extract=async()=>{ throw new Error('model unavailable'); };
   const result=await runLivePlan({ ...d.input, brief:{...brief,travellers:null,travelMode:null}, message:'Plan a family-friendly holiday from Delhi to Udaipur for two adults and one child from 10 October 2026 to 18 October 2026.' },d);
   expect(result.brief.travellers).toBe(3);
-  expect(result.message).toContain('How would you like to travel');
+  expect(result.brief.travelMode).toBe('recommend');
+ });
+ it('keeps an open-season trip request in essentials when AI extraction is unavailable', async () => {
+  const d=setup();
+  d.model.extract=vi.fn(async()=>{ throw new Error('model timeout'); });
+  const result=await runLivePlan({
+   ...d.input,
+   message:'Hey me and my wife are planning a bhutan trip in march / april / may season. it will be a 7 day trip from banglore. Can you create an itinerary and also when should we start booking the flights so that we do not overpay.',
+  },d);
+  expect(result.plan).toBeUndefined();
+  expect(result.brief).toMatchObject({ origin:'banglore',destination:'bhutan',travellers:2,days:7,startDate:null });
+  expect(result.message).toContain('start date including the year');
+  expect(d.provider.search).not.toHaveBeenCalled();
+ });
+ it('repairs an explicitly named destination when successful AI extraction omits it', async () => {
+  const d=setup();
+  d.model.extract=async()=>({
+   brief:{...emptyLiveBrief,origin:'Bangalore',destination:null,travellers:2,days:7,travelMode:null,endIntent:null,endTravelMode:null},
+   question:null,
+   dateGuidance:{status:'provisional',evidenceKind:'model_general_guidance',startDate:'2027-03-15',days:7,summary:'March is generally a pleasant season in Bhutan.',bookingGuidance:'Check flights several months ahead, then verify current fares.'},
+  });
+  const result=await runLivePlan({
+   ...d.input,
+   message:'Hey me and my wife are planning a bhutan trip in march / april / may season. it will be a 7 day trip from banglore. Can you create an itinerary and also when should we start booking the flights so that we do not overpay.',
+  },d);
+  expect(result.plan).toBeUndefined();
+  expect(result.brief).toMatchObject({origin:'Bangalore',destination:'bhutan',travellers:2,days:7,startDate:null,travelMode:'recommend'});
+  expect(result.dateGuidance).toMatchObject({startDate:'2027-03-15',days:7});
+ });
+ it('offers model seasonal guidance without writing unverified dates into the brief', async () => {
+  const d=setup();
+  const seasonalBrief={...emptyLiveBrief,origin:'Bengaluru',destination:'Bhutan',travellers:2,days:7,travelMode:null,endIntent:null,endTravelMode:null};
+  d.model.extract=async()=>({
+   brief:seasonalBrief,
+   question:null,
+   dateGuidance:{status:'provisional',evidenceKind:'model_general_guidance',startDate:'2027-03-22',days:7,summary:'Late March is generally a comfortable period for a cultural trip to Bhutan.',bookingGuidance:'International flights are generally worth checking several months ahead, but no current fare has been checked.'},
+  });
+  const result=await runLivePlan({...d.input,message:'Recommend when we should take a seven-day Bhutan trip.'},d);
+  expect(result.plan).toBeUndefined();
+  expect(result.brief).toMatchObject({startDate:null,days:7,nightsConfirmed:false,travelMode:'recommend',endIntent:'return_to_origin'});
+  expect(result.dateGuidance).toMatchObject({startDate:'2027-03-22',endDate:'2027-03-28',days:7,status:'provisional',evidenceKind:'model_general_guidance'});
+  expect(result.message).toContain('general seasonal guidance');
+  expect(d.provider.search).not.toHaveBeenCalled();
+  d.model.extract=async()=>{ throw new Error('model unavailable'); };
+  const accepted=await runLivePlan({...d.input,brief:result.brief,message:'Use 2027-03-22 through 2027-03-28 as my exact travel dates (7 calendar days and 6 hotel nights, checking out on 2027-03-28).'},d);
+  expect(accepted.plan?.generationStatus).toBe('valid');
+  expect(accepted.brief).toMatchObject({startDate:'2027-03-22',days:7,nightsConfirmed:true});
+  expect(d.provider.search).toHaveBeenCalled();
+ });
+ it('discards a past model date recommendation', async () => {
+  const d=setup();
+  d.model.extract=async()=>({brief:{...brief,startDate:null,nightsConfirmed:false},question:null,dateGuidance:{status:'provisional',evidenceKind:'model_general_guidance',startDate:'2026-09-01',days:4,summary:'This is in the past.',bookingGuidance:null}});
+  const result=await runLivePlan({...d.input,message:'Recommend dates for Jaipur.'},d);
+  expect(result.dateGuidance).toBeUndefined();
+  expect(result.message).toContain('start date including the year');
+  expect(d.provider.search).not.toHaveBeenCalled();
  });
  it('clarifies nights before spending on provider searches', async () => {
   const d=setup(); d.model.extract=async()=>({brief:{...brief,nightsConfirmed:false},question:null});
@@ -102,7 +176,20 @@ describe('live conversation planning boundary', () => {
  });
  it('preserves hotel candidates if attraction search fails',async()=>{
   const d=setup();d.provider.search=async q=>{if(q.startsWith('hotels'))return [place('hotel')];throw new Error('Unavailable');};
-  const r=await runLivePlan(d.input,d);expect(r.plan?.hotels).toHaveLength(1);expect(r.plan?.days.every(x=>!x.visits.length)).toBe(true);expect(r.plan?.generationStatus).toBe('incomplete');expect(d.model.select).not.toHaveBeenCalled();
+  const r=await runLivePlan(d.input,d);expect(r.plan?.hotels).toHaveLength(1);expect(r.plan?.days.every(x=>!x.visits.length)).toBe(true);expect(r.plan?.generationStatus).toBe('incomplete');expect(d.model.select).not.toHaveBeenCalled();expect(r.message).toContain('two attempts');expect(r.message).toContain('activity data service failed both attempts');expect(r.plan?.generationIssue?.cause).toContain('Unavailable');
+ });
+ it('recovers activity discovery with a bounded fallback attempt',async()=>{
+  const d=setup();let activityCalls=0;
+  d.provider.search=vi.fn(async q=>{
+   if(q.startsWith('hotels'))return [place('hotel')];
+   if(q.startsWith('tourist')){activityCalls++;if(activityCalls<=6)throw new Error('Temporary activity timeout');return [place('attraction')];}
+   if(q.includes('restaurants')||q.startsWith('evening'))return [];
+   return [{...place('origin'),name:'Delhi',utcOffsetMinutes:330}];
+  });
+  const r=await runLivePlan(d.input,d);
+  expect(activityCalls).toBe(8);
+  expect(r.plan?.generationStatus).toBe('valid');
+  expect(r.plan?.generationIssue).toBeUndefined();
  });
  it('uses dated supplier stays without treating their property IDs as Google place IDs', async () => {
   const d = setup();
@@ -240,12 +327,11 @@ it('compares transit and cab route evidence for Recommend Me without requiring a
  const d=setup();d.model.extract=async()=>({brief:{...brief,travelMode:'recommend',endTravelMode:'recommend',pickupLocation:null,preferences:'budget-friendly travel'},question:null});
  const result=await runLivePlan(d.input,d);
  const requests = vi.mocked(d.provider.travelRoutes).mock.calls.map(call => call[2]);
- expect(requests).toHaveLength(4);
- expect(requests.filter(request => request.mode === 'transit')).toHaveLength(2);
+ expect(requests).toHaveLength(6);
+ expect(requests.filter(request => request.mode === 'transit')).toHaveLength(4);
  expect(requests.filter(request => request.mode === 'drive' && request.roadUse === 'cab')).toHaveLength(2);
  expect(result.plan?.travel?.outbound.map(option => option.mode)).toEqual(['transit', 'drive']);
- expect(result.plan?.travel?.selectionReason).toContain('practical for 2 travellers');
- expect(result.plan?.travel?.selectionReason).toContain('budget preference');
+ expect(result.plan?.travel?.selectionReason).toContain('preserves the most usable trip time');
  expect(result.plan?.travel?.assumptions.join(' ')).toContain('private-cab price');
 });
 
@@ -264,11 +350,74 @@ it('limits detailed Google enrichment to the scheduled shortlist', async () => {
  expect(googleCalls).toBeLessThanOrEqual(60);
 });
 
-it('asks for a transport preference before any provider search', async () => {
+it('recommends transport automatically when no mode was stated', async () => {
  const d=setup();d.model.extract=async()=>({brief:{...brief,travelMode:null},question:null});
  const r=await runLivePlan(d.input,d);
- expect(r.message).toContain('How would you like to travel');
- expect(d.provider.search).not.toHaveBeenCalled();
+ expect(r.brief.travelMode).toBe('recommend');
+ expect(r.plan?.generationStatus).toBe('valid');
+ expect(d.provider.travelRoutes).toHaveBeenCalled();
+});
+
+it('chooses a flight automatically when it preserves more usable trip time', async () => {
+ const d=setup();d.model.extract=async()=>({brief:{...brief,travelMode:null,endTravelMode:null},question:null});
+ const routeSearch=d.provider.travelRoutes;
+ d.provider.travelRoutes=vi.fn(async (from,to,input):Promise<LiveTravelOption[]> => {
+  const options=await routeSearch(from,to,input);
+  return from.id.startsWith('iata:') || to.id.startsWith('iata:') ? options.map(option=>({...option,minutes:20})) : options;
+ });
+ const result=await runLivePlan(d.input,{...d,flightProvider:flightProvider()});
+ expect(result.plan?.warnings.join('\n')).not.toContain('Flight comparison was unavailable');
+ expect(result.brief).toMatchObject({travelMode:'recommend',endTravelMode:'recommend'});
+ expect(result.plan?.flight?.suggestedOutboundId).toBe('recommended-flight-outbound');
+ expect(result.plan?.flight?.suggestedReturnId).toBe('recommended-flight-return');
+ expect(result.plan?.travel?.suggestedOutboundId).toBeNull();
+ expect(result.message).toContain('prioritized the strongest available experience and usable time');
+});
+
+it('does not present an infeasible cab fallback as the traveller choice for Recommend Me', async () => {
+ const d=setup();
+ d.model.extract=async()=>({brief:{...brief,days:7,travelMode:null,endTravelMode:null},question:null});
+ d.provider.travelRoutes=vi.fn(async (_from,_to,input):Promise<LiveTravelOption[]> => input.mode === 'drive'
+  ? [{schemaVersion:1,kind:'route_evidence',id:`${input.direction}-cab`,providerRouteId:null,direction:input.direction,mode:'drive',roadUse:'cab',label:'Cab route estimate',minutes:3600,meters:2000000,path:[],transitModes:[],transitLines:[],checkedAt:'2026-09-04T00:00:00Z',source:'Google Routes',timingKind:'estimated'}]
+  : []);
+ const unavailableFlights: FlightProvider = {search:vi.fn(async()=>({originHub:{code:'DEL',name:'Delhi Airport',latitude:28.56,longitude:77.1,countryCode:'IN'},destinationHub:{code:'JAI',name:'Jaipur Airport',latitude:26.82,longitude:75.8,countryCode:'IN'},outbound:[],returning:[],checkedAt:'2026-09-07T00:00:00Z',environment:'sandbox' as const,warnings:[]}))};
+ const result=await runLivePlan(d.input,{...d,flightProvider:unavailableFlights});
+ expect(result.plan?.generationIssue).toMatchObject({code:'road_infeasible',journey:'outbound'});
+ expect(result.message).toContain('couldn’t find a practical recommended journey');
+ expect(result.message).toContain('available cab route');
+ expect(result.message).not.toContain('Travelling by cab safely');
+});
+
+it('uses a stated total budget to prefer an affordable known-price route over a faster flight', async () => {
+ const d=setup();d.model.extract=async()=>({brief:{...brief,budget:{amount:6000,currency:'INR',scope:'total'},travelMode:null,endTravelMode:null},question:null});
+ d.provider.travelRoutes=vi.fn(async (_a,_b,input):Promise<LiveTravelOption[]> => {
+  if (input.mode === 'drive') return [{ schemaVersion:1,kind:'route_evidence',id:`${input.direction}-cab`,providerRouteId:null,direction:input.direction,mode:'drive',roadUse:'cab',label:'Cab',minutes:300,meters:250000,path:[],transitModes:[],transitLines:[],checkedAt:'2026-09-04T00:00:00Z',source:'Google Routes',timingKind:'estimated' }];
+  const train = Boolean(input.transitModes?.includes('TRAIN'));
+  return [{ schemaVersion:1,kind:'route_evidence',id:`${input.direction}-${train?'train':'bus'}`,providerRouteId:null,direction:input.direction,mode:'transit',label:train?'Train':'Bus',minutes:train?360:420,meters:null,path:[],transitModes:[train?'TRAIN':'BUS'],transitLines:[],fare:{currency:'INR',amount:train?500:300},checkedAt:'2026-09-04T00:00:00Z',source:'Google Routes',timingKind:'scheduled' }];
+ });
+ const result=await runLivePlan(d.input,{...d,flightProvider:flightProvider()});
+ expect(result.plan?.travel?.suggestedOutboundId).toBe('outbound-train');
+ expect(result.plan?.flight?.suggestedOutboundId).toBeNull();
+ expect(result.plan?.travel?.selectionReason).toContain('₹6,000 total budget');
+ expect(result.message).toContain('of your ₹6,000 total budget');
+});
+
+it('recommends the onward journey independently when the trip continues elsewhere', async () => {
+ const d=setup();d.model.extract=async()=>({brief:{...brief,travelMode:null,endIntent:'continue_elsewhere',onwardDestination:'Mumbai',endTravelMode:null},question:null});
+ const routeSearch=d.provider.travelRoutes;
+ d.provider.travelRoutes=vi.fn(async (from,to,input):Promise<LiveTravelOption[]> => {
+  const options=await routeSearch(from,to,input);
+  return from.id.startsWith('iata:') || to.id.startsWith('iata:') ? options.map(option=>({...option,minutes:20})) : options;
+ });
+ const search=vi.fn(async () => {
+  const onward=search.mock.calls.length > 1;
+  return {originHub:{code:onward?'JAI':'DEL',name:onward?'Jaipur Airport':'Delhi Airport',latitude:onward?26.82:28.56,longitude:onward?75.8:77.1,countryCode:'IN'},destinationHub:{code:onward?'BOM':'JAI',name:onward?'Mumbai Airport':'Jaipur Airport',latitude:onward?19.09:26.82,longitude:onward?72.87:75.8,countryCode:'IN'},outbound:[{...flightOffer('outbound'),id:onward?'recommended-onward-flight':'recommended-flight-outbound'}],returning:[],checkedAt:'2026-09-07T00:00:00Z',environment:'sandbox' as const,warnings:[]};
+ });
+ const result=await runLivePlan(d.input,{...d,flightProvider:{search}});
+ expect(search).toHaveBeenCalledTimes(2);
+ expect(result.plan?.flight?.suggestedOutboundId).toBe('recommended-flight-outbound');
+ expect(result.plan?.flight?.suggestedReturnId).toBe('recommended-onward-flight');
+ expect(result.plan?.flight?.endDestinationAirport?.airportCode).toBe('BOM');
 });
 
 it('asks self-drivers for a starting location before any provider search', async () => {
